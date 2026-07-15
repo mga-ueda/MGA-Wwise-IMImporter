@@ -4,13 +4,6 @@ namespace MgaWwiseImporter.UI;
 
 public partial class Form1 : Form
 {
-    private static readonly Color LogDefault = Color.FromArgb(220, 220, 220);
-    private static readonly Color LogHeader = Color.FromArgb(110, 180, 255);
-    private static readonly Color LogSuccess = Color.FromArgb(120, 210, 140);
-    private static readonly Color LogWarning = Color.FromArgb(255, 180, 70);
-    private static readonly Color LogError = Color.FromArgb(255, 110, 110);
-    private static readonly Color LogMuted = Color.FromArgb(150, 150, 150);
-
     // Exact line height in twips (1 pt = 20 twips). Keeps JP + Latin rows uniform.
     private const int LogLineSpacingTwips = 280;
 
@@ -20,13 +13,37 @@ public partial class Form1 : Form
     private const byte LineSpacingExact = 4;
 
     private DeveloperSettings _developerSettings = new();
+    private readonly WaveAudioPlayer _audioPlayer = new();
+    private readonly System.Windows.Forms.Timer _playheadTimer = new() { Interval = 16 };
+    private double _smoothProgress;
+    private double _anchorProgress;
+    private long _anchorTickMs;
 
     public Form1()
     {
         InitializeComponent();
+        KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         TopMost = _developerSettings.TopMost;
         RestoreWindowBounds();
+
+        _playheadTimer.Tick += (_, _) => UpdatePlayhead();
+        _audioPlayer.PlaybackEnded += (_, _) =>
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            BeginInvoke(() =>
+            {
+                _playheadTimer.Stop();
+                AnchorPlayhead(0);
+                waveformView.SetPlayhead(0, recordTrail: false);
+            });
+        };
+        waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
+        editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -34,6 +51,7 @@ public partial class Form1 : Form
         base.OnHandleCreated(e);
         ApplyDarkTitleBar();
         ApplyFixedLogLineSpacing();
+        ApplyDarkEditorChrome();
     }
 
     protected override void OnShown(EventArgs e)
@@ -44,8 +62,22 @@ public partial class Form1 : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        _playheadTimer.Stop();
+        _audioPlayer.Dispose();
+        _playheadTimer.Dispose();
         WindowSettings.FromForm(this).Save();
         base.OnFormClosing(e);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Space)
+        {
+            TogglePlayback();
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void RestoreWindowBounds()
@@ -66,6 +98,27 @@ public partial class Form1 : Form
 
         var useDarkMode = 1;
         _ = DwmSetWindowAttribute(Handle, DwmwaUseImmersiveDarkMode, ref useDarkMode, sizeof(int));
+    }
+
+    /// <summary>
+    /// エディタのスクロールバー等をダークテーマ寄りの見た目にする（対応 OS のみ）。
+    /// </summary>
+    private void ApplyDarkEditorChrome()
+    {
+        if (!editorTextBox.IsHandleCreated)
+        {
+            return;
+        }
+
+        var useDarkMode = 1;
+        _ = DwmSetWindowAttribute(
+            editorTextBox.Handle,
+            DwmwaUseImmersiveDarkMode,
+            ref useDarkMode,
+            sizeof(int));
+
+        // Win10 1809+ / Win11: Explorer ダーク・スクロールバー
+        _ = SetWindowTheme(editorTextBox.Handle, "DarkMode_Explorer", null);
     }
 
     private void ApplyFixedLogLineSpacing(bool entireDocument = false)
@@ -137,27 +190,111 @@ public partial class Form1 : Form
 
     private void ProcessDroppedFiles(IEnumerable<string> files)
     {
-        var outputs = DroppedFilesProcessor.ProcessAndGetOutputs(files, out var report);
+        _playheadTimer.Stop();
+        _audioPlayer.Stop();
+
+        // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
+        waveformView.CommitDarkFrame();
+
+        var report = DroppedFilesProcessor.Process(files, out var preview);
         AppendReport(report);
 
-        if (!_developerSettings.OpenInExternalEditor || outputs.Count == 0)
+        if (preview is null)
+        {
+            _audioPlayer.Clear();
+            waveformView.ClearPreview();
+            return;
+        }
+
+        waveformView.SetPreview(
+            preview.Peaks,
+            preview.SourcePath,
+            preview.Bars,
+            preview.Markers,
+            preview.Cycles,
+            preview.Regions,
+            preview.OutputParts);
+        try
+        {
+            _audioPlayer.Load(preview.SourcePath);
+            waveformView.SetPlayhead(0, recordTrail: false);
+        }
+        catch (Exception ex)
+        {
+            AppendReport(
+                $"=== エラー ==={Environment.NewLine}"
+                + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+        }
+    }
+
+    private void TogglePlayback()
+    {
+        if (!_audioPlayer.HasSource)
         {
             return;
         }
 
-        BeginInvoke(() => OpenInExternalEditor(outputs));
+        _audioPlayer.Toggle();
+        if (_audioPlayer.IsPlaying)
+        {
+            // 再生開始時だけ位置を取り込み、以降は壁時計で表示（エンジンには触れない）
+            AnchorPlayhead(_audioPlayer.Progress);
+            _playheadTimer.Start();
+        }
+        else
+        {
+            _playheadTimer.Stop();
+            // 停止時のみエンジン位置に合わせる
+            AnchorPlayhead(_audioPlayer.Progress);
+        }
+
+        UpdatePlayhead();
     }
 
-    private void OpenInExternalEditor(IReadOnlyList<string> outputPaths)
+    private void SeekPlayback(double progress)
     {
-        foreach (var outputPath in outputPaths)
+        if (!_audioPlayer.HasSource)
         {
-            var log = ExternalEditorLauncher.Open(outputPath, _developerSettings.ExternalEditorPath);
-            if (!string.IsNullOrEmpty(log))
-            {
-                AppendReport(log + Environment.NewLine);
-            }
+            return;
         }
+
+        _audioPlayer.Seek(progress);
+        AnchorPlayhead(_audioPlayer.Progress);
+        // シーク直後は残光を付けない（ジャンプの残像を避ける）
+        waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
+    }
+
+    private void UpdatePlayhead()
+    {
+        if (!_audioPlayer.HasSource)
+        {
+            waveformView.SetPlayhead(null);
+            return;
+        }
+
+        if (_audioPlayer.IsPlaying)
+        {
+            // 再生中は Progress を読まない（バッファ位置の跳ね返り／往復を避ける）
+            var durationSec = _audioPlayer.Duration.TotalSeconds;
+            if (durationSec > 0)
+            {
+                var elapsedSec = (Environment.TickCount64 - _anchorTickMs) / 1000d;
+                _smoothProgress = Math.Clamp(_anchorProgress + elapsedSec / durationSec, 0d, 1d);
+            }
+
+            waveformView.SetPlayhead(_smoothProgress, recordTrail: true);
+        }
+        else
+        {
+            waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
+        }
+    }
+
+    private void AnchorPlayhead(double progress)
+    {
+        _anchorProgress = Math.Clamp(progress, 0d, 1d);
+        _anchorTickMs = Environment.TickCount64;
+        _smoothProgress = _anchorProgress;
     }
 
     private void AppendReport(string text)
@@ -203,7 +340,7 @@ public partial class Form1 : Form
         var t = line.TrimStart();
         if (t.Length == 0)
         {
-            return LogDefault;
+            return UiColors.LogDefault;
         }
 
         if (t.StartsWith("[警告]", StringComparison.Ordinal)
@@ -211,42 +348,55 @@ public partial class Form1 : Form
             || t.StartsWith("[Warning]", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("=== Warnings", StringComparison.OrdinalIgnoreCase))
         {
-            return LogWarning;
+            return UiColors.LogWarning;
         }
 
         if (t.StartsWith("=== エラー", StringComparison.Ordinal)
             || t.StartsWith("=== Error", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Message :", StringComparison.OrdinalIgnoreCase)
-            || t.StartsWith("外部エディタ起動スキップ", StringComparison.Ordinal)
-            || t.StartsWith("外部エディタ起動失敗", StringComparison.Ordinal)
             || t.StartsWith("自動読み込み対象が見つかりません", StringComparison.Ordinal)
             || t.Contains("(なし)", StringComparison.Ordinal))
         {
-            return LogError;
-        }
-
-        if (t.StartsWith("=== Write complete", StringComparison.OrdinalIgnoreCase)
-            || t.StartsWith("外部エディタ起動:", StringComparison.Ordinal))
-        {
-            return LogSuccess;
+            return UiColors.LogError;
         }
 
         if (t.StartsWith("===", StringComparison.Ordinal))
         {
-            return LogHeader;
+            return UiColors.LogHeader;
         }
 
         if (t.StartsWith("- ", StringComparison.Ordinal)
             || t.StartsWith("Dropped files:", StringComparison.OrdinalIgnoreCase))
         {
-            return LogMuted;
+            return UiColors.LogMuted;
         }
 
-        return LogDefault;
+        return UiColors.LogDefault;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int wmEraseBkgnd = 0x0014;
+        if (m.Msg == wmEraseBkgnd)
+        {
+            if (m.WParam != IntPtr.Zero)
+            {
+                using var g = Graphics.FromHdc(m.WParam);
+                g.Clear(UiColors.WindowBack);
+            }
+
+            m.Result = 1;
+            return;
+        }
+
+        base.WndProc(ref m);
     }
 
     [DllImport("dwmapi.dll", ExactSpelling = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string? pszSubAppName, string? pszSubIdList);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref ParaFormat2 lParam);

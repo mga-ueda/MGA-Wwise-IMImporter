@@ -3,6 +3,7 @@ namespace MgaWwiseImporter.UI;
 partial class Form1
 {
     private System.ComponentModel.IContainer components = null;
+    private WaveformView waveformView;
     private RichTextBox editorTextBox;
 
     protected override void Dispose(bool disposing)
@@ -18,18 +19,29 @@ partial class Form1
 
     private void InitializeComponent()
     {
+        waveformView = new WaveformView();
         editorTextBox = new RichTextBox();
         SuspendLayout();
+        //
+        // waveformView
+        //
+        waveformView.AllowDrop = true;
+        waveformView.BackColor = UiColors.WaveformBack;
+        waveformView.Dock = DockStyle.Top;
+        waveformView.Name = "waveformView";
+        waveformView.TabIndex = 1;
+        waveformView.DragEnter += EditorTextBox_DragEnter;
+        waveformView.DragDrop += EditorTextBox_DragDrop;
         //
         // editorTextBox
         //
         editorTextBox.AllowDrop = true;
-        editorTextBox.BackColor = Color.FromArgb(30, 30, 30);
+        editorTextBox.BackColor = UiColors.LogBack;
         editorTextBox.BorderStyle = BorderStyle.None;
         editorTextBox.DetectUrls = false;
         editorTextBox.Dock = DockStyle.Fill;
         editorTextBox.Font = new Font("MS Gothic", 10F);
-        editorTextBox.ForeColor = Color.FromArgb(220, 220, 220);
+        editorTextBox.ForeColor = UiColors.LogDefault;
         editorTextBox.HideSelection = false;
         editorTextBox.Name = "editorTextBox";
         editorTextBox.ReadOnly = true;
@@ -43,10 +55,11 @@ partial class Form1
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        BackColor = Color.FromArgb(30, 30, 30);
+        BackColor = UiColors.WindowBack;
         ClientSize = new Size(960, 640);
         Controls.Add(editorTextBox);
-        ForeColor = Color.White;
+        Controls.Add(waveformView);
+        ForeColor = UiColors.WindowFore;
         MaximizeBox = false;
         MinimizeBox = true;
         MinimumSize = new Size(480, 320);

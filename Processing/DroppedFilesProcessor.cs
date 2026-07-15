@@ -1,24 +1,21 @@
-using System.Globalization;
 using System.Text;
 
 namespace MgaWwiseImporter.Processing;
 
+/// <summary>
+/// ドロップされた Wave（＋任意で同名 XML）を読み、波形プレビュー用データを返す。
+/// </summary>
 internal static class DroppedFilesProcessor
 {
-    public static string Process(IEnumerable<string> paths)
+    public static string Process(IEnumerable<string> paths, out WaveformPreviewData? preview)
     {
-        return ProcessCore(paths, outputPaths: null);
+        WaveformPreviewData? lastPreview = null;
+        var report = ProcessCore(paths, p => lastPreview = p);
+        preview = lastPreview;
+        return report;
     }
 
-    /// <summary>ログ文言と、書き出しに成功した出力 Wave パスを返す。</summary>
-    public static IReadOnlyList<string> ProcessAndGetOutputs(IEnumerable<string> paths, out string report)
-    {
-        var outputs = new List<string>();
-        report = ProcessCore(paths, outputs);
-        return outputs;
-    }
-
-    private static string ProcessCore(IEnumerable<string> paths, List<string>? outputPaths)
+    private static string ProcessCore(IEnumerable<string> paths, Action<WaveformPreviewData>? preview)
     {
         var dropped = paths
             .Select(path => Path.GetFullPath(path))
@@ -59,7 +56,7 @@ internal static class DroppedFilesProcessor
 
             var wavPath = Path.Combine(directory, baseName + ".wav");
             var xmlPath = Path.Combine(directory, baseName + ".xml");
-            ProcessPair(sb, wavPath, xmlPath, outputPaths);
+            ProcessPair(sb, wavPath, xmlPath, preview);
         }
 
         return sb.ToString();
@@ -69,30 +66,17 @@ internal static class DroppedFilesProcessor
         StringBuilder sb,
         string wavPath,
         string xmlPath,
-        List<string>? outputPaths)
+        Action<WaveformPreviewData>? preview)
     {
         var wavExists = File.Exists(wavPath);
         var xmlExists = File.Exists(xmlPath);
 
-        if (!wavExists || !xmlExists)
+        if (!wavExists)
         {
             sb.AppendLine("=== エラー ===");
-            sb.AppendLine($"Wave : {wavPath} ({(wavExists ? "あり" : "なし")})");
+            sb.AppendLine($"Wave : {wavPath} (なし)");
             sb.AppendLine($"Xml  : {xmlPath} ({(xmlExists ? "あり" : "なし")})");
-
-            if (!wavExists && !xmlExists)
-            {
-                sb.AppendLine("Message : ペアとなる .wav / .xml のどちらも見つかりません。");
-            }
-            else if (!wavExists)
-            {
-                sb.AppendLine("Message : ペアとなる .wav が見つかりません。");
-            }
-            else
-            {
-                sb.AppendLine("Message : ペアとなる .xml が見つかりません。");
-            }
-
+            sb.AppendLine("Message : 波形表示には .wav が必要です。");
             sb.AppendLine();
             return;
         }
@@ -102,9 +86,100 @@ internal static class DroppedFilesProcessor
             var wavInfo = WavFileInfo.Read(wavPath);
             sb.AppendLine(wavInfo.ToDisplayText());
 
-            var tracklist = NuendoTracklistInfo.Read(xmlPath);
-            sb.AppendLine(tracklist.ToDisplayText());
-            sb.AppendLine(WriteEmbeddedWave(wavPath, wavInfo, tracklist, outputPaths));
+            IReadOnlyList<WaveformBarMark> bars = [];
+            IReadOnlyList<WaveformMarkerMark> markers = [];
+            IReadOnlyList<WaveformCycleMark> cycles = [];
+            IReadOnlyList<WaveformRegionMark> regions = [];
+            IReadOnlyList<WaveformOutputPart> outputParts = [];
+            WaveformBarOverlayResult? barOverlay = null;
+            if (xmlExists)
+            {
+                var tracklist = NuendoTracklistInfo.Read(xmlPath);
+                sb.AppendLine(tracklist.ToDisplayText());
+                barOverlay = WaveformBarOverlayBuilder.Build(tracklist, wavInfo);
+                bars = barOverlay.Marks;
+                markers = barOverlay.Markers;
+                cycles = barOverlay.Cycles;
+                regions = barOverlay.Regions;
+                outputParts = barOverlay.OutputParts;
+
+                if (!barOverlay.HasIXml || barOverlay.TimeReferenceSamples == 0)
+                {
+                    sb.AppendLine("=== 警告 ===");
+                    sb.AppendLine("Message : iXML の TimeReference が取れません（無し、または 0）。");
+                    sb.AppendLine(
+                        "Message : アウフタクト判定と小節位置の対応には iXML TimeReference が必要です。"
+                        + " 0 のときは波形先頭＝PPQ 0 とみなします。");
+                    sb.AppendLine();
+                }
+            }
+            else
+            {
+                sb.AppendLine("=== 警告 ===");
+                sb.AppendLine($"Xml  : {xmlPath} (なし)");
+                sb.AppendLine("Message : 同名 .xml が無いため小節線は表示しません。");
+                sb.AppendLine();
+            }
+
+            var peaks = WavPeakReader.Read(wavInfo, peakCount: 2400);
+            preview?.Invoke(new WaveformPreviewData(
+                peaks,
+                wavPath,
+                bars,
+                markers,
+                cycles,
+                regions,
+                outputParts));
+
+            sb.AppendLine("=== Waveform ===");
+            sb.AppendLine($"Source : {wavPath}");
+            sb.AppendLine($"Peaks  : {peaks.Mins.Length} buckets / {peaks.FrameCount:N0} frames");
+            sb.AppendLine($"Regions: {regions.Count}");
+            sb.AppendLine($"Outputs: {outputParts.Count}");
+            foreach (var part in outputParts)
+            {
+                sb.AppendLine(
+                    $"  - {part.FileName}"
+                    + $"  samples=[{part.StartSampleOffset:N0} .. {part.EndSampleOffset:N0})");
+            }
+            sb.AppendLine($"Bars   : {bars.Count}");
+            if (barOverlay is not null)
+            {
+                sb.AppendLine(
+                    $"Timeline: TimeRef={barOverlay.TimeReferenceSamples:N0}"
+                    + $"  waveStartPpq={barOverlay.WaveStartPpq:0.###}"
+                    + $"  waveEndPpq={barOverlay.WaveEndPpq:0.###}"
+                    + $"  prevBarPpq={FormatOptionalPpq(barOverlay.PreviousBarPpqAtWaveStart)}");
+                if (barOverlay.HasAnacrusis)
+                {
+                    sb.AppendLine("Anacrusis : yes (relative Bar 1 @ wave start, next bar line = 2)");
+                }
+                else
+                {
+                    sb.AppendLine("Anacrusis : no (wave starts on a bar line → relative Bar 1)");
+                }
+
+                if (barOverlay.IgnoredOutsideMarks.Count > 0)
+                {
+                    sb.AppendLine("=== 波形範囲外（無視） ===");
+                    sb.AppendLine(
+                        "Message : 波形タイムライン外のマーカー／サイクルは描画せず、"
+                        + "出力計画にも含めません。");
+                    sb.AppendLine(
+                        $"WavePpq : [{barOverlay.WaveStartPpq:0.###} .. {barOverlay.WaveEndPpq:0.###}]");
+                    foreach (var ignored in barOverlay.IgnoredOutsideMarks)
+                    {
+                        var span = ignored.Kind == "Cycle"
+                            ? $"PPQ=[{ignored.StartPpq:0.###} .. {ignored.EndPpq:0.###}]"
+                            : $"PPQ={ignored.StartPpq:0.###}";
+                        sb.AppendLine(
+                            $"  - {ignored.Kind} \"{ignored.Name}\"  {span}"
+                            + $"  ({ignored.Reason})");
+                    }
+                }
+            }
+
+            sb.AppendLine();
         }
         catch (Exception ex)
         {
@@ -112,63 +187,9 @@ internal static class DroppedFilesProcessor
         }
     }
 
-    private static string WriteEmbeddedWave(
-        string wavPath,
-        WavFileInfo wavInfo,
-        NuendoTracklistInfo tracklist,
-        List<string>? outputPaths)
+    private static string FormatOptionalPpq(double? ppq)
     {
-        var buildResult = WavMarkerEmbedder.BuildCueItems(tracklist, wavInfo);
-        var cues = buildResult.Cues;
-        var outputPath = WavMarkerEmbedder.BuildOutputPath(wavPath);
-        WavCueWriter.Write(wavPath, outputPath, cues);
-        outputPaths?.Add(outputPath);
-
-        var outputInfo = new FileInfo(outputPath);
-        var regionCount = cues.Count(cue => cue.IsRegion);
-        var markerCount = cues.Count(cue => !cue.IsRegion);
-
-        var sb = new StringBuilder();
-        sb.AppendLine("=== Embedded Wave ===");
-        sb.AppendLine($"Output : {outputPath}");
-        sb.AppendLine($"Offset : {wavInfo.TimeReferenceSamples:N0} samples (bext TimeReference)");
-        sb.AppendLine($"Cues   : {cues.Count} (Regions={regionCount}, Markers={markerCount})");
-        sb.AppendLine();
-
-        if (buildResult.Warnings.Count > 0)
-        {
-            sb.AppendLine("=== 警告 ===");
-            foreach (var warning in buildResult.Warnings)
-            {
-                sb.AppendLine(warning);
-            }
-
-            sb.AppendLine();
-        }
-
-        foreach (var cue in cues)
-        {
-            var kind = cue.IsRegion ? "Region" : "Marker";
-            var displayName = cue.IsRegion && !string.IsNullOrWhiteSpace(cue.Comment)
-                ? (string.IsNullOrWhiteSpace(cue.Name) ? cue.Comment : $"{cue.Comment} {cue.Name}")
-                : cue.Name;
-            sb.AppendLine(
-                $"{kind}#{cue.Id}"
-                + $"  Sample={cue.SampleOffset.ToString(CultureInfo.InvariantCulture)}"
-                + (cue.IsRegion
-                    ? $"  Length={cue.SampleLength.ToString(CultureInfo.InvariantCulture)}"
-                    : string.Empty)
-                + $"  Name=\"{displayName}\""
-                + $"  Comment={cue.Comment}");
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("=== Write complete ===");
-        sb.AppendLine($"File   : {outputPath}");
-        sb.AppendLine($"Size   : {outputInfo.Length:N0} bytes");
-        sb.AppendLine($"Time   : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        sb.AppendLine();
-        return sb.ToString();
+        return ppq is null ? "-" : ppq.Value.ToString("0.###");
     }
 
     private static void AppendError(StringBuilder sb, string path, Exception ex)

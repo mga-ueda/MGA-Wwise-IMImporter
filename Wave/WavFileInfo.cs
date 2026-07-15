@@ -13,7 +13,7 @@ internal sealed class WavFileInfo
     public ushort BlockAlign { get; init; }
     public ushort BitsPerSample { get; init; }
     public uint DataSizeBytes { get; init; }
-    public bool HasBroadcastExtension { get; init; }
+    public bool HasIXml { get; init; }
     public ulong TimeReferenceSamples { get; init; }
 
     public string AudioFormatName => AudioFormat switch
@@ -57,14 +57,19 @@ internal sealed class WavFileInfo
         ushort blockAlign = 0;
         ushort bitsPerSample = 0;
         uint dataSize = 0;
-        var hasBext = false;
+        var hasIXml = false;
         ulong timeReferenceSamples = 0;
 
+        // data の後ろに iXML が付くことがあるため、全チャンクを走査する
         while (stream.Position + 8 <= stream.Length)
         {
             var chunkId = ReadFourCc(reader);
             var chunkSize = reader.ReadUInt32();
             var chunkDataStart = stream.Position;
+            if (chunkDataStart + chunkSize > stream.Length)
+            {
+                break;
+            }
 
             if (chunkId == "fmt ")
             {
@@ -83,19 +88,14 @@ internal sealed class WavFileInfo
             else if (chunkId == "data")
             {
                 dataSize = chunkSize;
-                break;
             }
-            else if (chunkId == "bext")
+            else if (chunkId == "iXML")
             {
-                hasBext = true;
-                // Description(256) + Originator(32) + OriginatorReference(32)
-                // + OriginationDate(10) + OriginationTime(8) + TimeReference(8)
-                if (chunkSize >= 346)
+                hasIXml = true;
+                var payload = reader.ReadBytes((int)Math.Min(chunkSize, int.MaxValue));
+                if (WavIxmlReader.TryReadTimeReference(payload, out var ixmlRef))
                 {
-                    stream.Position = chunkDataStart + 338;
-                    var low = reader.ReadUInt32();
-                    var high = reader.ReadUInt32();
-                    timeReferenceSamples = low + ((ulong)high << 32);
+                    timeReferenceSamples = ixmlRef;
                 }
             }
 
@@ -119,7 +119,7 @@ internal sealed class WavFileInfo
             BlockAlign = blockAlign,
             BitsPerSample = bitsPerSample,
             DataSizeBytes = dataSize,
-            HasBroadcastExtension = hasBext,
+            HasIXml = hasIXml,
             TimeReferenceSamples = timeReferenceSamples,
         };
     }
@@ -139,7 +139,7 @@ internal sealed class WavFileInfo
         sb.AppendLine($"Data Size      : {DataSizeBytes:N0} bytes");
         sb.AppendLine($"Frames         : {FrameCount:N0}");
         sb.AppendLine($"Duration       : {FormatDuration(Duration)}");
-        sb.AppendLine($"Broadcast Ext  : {(HasBroadcastExtension ? "Yes (bext)" : "No")}");
+        sb.AppendLine($"iXML           : {(HasIXml ? "Yes" : "No")}");
         sb.AppendLine($"Time Reference : {TimeReferenceSamples:N0} samples");
         return sb.ToString();
     }

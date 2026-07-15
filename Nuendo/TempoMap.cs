@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace MgaWwiseImporter.Nuendo;
 
 internal sealed class TempoMap
@@ -141,34 +139,6 @@ internal sealed class TempoMap
         }
 
         return current;
-    }
-
-    public static string FormatTempoSignatureComment(double bpm, NuendoSignatureEvent signature)
-    {
-        var bpmText = Math.Round(bpm, MidpointRounding.AwayFromZero)
-            .ToString(CultureInfo.InvariantCulture);
-        return $"T{bpmText}-{signature.Numerator}/{signature.Denominator}";
-    }
-
-    /// <summary>
-    /// 区間の実尺に対する等価平均 BPM。
-    /// BPM = (拍数 × 60) / 秒 であり、可変テンポでも毎フレーム積分は不要
-    /// （サンプル長自体がテンポマップ積分の結果なので、それで帳尻が合う）。
-    /// </summary>
-    public static double CalculateEquivalentBpm(
-        double startPpq,
-        double endPpq,
-        long sampleLength,
-        double sampleRate)
-    {
-        var beats = (endPpq - startPpq) / NuendoTracklistInfo.PulsesPerQuarterNote;
-        if (beats <= 0 || sampleLength <= 0 || sampleRate <= 0)
-        {
-            return 0;
-        }
-
-        var seconds = sampleLength / sampleRate;
-        return beats * 60d / seconds;
     }
 
     private int FindEventIndexAtOrBefore(double ppq)

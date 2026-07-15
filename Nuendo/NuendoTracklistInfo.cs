@@ -38,7 +38,6 @@ internal sealed class NuendoMarkerEvent
     public double StartPpq { get; init; }
     public double LengthPpq { get; init; }
     public string Name { get; init; } = string.Empty;
-    public int Id { get; init; }
 
     public double EndPpq => StartPpq + LengthPpq;
 }
@@ -201,7 +200,6 @@ internal sealed class NuendoTracklistInfo
             StartPpq = NuendoXml.ReadFloatChild(obj, "Start") ?? 0,
             LengthPpq = NuendoXml.ReadFloatChild(obj, "Length") ?? 0,
             Name = NuendoXml.ReadStringChild(obj, "Name"),
-            Id = NuendoXml.ReadIntChild(obj, "ID") ?? 0,
         };
     }
 
