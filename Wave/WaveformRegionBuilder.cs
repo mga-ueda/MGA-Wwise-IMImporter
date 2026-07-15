@@ -31,10 +31,10 @@ internal static class WaveformRegionBuilder
     /// これ未満は独立リージョンにせず、直前の区画へ吸い込む。
     /// </summary>
     private const long MinRegionFrames = 2;
-    private const string ExcludeRangeSuffix = "-R";
-    private const string LoopLeftSuffix = "-L";
-    private const string LoopEndSuffix = "-E";
-    private const string AnacrusisSuffix = "-A";
+    internal const string ExcludeRangeSuffix = "-R";
+    internal const string LoopLeftSuffix = "-L";
+    internal const string LoopEndSuffix = "-E";
+    internal const string AnacrusisSuffix = "-A";
 
     public static IReadOnlyList<WaveformRegionMark> Build(
         NuendoTracklistInfo tracklist,

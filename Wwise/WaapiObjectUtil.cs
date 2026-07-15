@@ -1,0 +1,64 @@
+using System.Text.Json;
+
+namespace MgaWwiseImporter.Wwise;
+
+/// <summary>WAAPI 上のオブジェクト存在確認・削除。</summary>
+internal static class WaapiObjectUtil
+{
+    public static async Task<bool> ExistsAsync(
+        WaapiSettings settings,
+        string objectPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(objectPath))
+        {
+            return false;
+        }
+
+        using var client = new WaapiHttpClient(
+            settings.Url,
+            TimeSpan.FromMilliseconds(settings.TimeoutMs));
+
+        // path にバックスラッシュが含まれるため GUID/パスはダブルクォートで囲む
+        var escaped = objectPath.Replace("\"", "\\\"", StringComparison.Ordinal);
+        try
+        {
+            var result = await client.CallAsync(
+                    "ak.wwise.core.object.get",
+                    new Dictionary<string, object?> { ["waql"] = $"$ \"{escaped}\"" },
+                    new Dictionary<string, object?> { ["return"] = new[] { "id", "path" } },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return result.TryGetProperty("return", out var arr)
+                && arr.ValueKind == JsonValueKind.Array
+                && arr.GetArrayLength() > 0;
+        }
+        catch (WaapiException ex) when (IsObjectNotFound(ex.Message))
+        {
+            // WAAPI は未存在パスに対し invalid_query / Object not found を返す
+            return false;
+        }
+    }
+
+    public static async Task DeleteAsync(
+        WaapiSettings settings,
+        string objectPath,
+        CancellationToken cancellationToken = default)
+    {
+        using var client = new WaapiHttpClient(
+            settings.Url,
+            TimeSpan.FromMilliseconds(Math.Max(settings.TimeoutMs, 10000)));
+
+        await client.CallAsync(
+                "ak.wwise.core.object.delete",
+                new Dictionary<string, object?> { ["object"] = objectPath },
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool IsObjectNotFound(string message) =>
+        message.Contains("Object not found", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("invalid_query", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("ak.wwise.query.invalid_query", StringComparison.OrdinalIgnoreCase);
+}

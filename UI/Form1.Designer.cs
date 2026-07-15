@@ -5,6 +5,7 @@ partial class Form1
     private System.ComponentModel.IContainer components = null;
     private WaveformView waveformView;
     private ShortcutForwardingRichTextBox editorTextBox;
+    private WaapiStatusBar waapiStatusBar;
 
     protected override void Dispose(bool disposing)
     {
@@ -21,6 +22,7 @@ partial class Form1
     {
         waveformView = new WaveformView();
         editorTextBox = new ShortcutForwardingRichTextBox();
+        waapiStatusBar = new WaapiStatusBar();
         SuspendLayout();
         //
         // waveformView
@@ -51,13 +53,20 @@ partial class Form1
         editorTextBox.DragEnter += EditorTextBox_DragEnter;
         editorTextBox.DragDrop += EditorTextBox_DragDrop;
         //
+        // waapiStatusBar
+        //
+        waapiStatusBar.Name = "waapiStatusBar";
+        waapiStatusBar.TabIndex = 2;
+        //
         // Form1
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         BackColor = UiColors.WindowBack;
         ClientSize = new Size(960, 640);
+        // Dock 順: Fill → Bottom → Top（後から追加したものが外側）
         Controls.Add(editorTextBox);
+        Controls.Add(waapiStatusBar);
         Controls.Add(waveformView);
         ForeColor = UiColors.WindowFore;
         MaximizeBox = true;

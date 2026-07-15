@@ -13,8 +13,12 @@ public partial class Form1 : Form
     private const byte LineSpacingExact = 4;
 
     private DeveloperSettings _developerSettings = new();
+    private WaapiSettings _waapiSettings = new();
+    private WaapiProbeResult? _waapiLastResult;
+    private string _waapiLoggedSelectionPath = string.Empty;
     private readonly WaveAudioPlayer _audioPlayer = new();
     private readonly System.Windows.Forms.Timer _playheadTimer = new() { Interval = 16 };
+    private readonly System.Windows.Forms.Timer _waapiSelectionTimer = new() { Interval = 1500 };
     private double _smoothProgress;
     private double _anchorProgress;
     private long _anchorTickMs;
@@ -31,10 +35,12 @@ public partial class Form1 : Form
         InitializeComponent();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
+        _waapiSettings = WaapiSettings.Load();
         TopMost = _developerSettings.TopMost;
         RestoreWindowBounds();
 
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
+        _waapiSelectionTimer.Tick += async (_, _) => await RefreshWaapiSelectionAsync();
         _audioPlayer.PlaybackEnded += (_, _) =>
         {
             if (IsDisposed)
@@ -66,13 +72,133 @@ public partial class Form1 : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        BeginInvoke(LoadAutoWaveAsDropped);
+        BeginInvoke(RunStartupSequenceAsync);
+    }
+
+    /// <summary>起動直後: WAAPI 接続確認 → 自動波形読み込み。</summary>
+    private async void RunStartupSequenceAsync()
+    {
+        if (_waapiSettings.ProbeOnStartup)
+        {
+            waapiStatusBar.SetPending();
+            try
+            {
+                var result = await WaapiStartupProbe.RunAsync(_waapiSettings);
+                if (!IsDisposed)
+                {
+                    ApplyWaapiProbeResult(result, logReport: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed)
+                {
+                    ApplyWaapiProbeResult(
+                        new WaapiProbeResult
+                        {
+                            Ok = false,
+                            Url = _waapiSettings.Url,
+                            Message = ex.Message,
+                        },
+                        logReport: true);
+                }
+            }
+        }
+        else
+        {
+            waapiStatusBar.SetSkipped();
+            _waapiSelectionTimer.Stop();
+        }
+
+        if (!IsDisposed)
+        {
+            LoadAutoWaveAsDropped();
+        }
+    }
+
+    private void ApplyWaapiProbeResult(WaapiProbeResult result, bool logReport)
+    {
+        _waapiLastResult = result;
+        waapiStatusBar.SetResult(result);
+        if (logReport)
+        {
+            AppendReport(result.FormatLogReport());
+            _waapiLoggedSelectionPath = result.SelectedPath;
+        }
+
+        if (result.Ok)
+        {
+            if (!_waapiSelectionTimer.Enabled)
+            {
+                _waapiSelectionTimer.Start();
+            }
+        }
+        else
+        {
+            _waapiSelectionTimer.Stop();
+        }
+    }
+
+    private async Task RefreshWaapiSelectionAsync()
+    {
+        if (IsDisposed || _waapiLastResult is not { Ok: true })
+        {
+            return;
+        }
+
+        try
+        {
+            var (path, name, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings);
+            if (IsDisposed || _waapiLastResult is not { Ok: true })
+            {
+                return;
+            }
+
+            if (string.Equals(path, _waapiLastResult.SelectedPath, StringComparison.Ordinal)
+                && string.Equals(type, _waapiLastResult.SelectedType, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _waapiLastResult = new WaapiProbeResult
+            {
+                Ok = true,
+                Url = _waapiLastResult.Url,
+                WwiseVersion = _waapiLastResult.WwiseVersion,
+                ProcessPath = _waapiLastResult.ProcessPath,
+                Project = _waapiLastResult.Project,
+                ProjectName = _waapiLastResult.ProjectName,
+                SelectedPath = path,
+                SelectedName = name,
+                SelectedType = type,
+            };
+
+            waapiStatusBar.UpdateSelection(
+                _waapiLastResult.WwiseVersion,
+                _waapiLastResult.ProjectName,
+                path);
+
+            if (!string.Equals(path, _waapiLoggedSelectionPath, StringComparison.Ordinal))
+            {
+                _waapiLoggedSelectionPath = path;
+                AppendReport(
+                    path.Length > 0
+                        ? $"Target  : {path}{Environment.NewLine}"
+                        : $"Target  : （未選択）{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // 選択ポーリング失敗はステータスを崩さない（Wwise フォーカス切替など）。再接続は起動時のみ。
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        _waapiSelectionTimer.Stop();
         _playheadTimer.Stop();
         _audioPlayer.Dispose();
+        _waapiSelectionTimer.Dispose();
         _playheadTimer.Dispose();
         WindowSettings.FromForm(this).Save();
         base.OnFormClosing(e);
@@ -310,6 +436,7 @@ public partial class Form1 : Form
         ForeColor = UiColors.WindowFore;
         editorTextBox.BackColor = UiColors.LogBack;
         editorTextBox.ForeColor = UiColors.LogDefault;
+        waapiStatusBar.ApplyColors();
         waveformView.RefreshAppearance();
     }
 
@@ -406,6 +533,11 @@ public partial class Form1 : Form
 
     private void LoadAutoWaveAsDropped()
     {
+        if (!_developerSettings.AutoLoadOnStartup)
+        {
+            return;
+        }
+
         var wavPath = _developerSettings.ResolveAutoLoadWavePath();
         if (wavPath is null)
         {
@@ -512,6 +644,201 @@ public partial class Form1 : Form
         }
 
         await RunExportAsync(preview, exportGeneration);
+
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        await RunWwiseImportAsync(preview, exportGeneration);
+    }
+
+    /// <summary>
+    /// エクスポート済み WAV を Wwise の選択位置へ Music 構造として流し込む。
+    /// 接続不可・未選択・キャンセル時はログを残してスキップする。
+    /// </summary>
+    private async Task RunWwiseImportAsync(WaveformPreviewData preview, int exportGeneration)
+    {
+        // 書き出しに失敗したパートがあるときは中断（全ファイルの存在を確認）
+        var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
+        var missing = preview.OutputParts
+            .Select(p => Path.Combine(directory, p.FileName))
+            .Where(p => !File.Exists(p))
+            .ToList();
+        if (missing.Count > 0)
+        {
+            AppendReport(
+                $"=== Wwise Import ==={Environment.NewLine}"
+                + $"Message : 書き出しファイルが見つからないためスキップしました: {Path.GetFileName(missing[0])}{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        // 作成先 = Wwise 上の現在選択（インポート直前に再取得）
+        string targetPath;
+        try
+        {
+            var (path, _, _) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings);
+            targetPath = path;
+        }
+        catch (Exception ex)
+        {
+            AppendReport(
+                $"=== Wwise Import ==={Environment.NewLine}"
+                + $"Status  : NG{Environment.NewLine}"
+                + $"Message : Wwise へ接続できないためスキップしました。{ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        if (targetPath.Length == 0)
+        {
+            AppendReport(
+                $"=== Wwise Import ==={Environment.NewLine}"
+                + $"Message : Wwise 上で作成先オブジェクトが選択されていないためスキップしました。{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        var importSettings = WwiseImportSettings.Load();
+
+        WwiseMusicPlan plan;
+        try
+        {
+            plan = WwiseMusicPlanBuilder.Build(
+                preview.SourcePath,
+                preview.WavInfo.SampleRate,
+                preview.OutputParts,
+                preview.Regions,
+                preview.Bars,
+                preview.Markers);
+        }
+        catch (Exception ex)
+        {
+            AppendReport(
+                $"=== Wwise Import ==={Environment.NewLine}"
+                + $"Message : インポート計画の作成に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        var mode = plan.IsMultiPart
+            ? $"Music Switch Container「{plan.ContainerName}」+ Playlist × {plan.Playlists.Count}"
+            : $"Music Playlist Container「{plan.ContainerName}」";
+
+        var overwriteStateGroup = false;
+        if (plan.IsMultiPart)
+        {
+            var stateGroupPath = importSettings.ResolveStateGroupPath(plan.ContainerName);
+            bool exists;
+            try
+            {
+                exists = await WaapiObjectUtil.ExistsAsync(_waapiSettings, stateGroupPath);
+            }
+            catch (Exception ex)
+            {
+                AppendReport(
+                    $"=== Wwise Import ==={Environment.NewLine}"
+                    + $"Status  : NG{Environment.NewLine}"
+                    + $"Message : State Group の存在確認に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                return;
+            }
+
+            if (IsDisposed || exportGeneration != _exportGeneration)
+            {
+                return;
+            }
+
+            if (exists)
+            {
+                var conflict = MessageBox.Show(
+                    this,
+                    $"State Group が既に存在します。\n\n"
+                    + $"{stateGroupPath}\n\n"
+                    + "上書き（削除して新規作成）してインポートを続けますか？\n"
+                    + "「いいえ」でインポート全体を中断します。",
+                    "State Group の衝突",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (conflict != DialogResult.Yes || exportGeneration != _exportGeneration)
+                {
+                    AppendReport(
+                        $"=== Wwise Import ==={Environment.NewLine}"
+                        + $"Message : 既存 State Group のためインポートを中断しました。{Environment.NewLine}"
+                        + $"StateGrp : {stateGroupPath}{Environment.NewLine}{Environment.NewLine}");
+                    return;
+                }
+
+                overwriteStateGroup = true;
+            }
+        }
+
+        var confirmLines =
+            $"Wwise へインポートします。\n\n"
+            + $"作成先: {targetPath}\n"
+            + $"構成: {mode}\n"
+            + $"Music Segment: {plan.TotalSegmentCount} 個\n";
+        if (plan.IsMultiPart)
+        {
+            confirmLines +=
+                $"State Group: {importSettings.ResolveStateGroupPath(plan.ContainerName)}\n"
+                + $"  States: {string.Join(", ", plan.Playlists.Select(p => p.Name))}\n";
+            if (overwriteStateGroup)
+            {
+                confirmLines += "  （既存 State Group は上書き）\n";
+            }
+            else
+            {
+                confirmLines += "  （State Group を新規作成）\n";
+            }
+        }
+
+        confirmLines += "\n実行しますか？";
+
+        var confirm = MessageBox.Show(
+            this,
+            confirmLines,
+            "Wwise インポート",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+
+        if (confirm != DialogResult.Yes || exportGeneration != _exportGeneration)
+        {
+            AppendReport(
+                $"=== Wwise Import ==={Environment.NewLine}"
+                + $"Message : インポートをスキップしました。{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        try
+        {
+            var log = await Task.Run(() => WaapiMusicImporter.ImportAsync(
+                _waapiSettings,
+                importSettings,
+                plan,
+                targetPath,
+                preview.WavInfo.SampleRate,
+                preview.WavInfo.BlockAlign,
+                overwriteStateGroup));
+            if (!IsDisposed)
+            {
+                AppendReport(log);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!IsDisposed)
+            {
+                AppendReport(
+                    $"=== Wwise Import ==={Environment.NewLine}"
+                    + $"Status  : NG{Environment.NewLine}"
+                    + $"Message : {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            }
+        }
     }
 
     private async Task RunExportAsync(WaveformPreviewData preview, int exportGeneration)
@@ -744,6 +1071,11 @@ public partial class Form1 : Form
             return UiColors.LogDefault;
         }
 
+        if (t.StartsWith("Status  : OK", StringComparison.Ordinal))
+        {
+            return UiColors.SeekCyan;
+        }
+
         if (t.StartsWith("[警告]", StringComparison.Ordinal)
             || t.StartsWith("=== 警告", StringComparison.Ordinal)
             || t.StartsWith("[Warning]", StringComparison.OrdinalIgnoreCase)
@@ -755,10 +1087,18 @@ public partial class Form1 : Form
         if (t.StartsWith("=== エラー", StringComparison.Ordinal)
             || t.StartsWith("=== Error", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Message :", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("Status  : 接続失敗", StringComparison.Ordinal)
+            || t.StartsWith("Status  : NG", StringComparison.Ordinal)
             || t.StartsWith("自動読み込み対象が見つかりません", StringComparison.Ordinal)
+            || t.StartsWith("Target  : （未選択）", StringComparison.Ordinal)
             || t.Contains("(なし)", StringComparison.Ordinal))
         {
             return UiColors.LogError;
+        }
+
+        if (t.StartsWith("Target  :", StringComparison.Ordinal))
+        {
+            return UiColors.SeekCyan;
         }
 
         if (t.StartsWith("===", StringComparison.Ordinal))

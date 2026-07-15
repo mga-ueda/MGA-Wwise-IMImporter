@@ -18,6 +18,8 @@ internal static class UiColors
     public static Color LogWarning { get; set; } = Color.FromArgb(255, 180, 70);
     public static Color LogError { get; set; } = Color.FromArgb(255, 110, 110);
     public static Color LogMuted { get; set; } = Color.FromArgb(150, 150, 150);
+    public static Color StatusBarBack { get; set; } = Color.FromArgb(22, 22, 24);
+    public static Color StatusBarBorder { get; set; } = Color.FromArgb(55, 55, 58);
 
     // --- 波形ビュー共通 ---
     public static Color WaveformBack { get; set; } = Color.FromArgb(30, 30, 30);
@@ -60,6 +62,8 @@ internal static class UiColors
         new("LogWarning", "ログ文字（警告）", () => LogWarning, c => LogWarning = c),
         new("LogError", "ログ文字（エラー）", () => LogError, c => LogError = c),
         new("LogMuted", "ログ文字（弱）", () => LogMuted, c => LogMuted = c),
+        new("StatusBarBack", "ステータスバー背景", () => StatusBarBack, c => StatusBarBack = c),
+        new("StatusBarBorder", "ステータスバー上線", () => StatusBarBorder, c => StatusBarBorder = c),
         new("WaveformBack", "波形エリア背景", () => WaveformBack, c => WaveformBack = c),
         new("WaveFill", "波形", () => WaveFill, c => WaveFill = c),
         new("WaveCenter", "波形センター線", () => WaveCenter, c => WaveCenter = c),

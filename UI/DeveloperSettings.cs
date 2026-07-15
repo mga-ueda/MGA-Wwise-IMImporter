@@ -9,8 +9,11 @@ internal sealed class DeveloperSettings
 {
     public const string Section = "Developer";
 
-    /// <summary>起動時に自動ドロップ扱いする波形。空ならスキップ。</summary>
+    /// <summary>起動時に自動ドロップ扱いする波形。パス自体は <see cref="AutoLoadOnStartup"/> と独立。</summary>
     public string AutoLoadWavePath { get; init; } = string.Empty;
+
+    /// <summary>起動時に <see cref="AutoLoadWavePath"/> を自動読み込みするか。既定はオン。</summary>
+    public bool AutoLoadOnStartup { get; init; } = true;
 
     /// <summary>ウィンドウを最前面に固定するか。既定はオフ。</summary>
     public bool TopMost { get; init; }
@@ -25,6 +28,9 @@ internal sealed class DeveloperSettings
             AutoLoadWavePath = values.TryGetValue("AutoLoadWavePath", out var wave)
                 ? wave
                 : string.Empty,
+            AutoLoadOnStartup = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
+                ? ParseBool(autoLoad, defaultValue: true)
+                : true,
             TopMost = values.TryGetValue("TopMost", out var topMost)
                 && ParseBool(topMost, defaultValue: false),
         };
@@ -50,6 +56,12 @@ internal sealed class DeveloperSettings
             changed = true;
         }
 
+        if (!values.ContainsKey("AutoLoadOnStartup"))
+        {
+            values["AutoLoadOnStartup"] = "1";
+            changed = true;
+        }
+
         if (!values.ContainsKey("TopMost"))
         {
             values["TopMost"] = "0";
@@ -61,6 +73,7 @@ internal sealed class DeveloperSettings
             IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["AutoLoadWavePath"] = values["AutoLoadWavePath"],
+                ["AutoLoadOnStartup"] = values["AutoLoadOnStartup"],
                 ["TopMost"] = values["TopMost"],
             });
         }
