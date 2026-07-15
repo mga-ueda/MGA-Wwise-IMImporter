@@ -18,9 +18,12 @@ public partial class Form1 : Form
     private double _smoothProgress;
     private double _anchorProgress;
     private long _anchorTickMs;
+    private ColorDevPanelForm? _colorDevPanel;
+    private int _exportGeneration;
 
     public Form1()
     {
+        UiColors.LoadFromIni();
         InitializeComponent();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
@@ -77,7 +80,44 @@ public partial class Form1 : Form
             return true;
         }
 
+        if (keyData == (Keys.Control | Keys.Shift | Keys.C))
+        {
+            ShowColorDevPanel();
+            return true;
+        }
+
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void ShowColorDevPanel()
+    {
+        if (_colorDevPanel is null || _colorDevPanel.IsDisposed)
+        {
+            _colorDevPanel = new ColorDevPanelForm();
+            _colorDevPanel.ColorsChanged += (_, _) => ApplyUiColors();
+            PositionColorDevPanel(_colorDevPanel);
+        }
+
+        _colorDevPanel.RefreshRows();
+        _colorDevPanel.Show(this);
+        _colorDevPanel.BringToFront();
+    }
+
+    private void PositionColorDevPanel(ColorDevPanelForm panel)
+    {
+        var screen = Screen.FromControl(this).WorkingArea;
+        var x = Math.Min(Right + 8, screen.Right - panel.Width);
+        var y = Math.Max(screen.Top, Top);
+        panel.Location = new Point(Math.Max(screen.Left, x), y);
+    }
+
+    private void ApplyUiColors()
+    {
+        BackColor = UiColors.WindowBack;
+        ForeColor = UiColors.WindowFore;
+        editorTextBox.BackColor = UiColors.LogBack;
+        editorTextBox.ForeColor = UiColors.LogDefault;
+        waveformView.RefreshAppearance();
     }
 
     private void RestoreWindowBounds()
@@ -188,8 +228,10 @@ public partial class Form1 : Form
         ProcessDroppedFiles([wavPath]);
     }
 
-    private void ProcessDroppedFiles(IEnumerable<string> files)
+    private async void ProcessDroppedFiles(IEnumerable<string> files)
     {
+        var exportGeneration = ++_exportGeneration;
+        waveformView.ClearExportHighlight();
         _playheadTimer.Stop();
         _audioPlayer.Stop();
 
@@ -225,6 +267,103 @@ public partial class Form1 : Form
                 $"=== エラー ==={Environment.NewLine}"
                 + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
         }
+
+        if (preview.OutputParts.Count == 0 || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        // リージョン付きプレビューが画面に載ってから問い合わせる
+        await waveformView.WaitForRevealAsync();
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
+        var confirm = MessageBox.Show(
+            this,
+            $"リージョン情報付きの分割 WAV を {preview.OutputParts.Count} ファイル書き出します。\n"
+            + $"保存先: {directory}\n\n"
+            + "エクスポートしますか？",
+            "WAV エクスポート",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+
+        if (confirm != DialogResult.Yes)
+        {
+            AppendReport(
+                $"=== Export ==={Environment.NewLine}"
+                + "Message : エクスポートをスキップしました。"+ Environment.NewLine
+                + Environment.NewLine);
+            return;
+        }
+
+        if (exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        await RunExportAsync(preview, exportGeneration);
+    }
+
+    private async Task RunExportAsync(WaveformPreviewData preview, int exportGeneration)
+    {
+        string exportReport;
+        try
+        {
+            exportReport = await Task.Run(() => WaveformExporter.Export(
+                preview.SourcePath,
+                preview.WavInfo,
+                preview.OutputParts,
+                preview.Regions,
+                preview.Bars,
+                onPartBegin: part =>
+                {
+                    if (exportGeneration != _exportGeneration || IsDisposed)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        // 書き出し開始前に UI へ反映し、発光が見えてから I/O に入る
+                        Invoke(() =>
+                        {
+                            if (exportGeneration != _exportGeneration || IsDisposed)
+                            {
+                                return;
+                            }
+
+                            waveformView.SetExportHighlight(part.Number);
+                            waveformView.Update();
+                        });
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // クローズ直後は無視
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // ハンドル破棄直後など
+                    }
+                }));
+        }
+        catch (Exception ex)
+        {
+            exportReport =
+                $"=== エラー ==={Environment.NewLine}"
+                + $"Message : 書き出しに失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}";
+        }
+
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
+        waveformView.ClearExportHighlight();
+        AppendReport(exportReport);
     }
 
     private void TogglePlayback()

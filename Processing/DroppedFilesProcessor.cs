@@ -125,6 +125,7 @@ internal static class DroppedFilesProcessor
             preview?.Invoke(new WaveformPreviewData(
                 peaks,
                 wavPath,
+                wavInfo,
                 bars,
                 markers,
                 cycles,

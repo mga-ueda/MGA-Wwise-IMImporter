@@ -92,6 +92,22 @@ internal static class BarGrid
         return null;
     }
 
+    /// <summary>
+    /// 候補 PPQ が values のいずれかに十分近いか（同一小節線判定など）。
+    /// </summary>
+    public static bool IsNearAny(IReadOnlyList<double> values, double ppq, double epsilon = 1e-6)
+    {
+        foreach (var value in values)
+        {
+            if (Math.Abs(value - ppq) <= epsilon)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void AddBarsThrough(
         SortedSet<double> bounds,
         double startPpq,

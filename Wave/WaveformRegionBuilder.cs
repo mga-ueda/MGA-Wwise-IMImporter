@@ -14,8 +14,9 @@ namespace MgaWwiseImporter.Wave;
 /// </list>
 /// 例外:
 /// <list type="bullet">
-/// <item>波形冒頭が小節頭でないとき、次の小節線までを単独リージョンにする。</item>
-/// <item>名前が -R で終わるサイクル範囲は Out で分割し、Out が小節途中なら次の小節頭までを 1 リージョンにする。範囲内は出力計画から除外（色分けのみ別扱い）。</item>
+/// <item>波形冒頭が小節頭でないとき、次の小節線までを単独リージョンにする（名前に -A）。</item>
+/// <item>名前が -R で終わるサイクル範囲は Out で分割し、Out が小節途中なら次の小節頭までを 1 リージョンにする（-A）。範囲内は出力計画から除外（色分けのみ別扱い）。</item>
+/// <item>名前が -L で終わるサイクル範囲内のリージョン名には -L を添える。</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -24,6 +25,8 @@ internal static class WaveformRegionBuilder
     private const double PpqEpsilon = 1e-6;
     private const double BpmEpsilon = 1e-3;
     private const string ExcludeRangeSuffix = "-R";
+    private const string LoopLeftSuffix = "-L";
+    private const string AnacrusisSuffix = "-A";
 
     public static IReadOnlyList<WaveformRegionMark> Build(
         NuendoTracklistInfo tracklist,
@@ -42,21 +45,22 @@ internal static class WaveformRegionBuilder
         }
 
         var splitSamples = new SortedSet<long> { 0, frameCount };
+        var anacrusisRanges = new List<(long Start, long End)>();
 
         // 例外: 冒頭が小節頭でない → 次の小節線で区切り、冒頭半端小節だけを 1 リージョンにする
-        if (!IsNearAny(barBoundaries, waveStartPpq))
+        if (!BarGrid.IsNearAny(barBoundaries, waveStartPpq))
         {
             var nextBar = BarGrid.FindNextBarPpq(barBoundaries, waveStartPpq);
             if (nextBar is double nextBarPpq
                 && nextBarPpq <= waveEndPpq + PpqEpsilon)
             {
-                TryAddSplitSample(
-                    splitSamples,
-                    tempoMap,
-                    sampleRate,
-                    timelineOffset,
-                    frameCount,
-                    nextBarPpq);
+                var nextSample = tempoMap.PpqToSampleIndex(nextBarPpq, sampleRate) - timelineOffset;
+                nextSample = Math.Clamp(nextSample, 0L, frameCount);
+                AddClampedSplit(splitSamples, nextSample, frameCount);
+                if (nextSample > 0)
+                {
+                    anacrusisRanges.Add((0, nextSample));
+                }
             }
         }
 
@@ -100,29 +104,38 @@ internal static class WaveformRegionBuilder
                 continue;
             }
 
-            var endAbsolute = timelineOffset + cycle.EndSampleOffset;
-            var endPpq = tempoMap.FindPpqForSamples(endAbsolute, sampleRate);
-            if (IsNearAny(barBoundaries, endPpq) || endPpq >= waveEndPpq - PpqEpsilon)
+            // PPQ 往復の誤差で小節頭を外しやすいので、サンプル位置で小節頭判定する
+            if (IsNearBarLocalSample(
+                    barBoundaries,
+                    tempoMap,
+                    sampleRate,
+                    timelineOffset,
+                    cycle.EndSampleOffset)
+                || cycle.EndSampleOffset >= frameCount)
             {
                 continue;
             }
 
-            var nextBar = BarGrid.FindNextBarPpq(barBoundaries, endPpq);
-            if (nextBar is double nextBarPpq
-                && nextBarPpq <= waveEndPpq + PpqEpsilon)
+            var nextBarSample = FindNextBarLocalSample(
+                barBoundaries,
+                tempoMap,
+                sampleRate,
+                timelineOffset,
+                frameCount,
+                cycle.EndSampleOffset);
+            if (nextBarSample is long nextSample && nextSample > cycle.EndSampleOffset)
             {
-                TryAddSplitSample(
-                    splitSamples,
-                    tempoMap,
-                    sampleRate,
-                    timelineOffset,
-                    frameCount,
-                    nextBarPpq);
+                AddClampedSplit(splitSamples, nextSample, frameCount);
+                anacrusisRanges.Add((cycle.EndSampleOffset, nextSample));
             }
         }
 
         var excludeRanges = cycles
             .Where(IsExcludeRange)
+            .Select(c => (c.StartSampleOffset, c.EndSampleOffset))
+            .ToList();
+        var loopLeftRanges = cycles
+            .Where(IsLoopLeftRange)
             .Select(c => (c.StartSampleOffset, c.EndSampleOffset))
             .ToList();
 
@@ -138,11 +151,51 @@ internal static class WaveformRegionBuilder
             }
 
             var mid = start + (end - start) / 2;
-            var excluded = excludeRanges.Exists(r => mid >= r.StartSampleOffset && mid < r.EndSampleOffset);
-            regions.Add(new WaveformRegionMark(start, end, excluded));
+            var excluded = ContainsSample(excludeRanges, mid);
+            var suffix = BuildNameSuffix(mid, excluded, loopLeftRanges, anacrusisRanges);
+            regions.Add(new WaveformRegionMark(start, end, excluded, suffix));
         }
 
         return regions;
+    }
+
+    private static string BuildNameSuffix(
+        long midSample,
+        bool excluded,
+        IReadOnlyList<(long Start, long End)> loopLeftRanges,
+        IReadOnlyList<(long Start, long End)> anacrusisRanges)
+    {
+        // 例: " -L" / " -A"（複数可）。-R は IsExcluded で表し、接尾辞には付けない。
+        var suffix = string.Empty;
+        if (!excluded && ContainsSample(loopLeftRanges, midSample))
+        {
+            suffix += " " + LoopLeftSuffix;
+        }
+
+        if (!excluded && ContainsSample(anacrusisRanges, midSample))
+        {
+            suffix += " " + AnacrusisSuffix;
+        }
+
+        return suffix;
+    }
+
+    private static bool ContainsSample(IReadOnlyList<(long Start, long End)> ranges, long sample)
+    {
+        foreach (var range in ranges)
+        {
+            if (sample >= range.Start && sample < range.End)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsLoopLeftRange(WaveformCycleMark cycle)
+    {
+        return cycle.Comment.EndsWith(LoopLeftSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -213,7 +266,7 @@ internal static class WaveformRegionBuilder
     {
         double? previousBarPpq = BarGrid.FindPreviousBarPpq(barBoundaries, waveStartPpq);
         // 波形先頭が小節頭そのもののとき、その線を「直前小節頭」扱いにする
-        if (IsNearAny(barBoundaries, waveStartPpq))
+        if (BarGrid.IsNearAny(barBoundaries, waveStartPpq))
         {
             previousBarPpq = waveStartPpq;
         }
@@ -281,16 +334,54 @@ internal static class WaveformRegionBuilder
         splits.Add(sample);
     }
 
-    private static bool IsNearAny(IReadOnlyList<double> values, double ppq)
+    private static bool IsNearBarLocalSample(
+        IReadOnlyList<double> barBoundaries,
+        TempoMap tempoMap,
+        uint sampleRate,
+        long timelineOffset,
+        long localSample,
+        long sampleTolerance = 1)
     {
-        foreach (var value in values)
+        foreach (var barPpq in barBoundaries)
         {
-            if (Math.Abs(value - ppq) <= PpqEpsilon)
+            var barLocal = tempoMap.PpqToSampleIndex(barPpq, sampleRate) - timelineOffset;
+            if (Math.Abs(barLocal - localSample) <= sampleTolerance)
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static long? FindNextBarLocalSample(
+        IReadOnlyList<double> barBoundaries,
+        TempoMap tempoMap,
+        uint sampleRate,
+        long timelineOffset,
+        long frameCount,
+        long afterLocalSample)
+    {
+        long? best = null;
+        foreach (var barPpq in barBoundaries)
+        {
+            var barLocal = tempoMap.PpqToSampleIndex(barPpq, sampleRate) - timelineOffset;
+            if (barLocal <= afterLocalSample + 1)
+            {
+                continue;
+            }
+
+            if (barLocal > frameCount)
+            {
+                continue;
+            }
+
+            if (best is null || barLocal < best.Value)
+            {
+                best = barLocal;
+            }
+        }
+
+        return best;
     }
 }

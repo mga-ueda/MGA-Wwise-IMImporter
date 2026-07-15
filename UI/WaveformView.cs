@@ -37,6 +37,8 @@ internal sealed class WaveformView : Control
     private IReadOnlyList<WaveformCycleMark> _cycles = [];
     private IReadOnlyList<WaveformRegionMark> _regions = [];
     private IReadOnlyList<WaveformOutputPart> _outputParts = [];
+    private int? _exportHighlightPartNumber;
+    private readonly System.Windows.Forms.Timer _exportGlowTimer;
     private double? _playheadProgress;
     private readonly List<(double Progress, long TickMs)> _trailSamples = [];
     private float[]? _trailColumnAlpha;
@@ -47,6 +49,7 @@ internal sealed class WaveformView : Control
     private bool _staticLayerDirty = true;
     private bool _revealActive;
     private bool _holdScaffold;
+    private TaskCompletionSource? _revealCompleted;
     private long _revealStartTickMs;
     private readonly System.Windows.Forms.Timer _revealTimer;
     private readonly Bitmap?[] _revealLayers = new Bitmap?[5];
@@ -73,6 +76,8 @@ internal sealed class WaveformView : Control
         Cursor = Cursors.Default;
         _revealTimer = new System.Windows.Forms.Timer { Interval = RevealTickMs };
         _revealTimer.Tick += OnRevealTick;
+        _exportGlowTimer = new System.Windows.Forms.Timer { Interval = 16 };
+        _exportGlowTimer.Tick += (_, _) => Invalidate();
     }
 
     public void SetPreview(
@@ -92,6 +97,7 @@ internal sealed class WaveformView : Control
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        ClearExportHighlight();
         ClearPlayhead();
         _mouseGuideX = null;
         Cursor = Cursors.Hand;
@@ -122,6 +128,39 @@ internal sealed class WaveformView : Control
         Update();
     }
 
+    /// <summary>
+    /// UiColors 変更後に背景・静的レイヤを作り直す。
+    /// </summary>
+    public void RefreshAppearance()
+    {
+        BackColor = UiColors.WaveformBack;
+        DisposeStaticLayer();
+        InvalidateRevealLayers();
+
+        if (!IsHandleCreated || IsDisposed)
+        {
+            return;
+        }
+
+        var bounds = ClientRectangle;
+        if (bounds.Width <= 2 || bounds.Height <= 2)
+        {
+            Invalidate();
+            return;
+        }
+
+        if (_revealActive)
+        {
+            EnsureRevealLayers(bounds);
+        }
+        else if (_peaks is not null && !_peaks.IsEmpty)
+        {
+            BuildStaticLayer(bounds);
+        }
+
+        Invalidate();
+    }
+
     public void ClearPreview()
     {
         StopRevealAnimation();
@@ -133,6 +172,7 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        ClearExportHighlight();
         _isDraggingSeek = false;
         _mouseGuideX = null;
         ClearPlayhead();
@@ -170,6 +210,36 @@ internal sealed class WaveformView : Control
 
         Invalidate();
     }
+
+    /// <summary>
+    /// 書き出し中の出力パート枠を発光表示する。null で解除。
+    /// </summary>
+    public void SetExportHighlight(int? partNumber)
+    {
+        if (_exportHighlightPartNumber == partNumber)
+        {
+            if (partNumber is not null && !_exportGlowTimer.Enabled)
+            {
+                _exportGlowTimer.Start();
+            }
+
+            return;
+        }
+
+        _exportHighlightPartNumber = partNumber;
+        if (partNumber is null)
+        {
+            _exportGlowTimer.Stop();
+        }
+        else if (!_exportGlowTimer.Enabled)
+        {
+            _exportGlowTimer.Start();
+        }
+
+        Invalidate();
+    }
+
+    public void ClearExportHighlight() => SetExportHighlight(null);
 
     /// <summary>クリック／ドラッグでシーク（0〜1）。</summary>
     public event EventHandler<double>? SeekRequested;
@@ -289,6 +359,8 @@ internal sealed class WaveformView : Control
         if (disposing)
         {
             StopRevealAnimation();
+            _exportGlowTimer.Stop();
+            _exportGlowTimer.Dispose();
             _revealTimer.Dispose();
             DisposeStaticLayer();
             InvalidateRevealLayers();
@@ -304,6 +376,8 @@ internal sealed class WaveformView : Control
         DisposeStaticLayer();
         _revealActive = true;
         _revealStartTickMs = Environment.TickCount64;
+        _revealCompleted?.TrySetCanceled();
+        _revealCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _revealTimer.Start();
         Invalidate();
     }
@@ -312,6 +386,8 @@ internal sealed class WaveformView : Control
     {
         _revealTimer.Stop();
         _revealActive = false;
+        _revealCompleted?.TrySetCanceled();
+        _revealCompleted = null;
     }
 
     private void FinishRevealAnimation()
@@ -328,6 +404,28 @@ internal sealed class WaveformView : Control
 
         InvalidateRevealLayers();
         Invalidate();
+        _revealCompleted?.TrySetResult();
+    }
+
+    /// <summary>
+    /// 読み込み演出が終わるまで待つ。演出中でなければ即座に完了する。
+    /// </summary>
+    public async Task WaitForRevealAsync()
+    {
+        var tcs = _revealCompleted;
+        if (!_revealActive || tcs is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await tcs.Task.ConfigureAwait(true);
+        }
+        catch (TaskCanceledException)
+        {
+            // キャンセル（再読み込みなど）は待ち解除のみ
+        }
     }
 
     private void OnRevealTick(object? sender, EventArgs e)
@@ -517,6 +615,7 @@ internal sealed class WaveformView : Control
         }
 
         var content = Rectangle.Inflate(bounds, -4, -4);
+        DrawExportPartGlow(g, content);
         DrawPlayhead(g, content);
         DrawMouseGuide(g, content);
     }
@@ -902,6 +1001,71 @@ internal sealed class WaveformView : Control
             var x = x0 + (width - size.Width) * 0.5f;
             DrawLabeledShadow(g, part.FileName, labelFont, brush, shadow, x, y);
         }
+    }
+
+    /// <summary>
+    /// 書き出し中パートの枠をパルス発光させる（進行中の見た目用）。
+    /// </summary>
+    private void DrawExportPartGlow(Graphics g, Rectangle content)
+    {
+        if (_exportHighlightPartNumber is not int partNumber
+            || _peaks is null
+            || _peaks.FrameCount <= 0
+            || content.Width <= 0)
+        {
+            return;
+        }
+
+        WaveformOutputPart? target = null;
+        foreach (var part in _outputParts)
+        {
+            if (part.Number == partNumber)
+            {
+                target = part;
+                break;
+            }
+        }
+
+        if (target is not WaveformOutputPart highlight)
+        {
+            return;
+        }
+
+        var (_, wave, _) = GetLayout(content, g);
+        if (wave.Width <= 0 || wave.Height <= 0)
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var t0 = Math.Clamp(highlight.StartSampleOffset / (double)frameCount, 0d, 1d);
+        var t1 = Math.Clamp(highlight.EndSampleOffset / (double)frameCount, 0d, 1d);
+        var x0 = wave.Left + (float)(t0 * wave.Width);
+        var x1 = wave.Left + (float)(t1 * wave.Width);
+        var width = Math.Max(2f, x1 - x0);
+        var rect = new RectangleF(x0, wave.Top, width, wave.Height);
+
+        // 約 1.1 秒周期で明滅（巨大ファイル書き出し中も動き続ける）
+        var phase = (Environment.TickCount64 % 1100) / 1100f;
+        var pulse = 0.40f + 0.60f * (0.5f + 0.5f * MathF.Sin(phase * MathF.PI * 2f));
+        var baseColor = UiColors.ExportPartGlow;
+
+        // 外側ほど薄いハロー（発光）
+        for (var i = 5; i >= 1; i--)
+        {
+            var alpha = (int)(28 * pulse * i);
+            using var glowPen = new Pen(Color.FromArgb(Math.Clamp(alpha, 0, 255), baseColor), i * 2.2f);
+            g.DrawRectangle(glowPen, rect.X, rect.Y, rect.Width, rect.Height);
+        }
+
+        using var corePen = new Pen(
+            Color.FromArgb((int)(230 * pulse), baseColor),
+            2.2f);
+        g.DrawRectangle(corePen, rect.X, rect.Y, rect.Width, rect.Height);
+
+        // 内側の薄い塗りで「今この固まり」を強調
+        using var fill = new SolidBrush(Color.FromArgb((int)(36 * pulse), baseColor));
+        g.FillRectangle(fill, rect);
     }
 
     private static void DrawLabeledShadow(
