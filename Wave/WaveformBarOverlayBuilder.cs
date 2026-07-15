@@ -53,7 +53,7 @@ internal readonly record struct WaveformCycleMark(
 /// true なら -R 範囲内など、出力計画から除外する区画（番号なし・別色）。
 /// </param>
 /// <param name="NameSuffix">
-/// リージョン名に添える接尾辞（例: <c> -L</c> / <c> -A</c>）。空なら無し。
+/// リージョン名に添える接尾辞（例: <c>-L</c> / <c>-A</c>）。空なら無し。
 /// 除外（-R）は <see cref="IsExcluded"/> で表し、ここには含めない。
 /// </param>
 internal readonly record struct WaveformRegionMark(
