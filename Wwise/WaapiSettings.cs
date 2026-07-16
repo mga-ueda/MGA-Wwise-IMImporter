@@ -1,10 +1,10 @@
 using System.Globalization;
-using MgaWwiseImporter.UI;
+using MgaWwiseIMImporter.UI;
 
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
-/// WAAPI 接続設定（exe 横の MgaWwiseImporter.ini [Waapi]）。
+/// WAAPI 接続設定（exe 横の MgaWwiseIMImporter.ini [Waapi]）。
 /// </summary>
 internal sealed class WaapiSettings
 {

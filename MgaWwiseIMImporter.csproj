@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -6,10 +6,10 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>MgaWwiseImporter</RootNamespace>
-    <AssemblyName>MgaWwiseImporter</AssemblyName>
-    <Product>MGA Wwise Importer</Product>
-    <ApplicationTitle>MGA Wwise Importer</ApplicationTitle>
+    <RootNamespace>MgaWwiseIMImporter</RootNamespace>
+    <AssemblyName>MgaWwiseIMImporter</AssemblyName>
+    <Product>MGA Wwise IMImporter</Product>
+    <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
   </PropertyGroup>
 
   <ItemGroup>

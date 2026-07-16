@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>Wwise へ作成する Interactive Music 構造の計画。</summary>
 internal sealed class WwiseMusicPlan

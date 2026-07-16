@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// 読み込んだ Wave のピーク波形と再生位置（シークバー）を描画する。

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// WAV 全体を一度だけ走査して作る min/max ピークの段階解像度（ミップ）階層。

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace MgaWwiseImporter.Processing;
+namespace MgaWwiseIMImporter.Processing;
 
 /// <summary>
 /// ドロップされた Wave（＋任意で同名 XML）を読み、波形プレビュー用データを返す。

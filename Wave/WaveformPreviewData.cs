@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 internal sealed class WaveformPreviewData
 {

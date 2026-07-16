@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 internal sealed class WindowSettings
 {

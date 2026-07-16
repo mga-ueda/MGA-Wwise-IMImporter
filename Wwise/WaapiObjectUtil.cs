@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>WAAPI 上のオブジェクト存在確認・削除。</summary>
 internal static class WaapiObjectUtil

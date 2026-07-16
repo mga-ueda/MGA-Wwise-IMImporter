@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 partial class Form1
 {
@@ -74,7 +74,7 @@ partial class Form1
         MinimumSize = new Size(480, 320);
         Name = "Form1";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "MGA Wwise Importer";
+        Text = "MGA Wwise IMImporter";
         ResumeLayout(false);
     }
 

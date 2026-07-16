@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// WAV セグメントへ cue / LIST adtl（リージョン）を書き出す。

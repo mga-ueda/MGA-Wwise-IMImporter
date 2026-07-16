@@ -1,6 +1,6 @@
 using NAudio.Wave;
 
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// Wave ファイルの再生。位置は Position で取得する。

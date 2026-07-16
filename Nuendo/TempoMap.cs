@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Nuendo;
+namespace MgaWwiseIMImporter.Nuendo;
 
 internal sealed class TempoMap
 {

@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Using Include="MgaWwiseImporter.Nuendo" />
-    <Using Include="MgaWwiseImporter.Wave" />
+    <Using Include="MgaWwiseIMImporter.Nuendo" />
+    <Using Include="MgaWwiseIMImporter.Wave" />
     <Compile Include="..\..\Nuendo\*.cs" />
     <Compile Include="..\..\Wave\WavFileInfo.cs" />
     <Compile Include="..\..\Wave\WavIxmlReader.cs" />

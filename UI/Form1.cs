@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 public partial class Form1 : Form
 {

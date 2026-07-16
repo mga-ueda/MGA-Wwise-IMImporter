@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using MgaWwiseImporter.Wave;
+using MgaWwiseIMImporter.Wave;
 
 if (args.Length < 1)
 {

@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// エクスポート計画（パート／リージョン／マーカー）から Wwise の Music 構造計画を組み立てる。

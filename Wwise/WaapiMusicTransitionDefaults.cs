@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// Music Switch Container の any→any トランジション既定値（WAAPI で設定可能な範囲のみ）。

@@ -1,9 +1,9 @@
 using System.Globalization;
 
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// 開発者向け設定（exe 横の MgaWwiseImporter.ini [Developer]）。
+/// 開発者向け設定（exe 横の MgaWwiseIMImporter.ini [Developer]）。
 /// </summary>
 internal sealed class DeveloperSettings
 {

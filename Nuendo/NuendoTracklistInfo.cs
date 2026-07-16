@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
 
-namespace MgaWwiseImporter.Nuendo;
+namespace MgaWwiseIMImporter.Nuendo;
 
 internal enum NuendoMarkerKind
 {

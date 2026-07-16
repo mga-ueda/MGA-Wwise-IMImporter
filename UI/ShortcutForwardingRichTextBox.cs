@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// ProcessCmdKey を親フォームに先渡しする RichTextBox。

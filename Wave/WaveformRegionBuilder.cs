@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// 出力計画用リージョンを、重なり・入れ子のない連続区画として構築する。

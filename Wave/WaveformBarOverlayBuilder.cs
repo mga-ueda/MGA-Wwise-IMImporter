@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>波形上に重ねる小節線／テンポ変更マーク 1 本。</summary>
 /// <param name="SampleOffset">波形先頭基準のサンプル位置。</param>

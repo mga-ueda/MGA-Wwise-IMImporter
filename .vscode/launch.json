@@ -2,11 +2,11 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "MGA Wwise Importer",
+      "name": "MGA Wwise IMImporter",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
-      "program": "${workspaceFolder}/bin/Debug/net8.0-windows/MgaWwiseImporter.dll",
+      "program": "${workspaceFolder}/bin/Debug/net8.0-windows/MgaWwiseIMImporter.dll",
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

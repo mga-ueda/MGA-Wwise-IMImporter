@@ -1,13 +1,13 @@
 using System.Text;
 
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// 簡易 INI（セクション単位のキー=値）。コメント行と未知セクションは保持する。
 /// </summary>
 internal static class IniFile
 {
-    public static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "MgaWwiseImporter.ini");
+    public static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "MgaWwiseIMImporter.ini");
 
     public static Dictionary<string, string> ReadSection(string section)
     {

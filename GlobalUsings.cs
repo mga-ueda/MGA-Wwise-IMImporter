@@ -1,5 +1,5 @@
-global using MgaWwiseImporter.Nuendo;
-global using MgaWwiseImporter.Processing;
-global using MgaWwiseImporter.UI;
-global using MgaWwiseImporter.Wave;
-global using MgaWwiseImporter.Wwise;
+global using MgaWwiseIMImporter.Nuendo;
+global using MgaWwiseIMImporter.Processing;
+global using MgaWwiseIMImporter.UI;
+global using MgaWwiseIMImporter.Wave;
+global using MgaWwiseIMImporter.Wwise;

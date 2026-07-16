@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>WAAPI 接続確認と、Wwise 上の現在選択（作成先）の結果。</summary>
 internal sealed class WaapiProbeResult

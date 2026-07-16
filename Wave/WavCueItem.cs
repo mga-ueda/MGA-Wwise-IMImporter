@@ -1,4 +1,4 @@
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>書き出し WAV に埋め込む cue／リージョン／マーカー 1 件。</summary>
 internal sealed class WavCueItem

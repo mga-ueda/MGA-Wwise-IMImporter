@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace MgaWwiseImporter.Wave;
+namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// 出力計画（<see cref="WaveformOutputPart"/>）に従い、リージョン／マーカー付き WAV を分割書き出しする。

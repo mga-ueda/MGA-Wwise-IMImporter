@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace MgaWwiseImporter.UI;
+namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// アプリ全体の色定義。既定値はこのクラス、実行時の調整は [Colors] INI と開発者パネル。

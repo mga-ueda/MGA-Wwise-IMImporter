@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// WAAPI 接続確認と、Wwise 上の現在選択（オブジェクト作成先）の取得。

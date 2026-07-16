@@ -1,6 +1,6 @@
 using System.Globalization;
-using MgaWwiseImporter.Nuendo;
-using MgaWwiseImporter.Wave;
+using MgaWwiseIMImporter.Nuendo;
+using MgaWwiseIMImporter.Wave;
 
 if (args.Length < 1)
 {

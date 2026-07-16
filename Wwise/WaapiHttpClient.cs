@@ -2,7 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace MgaWwiseImporter.Wwise;
+namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// WAAPI の HTTP エンドポイントへ JSON-RPC 風の呼び出しを行う薄いクライアント。

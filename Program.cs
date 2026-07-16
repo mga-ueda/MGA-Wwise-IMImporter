@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace MgaWwiseImporter;
+namespace MgaWwiseIMImporter;
 
 static class Program
 {

@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Xml.Linq;
 
-namespace MgaWwiseImporter.Nuendo;
+namespace MgaWwiseIMImporter.Nuendo;
 
 internal static class NuendoXml
 {
