@@ -75,6 +75,15 @@ internal readonly record struct WaveformOutputPart(
     long EndSampleOffset,
     string FileName);
 
+/// <summary>Wwise に作られる予定の Music Segment 名と、ソース波形上の範囲。</summary>
+/// <param name="Name">例: song_a / part_1_a。</param>
+/// <param name="StartSampleOffset">開始サンプル（ソース波形ローカル）。</param>
+/// <param name="EndSampleOffset">終了サンプル（含まない）。</param>
+internal readonly record struct WaveformSegmentNameMark(
+    string Name,
+    long StartSampleOffset,
+    long EndSampleOffset);
+
 /// <summary>
 /// 波形タイムライン範囲外のため描画・出力計画の対象外としたマーカー／サイクル。
 /// </summary>

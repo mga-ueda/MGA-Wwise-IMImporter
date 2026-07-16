@@ -7,8 +7,10 @@ internal sealed class WaveformView : Control
 {
     private const int LabelWaveGapPx = 3;
     private const int LabelRowCount = 4;
-    private const int InfoLanePadX = 6;
-    private const int InfoLaneSeparatorPx = 2;
+    private const int InfoLanePadX = 8;
+    private const int InfoLaneSeparatorPx = 3;
+    private const float NameLaneFontMinPx = 8f;
+    private const float NameLaneFontScale = 0.16f;
     private static readonly string[] InfoRowLabels = ["Measure", "Tempo", "Signature", "Marker"];
 
     // MGA-CineAudio-Reviewer (transport-timeline.js) と同じ残光パラメータ
@@ -38,7 +40,7 @@ internal sealed class WaveformView : Control
     private WavPeakData? _peaks;
     private WavFileInfo? _wavInfo;
     private string _sourceDisplayName = string.Empty;
-    private int _infoLaneWidth = 164;
+    private int _infoLaneWidth = 120;
     private WavPeakData? _detailPeaks;
     private double _detailViewStart = double.NaN;
     private double _detailViewEnd = double.NaN;
@@ -53,6 +55,7 @@ internal sealed class WaveformView : Control
     private IReadOnlyList<WaveformCycleMark> _cycles = [];
     private IReadOnlyList<WaveformRegionMark> _regions = [];
     private IReadOnlyList<WaveformOutputPart> _outputParts = [];
+    private IReadOnlyList<WaveformSegmentNameMark> _segmentNames = [];
     private int? _exportHighlightPartNumber;
     private readonly System.Windows.Forms.Timer _exportGlowTimer;
 
@@ -138,6 +141,9 @@ internal sealed class WaveformView : Control
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        _segmentNames = _outputParts.Count == 0
+            ? []
+            : WwiseMusicPlanBuilder.BuildSegmentLabelMarks(sourcePath, _outputParts, _regions);
         ResetTimeZoom(refresh: false);
         ResetAmpZoom(refresh: false);
         ClearExportHighlight();
@@ -219,6 +225,7 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        _segmentNames = [];
         ResetTimeZoom(refresh: false);
         ResetAmpZoom(refresh: false);
         ClearExportHighlight();
@@ -236,8 +243,12 @@ internal sealed class WaveformView : Control
     /// 再生位置を更新する。progress は 0〜1。null で非表示。
     /// recordTrail が false のとき残光を消す（停止時など）。
     /// recordTrail が true（再生中）のときは、ズーム表示で画面外へ出たらページめくり追従する。
+    /// ensureVisible が true のときは停止中でも表示窓を追従させる。
     /// </summary>
-    public void SetPlayhead(double? progress, bool recordTrail = false)
+    public void SetPlayhead(
+        double? progress,
+        bool recordTrail = false,
+        bool ensureVisible = false)
     {
         if (progress is null)
         {
@@ -257,6 +268,11 @@ internal sealed class WaveformView : Control
         {
             RecordTrailSample(clamped, _trailSamples, ref _trailActive);
             FollowPlayheadPaged(clamped);
+        }
+
+        if (ensureVisible)
+        {
+            EnsureAbsoluteVisible(clamped);
         }
 
         Invalidate();
@@ -417,6 +433,34 @@ internal sealed class WaveformView : Control
 
     /// <summary>再生位置を直後の小節線へ。成功したら true。</summary>
     public bool SeekToNextBar() => TrySeekAlongSamples(CollectBarSamples(), previous: false);
+
+    /// <summary>再生位置を現在の表示幅 1 画面分だけ前へ。成功したら true。</summary>
+    public bool SeekToPreviousPage() => TrySeekByVisiblePage(previous: true);
+
+    /// <summary>再生位置を現在の表示幅 1 画面分だけ次へ。成功したら true。</summary>
+    public bool SeekToNextPage() => TrySeekByVisiblePage(previous: false);
+
+    private bool TrySeekByVisiblePage(bool previous)
+    {
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
+        {
+            return false;
+        }
+
+        var current = Math.Clamp(_playheadProgress ?? 0d, 0d, 1d);
+        var delta = previous ? -ViewSpan : ViewSpan;
+        var target = Math.Clamp(current + delta, 0d, 1d);
+        if (Math.Abs(target - current) < 1e-12)
+        {
+            return false;
+        }
+
+        // エンジン着地誤差の前に表示位置を確定し、キーリピートでも画面単位を維持する
+        _playheadProgress = target;
+        EnsureAbsoluteVisible(target);
+        SeekRequested?.Invoke(this, target);
+        return true;
+    }
 
     /// <summary>
     /// 相対小節番号（1 始まり）の小節頭へシーク。成功したら true。
@@ -705,6 +749,123 @@ internal sealed class WaveformView : Control
             : 0.5d;
         _timeZoom = zoom;
         _viewStart = anchorAbsolute - rel * ViewSpan;
+        ClampTimeViewWindow();
+        NotifyTimeViewChanged();
+    }
+
+    /// <summary>
+    /// マウス X 直下の Music Playlist（出力パート）範囲を、表示幅の 90% になるようセンタリング表示する。
+    /// 表示中のプレイリストがちょうど1つなら全体表示へ戻す。
+    /// </summary>
+    private void ZoomTimeToPlaylistUnderMouse(int mouseX)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        // 見えている範囲にプレイリストが1つだけならデフォルト（全体表示）へトグル
+        if (CountPlaylistsIntersectingView() == 1)
+        {
+            ResetTimeZoom(refresh: true);
+            return;
+        }
+
+        if (_outputParts.Count == 0 || !TryGetProgressFromX(mouseX, out var progress))
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        if (frameCount <= 0)
+        {
+            return;
+        }
+
+        // 進捗→サンプルは半開区間 [Start, End) と整合するよう Floor
+        var sample = (long)Math.Floor(Math.Clamp(progress, 0d, 1d) * frameCount);
+        if (sample >= frameCount)
+        {
+            sample = frameCount - 1;
+        }
+
+        WaveformOutputPart? hit = null;
+        foreach (var candidate in _outputParts)
+        {
+            if (sample >= candidate.StartSampleOffset && sample < candidate.EndSampleOffset)
+            {
+                hit = candidate;
+                break;
+            }
+        }
+
+        if (hit is not WaveformOutputPart part)
+        {
+            return;
+        }
+
+        ZoomTimeToAbsoluteRangeCentered(
+            SampleToAbsolute(part.StartSampleOffset, frameCount),
+            SampleToAbsolute(part.EndSampleOffset, frameCount),
+            fillRatio: 0.9);
+    }
+
+    /// <summary>現在の表示窓と交差する Music Playlist（出力パート）の個数。</summary>
+    private int CountPlaylistsIntersectingView()
+    {
+        if (_peaks is null || _peaks.IsEmpty || _outputParts.Count == 0)
+        {
+            return 0;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        if (frameCount <= 0)
+        {
+            return 0;
+        }
+
+        var viewStart = _viewStart;
+        var viewEnd = ViewEnd;
+        var count = 0;
+        foreach (var part in _outputParts)
+        {
+            var a0 = SampleToAbsolute(part.StartSampleOffset, frameCount);
+            var a1 = SampleToAbsolute(part.EndSampleOffset, frameCount);
+            if (a1 > viewStart && a0 < viewEnd)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// 絶対進捗範囲を表示幅の <paramref name="fillRatio"/> になるようズームし、中央に置く。
+    /// </summary>
+    private void ZoomTimeToAbsoluteRangeCentered(double absoluteStart, double absoluteEnd, double fillRatio)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        if (absoluteEnd < absoluteStart)
+        {
+            (absoluteStart, absoluteEnd) = (absoluteEnd, absoluteStart);
+        }
+
+        absoluteStart = Math.Clamp(absoluteStart, 0d, 1d);
+        absoluteEnd = Math.Clamp(absoluteEnd, 0d, 1d);
+        var rangeSpan = Math.Max(absoluteEnd - absoluteStart, 1e-12);
+        fillRatio = Math.Clamp(fillRatio, 0.01d, 1d);
+
+        // rangeSpan = fillRatio * viewSpan → viewSpan = rangeSpan / fillRatio → zoom = 1 / viewSpan
+        var desiredZoom = fillRatio / rangeSpan;
+        _timeZoom = Math.Clamp(desiredZoom, TimeZoomMin, TimeZoomMax);
+
+        var mid = (absoluteStart + absoluteEnd) * 0.5d;
+        _viewStart = mid - ViewSpan * 0.5d;
         ClampTimeViewWindow();
         NotifyTimeViewChanged();
     }
@@ -1110,6 +1271,21 @@ internal sealed class WaveformView : Control
         SeekRequested?.Invoke(this, progress);
     }
 
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        // 2回目の MouseDown で始まったシークドラッグを打ち切り、
+        // ズーム後の MouseUp が別の絶対位置へシークしないようにする
+        _isDraggingSeek = false;
+        Capture = false;
+        ZoomTimeToPlaylistUnderMouse(e.X);
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -1264,9 +1440,10 @@ internal sealed class WaveformView : Control
     private void DrawEmptyScaffold(Graphics g, Rectangle bounds)
     {
         var content = Rectangle.Inflate(bounds, -4, -4);
-        var (info, labels, wave, rowHeight) = GetLayout(content, g);
-        DrawInfoLane(g, info, labels, wave, rowHeight, LabelRowCount);
+        var (info, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, g);
+        DrawInfoLane(g, info, labels, wave, playlistLane, segmentLane, rowHeight, LabelRowCount);
         DrawLabelRows(g, labels, rowHeight, LabelRowCount);
+        DrawNameLaneBackgrounds(g, playlistLane, segmentLane);
 
         if (_peaks is not null && !_peaks.IsEmpty)
         {
@@ -1298,8 +1475,8 @@ internal sealed class WaveformView : Control
         {
             var rows = Math.Clamp((int)Math.Floor(EaseOutCubic(labelsT) * LabelRowCount) + 1, 1, LabelRowCount);
             var content = Rectangle.Inflate(bounds, -4, -4);
-            var (info, labels, wave, rowHeight) = GetLayout(content, g);
-            DrawInfoLane(g, info, labels, wave, rowHeight, rows);
+            var (info, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, g);
+            DrawInfoLane(g, info, labels, wave, playlistLane, segmentLane, rowHeight, rows);
             DrawLabelRows(g, labels, rowHeight, rows);
         }
 
@@ -1347,13 +1524,18 @@ internal sealed class WaveformView : Control
         var content = Rectangle.Inflate(bounds, -4, -4);
         using var probeBmp = new Bitmap(1, 1);
         using var probe = Graphics.FromImage(probeBmp);
-        var (_, labels, wave, rowHeight) = GetLayout(content, probe);
+        var (_, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, probe);
         _revealWaveRect = wave;
 
         _revealLayers[0] = CreateTransparentLayer(size, g => DrawWaveform(g, wave));
         _revealLayers[1] = CreateTransparentLayer(size, g => DrawBars(g, labels, wave, rowHeight));
         _revealLayers[2] = CreateTransparentLayer(size, g => DrawMarkers(g, labels, rowHeight));
-        _revealLayers[3] = CreateTransparentLayer(size, g => DrawOutputPartLabels(g, wave));
+        _revealLayers[3] = CreateTransparentLayer(size, g =>
+        {
+            DrawPlaylistNameLabels(g, wave, playlistLane);
+            DrawSegmentNameLabels(g, wave, segmentLane);
+            DrawExcludedRegionOverlaysOnNameLanes(g, wave, segmentLane, playlistLane);
+        });
     }
 
     private Bitmap CreateTransparentLayer(Size size, Action<Graphics> paint)
@@ -1451,14 +1633,21 @@ internal sealed class WaveformView : Control
     }
 
     /// <summary>
-    /// 左: 行ラベル／波形名、右上: 小節／テンポ／拍子／マーカーの4行、右下: 波形エリア。
+    /// 左: 行ラベル／波形名、右上: ラベル4行、右中: 波形、
+    /// 右下: Music Segment Name / Music Playlist Name。
     /// </summary>
-    private (Rectangle Info, Rectangle Labels, Rectangle Wave, float RowHeight) GetLayout(
-        Rectangle content,
-        Graphics g)
+    private (
+        Rectangle Info,
+        Rectangle Labels,
+        Rectangle Wave,
+        Rectangle PlaylistLane,
+        Rectangle SegmentLane,
+        float RowHeight)
+        GetLayout(Rectangle content, Graphics g)
     {
         var rowHeight = Font.GetHeight(g) + 2f;
         var labelsHeight = (int)Math.Ceiling(rowHeight * LabelRowCount);
+        var nameLaneHeight = (int)Math.Ceiling(rowHeight);
         _infoLaneWidth = MeasureInfoLaneWidth(g, content.Width);
         var mainLeft = content.Left + _infoLaneWidth + InfoLaneSeparatorPx;
         var mainWidth = Math.Max(0, content.Width - _infoLaneWidth - InfoLaneSeparatorPx);
@@ -1466,9 +1655,41 @@ internal sealed class WaveformView : Control
         var info = new Rectangle(content.Left, content.Top, _infoLaneWidth, content.Height);
         var labels = new Rectangle(mainLeft, content.Top, mainWidth, labelsHeight);
         var waveTop = content.Top + labelsHeight + LabelWaveGapPx;
-        var waveHeight = Math.Max(0, content.Bottom - waveTop);
+        var belowLabels = Math.Max(0, content.Bottom - waveTop);
+
+        const int bottomLaneCount = 2;
+        var bottomTotal = belowLabels >= LabelWaveGapPx + nameLaneHeight * bottomLaneCount
+            ? nameLaneHeight * bottomLaneCount
+            : 0;
+
+        var waveHeight = Math.Max(
+            0,
+            belowLabels - (bottomTotal > 0 ? LabelWaveGapPx + bottomTotal : 0));
         var wave = new Rectangle(mainLeft, waveTop, mainWidth, waveHeight);
-        return (info, labels, wave, rowHeight);
+
+        Rectangle playlistLane;
+        Rectangle segmentLane;
+        if (bottomTotal > 0)
+        {
+            // 上: Music Segment Name / 下: Music Playlist Name（高さは Measure 行と同じ）
+            playlistLane = new Rectangle(
+                mainLeft,
+                content.Bottom - nameLaneHeight,
+                mainWidth,
+                nameLaneHeight);
+            segmentLane = new Rectangle(
+                mainLeft,
+                content.Bottom - nameLaneHeight * 2,
+                mainWidth,
+                nameLaneHeight);
+        }
+        else
+        {
+            playlistLane = Rectangle.Empty;
+            segmentLane = Rectangle.Empty;
+        }
+
+        return (info, labels, wave, playlistLane, segmentLane, rowHeight);
     }
 
     private int MeasureInfoLaneWidth(Graphics g, int contentWidth)
@@ -1479,10 +1700,13 @@ internal sealed class WaveformView : Control
             maxText = Math.Max(maxText, g.MeasureString(label, Font).Width);
         }
 
-        // ラベル幅＋余白の 2 倍（ファイル名の折り返し用）
-        var width = ((int)Math.Ceiling(maxText) + InfoLanePadX * 2) * 2;
-        var maxAllowed = Math.Max(96, contentWidth / 2);
-        return Math.Clamp(width, 128, maxAllowed);
+        maxText = Math.Max(maxText, g.MeasureString("Music Playlist Name", Font).Width);
+        maxText = Math.Max(maxText, g.MeasureString("Music Segment Name", Font).Width);
+
+        // 左端に少し余白＋最長ラベル＋右余白（区切り線手前）。ファイル名は幅内で折り返す。
+        var width = (int)Math.Ceiling(maxText) + InfoLanePadX * 2;
+        var maxAllowed = Math.Max(48, contentWidth / 2);
+        return Math.Clamp(width, InfoLanePadX * 2 + 1, maxAllowed);
     }
 
     private Rectangle GetTimelineContentRect()
@@ -1519,14 +1743,36 @@ internal sealed class WaveformView : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         var content = Rectangle.Inflate(bounds, -4, -4);
-        var (info, labels, wave, rowHeight) = GetLayout(content, g);
-        DrawInfoLane(g, info, labels, wave, rowHeight, LabelRowCount);
+        var (info, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, g);
+        DrawInfoLane(g, info, labels, wave, playlistLane, segmentLane, rowHeight, LabelRowCount);
         DrawLabelRows(g, labels, rowHeight, LabelRowCount);
+        DrawNameLaneBackgrounds(g, playlistLane, segmentLane);
         DrawWaveform(g, wave);
         DrawBars(g, labels, wave, rowHeight);
         DrawMarkers(g, labels, rowHeight);
-        DrawOutputPartLabels(g, wave);
+        DrawPlaylistNameLabels(g, wave, playlistLane);
+        DrawSegmentNameLabels(g, wave, segmentLane);
+        // -R は名前レーン上にも被せる（波形上は DrawWaveform 内で済み）
+        DrawExcludedRegionOverlaysOnNameLanes(g, wave, segmentLane, playlistLane);
         _staticLayerDirty = false;
+    }
+
+    private static void DrawNameLaneBackgrounds(
+        Graphics g,
+        Rectangle playlistLane,
+        Rectangle segmentLane)
+    {
+        if (segmentLane.Height > 0)
+        {
+            using var segmentBg = new SolidBrush(UiColors.MusicSegmentLaneBg);
+            g.FillRectangle(segmentBg, segmentLane);
+        }
+
+        if (playlistLane.Height > 0)
+        {
+            using var playlistBg = new SolidBrush(UiColors.MusicPlaylistLaneBg);
+            g.FillRectangle(playlistBg, playlistLane);
+        }
     }
 
     private void DrawInfoLane(
@@ -1534,6 +1780,8 @@ internal sealed class WaveformView : Control
         Rectangle info,
         Rectangle labels,
         Rectangle wave,
+        Rectangle playlistLane,
+        Rectangle segmentLane,
         float rowHeight,
         int visibleRowCount)
     {
@@ -1577,8 +1825,8 @@ internal sealed class WaveformView : Control
                 format);
         }
 
-        // 情報レーンとタイムラインの区切り（小節線色・2px）
-        using (var sepBrush = new SolidBrush(UiColors.BarLine))
+        // 情報レーンとタイムラインの区切り（波形背景色・3px）
+        using (var sepBrush = new SolidBrush(UiColors.WaveformBack))
         {
             g.FillRectangle(
                 sepBrush,
@@ -1587,6 +1835,11 @@ internal sealed class WaveformView : Control
                 InfoLaneSeparatorPx,
                 info.Height);
         }
+
+        DrawBottomLaneInfoLabel(
+            g, info, segmentLane, "Music Segment Name", Font, textBrush, format, UiColors.MusicSegmentLaneBg);
+        DrawBottomLaneInfoLabel(
+            g, info, playlistLane, "Music Playlist Name", Font, textBrush, format, UiColors.MusicPlaylistLaneBg);
 
         if (_sourceDisplayName.Length == 0 || wave.Height <= 0)
         {
@@ -1601,7 +1854,8 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        var wrappedName = WrapTextToWidth(g, _sourceDisplayName, Font, nameWidth);
+        using var nameFont = new Font(Font, FontStyle.Bold);
+        var wrappedName = WrapTextToWidth(g, _sourceDisplayName, nameFont, nameWidth);
         using var nameFormat = new StringFormat
         {
             Alignment = StringAlignment.Center,
@@ -1610,10 +1864,39 @@ internal sealed class WaveformView : Control
         };
         g.DrawString(
             wrappedName,
-            Font,
+            nameFont,
             textBrush,
             new RectangleF(info.Left + InfoLanePadX, wave.Top + 2f, nameWidth, nameHeight),
             nameFormat);
+    }
+
+    private static void DrawBottomLaneInfoLabel(
+        Graphics g,
+        Rectangle info,
+        Rectangle lane,
+        string text,
+        Font font,
+        Brush textBrush,
+        StringFormat format,
+        Color laneBackColor)
+    {
+        if (lane.Height <= 0)
+        {
+            return;
+        }
+
+        using var laneBg = new SolidBrush(laneBackColor);
+        g.FillRectangle(laneBg, info.Left, lane.Top, info.Width, lane.Height);
+        g.DrawString(
+            text,
+            font,
+            textBrush,
+            new RectangleF(
+                info.Left + InfoLanePadX,
+                lane.Top,
+                Math.Max(0, info.Width - InfoLanePadX * 2),
+                lane.Height),
+            format);
     }
 
     /// <summary>スペース無しのファイル名でも幅内で改行する。</summary>
@@ -1759,7 +2042,7 @@ internal sealed class WaveformView : Control
     /// <summary>
     /// 除外で区切られた連続リージョン固まりごとに:
     /// <list type="bullet">
-    /// <item>白: 固まりの頭（開始形）と末尾（終了形）</item>
+    /// <item>白: 固まりの頭／末尾、および Music Segment の分かれ目（下部の半四角）</item>
     /// <item>ライム Entry: 頭。ただし先頭が -A ならその直後（開始形）。白より手前</item>
     /// <item>赤 Exit: 末尾。ただし末尾が -E ならその直前（終了形）。白より手前</item>
     /// </list>
@@ -1822,6 +2105,39 @@ internal sealed class WaveformView : Control
                 DrawRegionEdgeGlyph(g, exitPen, exitBrush, wave, xExit, isStart: false);
             }
         }
+
+        // Wwise Music Segment の境界（固まり内で _a / _b が分かれる位置など）
+        DrawWwiseSegmentBoundaryMarkers(g, wave, frameCount, whitePen, whiteBrush);
+    }
+
+    /// <summary>
+    /// Music Segment 名レーンと同じ範囲の頭／末尾に白境界を追加する。
+    /// 固まり境界と重なる位置は重ね描きになるが見た目は同じ。
+    /// </summary>
+    private void DrawWwiseSegmentBoundaryMarkers(
+        Graphics g,
+        Rectangle wave,
+        long frameCount,
+        Pen whitePen,
+        Brush whiteBrush)
+    {
+        if (_segmentNames.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var segment in _segmentNames)
+        {
+            if (TryGetWaveX(segment.StartSampleOffset, frameCount, wave, out var xHead))
+            {
+                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xHead, isStart: true, atBottom: true, square: true);
+            }
+
+            if (TryGetWaveX(segment.EndSampleOffset, frameCount, wave, out var xTail))
+            {
+                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xTail, isStart: false, atBottom: true, square: true);
+            }
+        }
     }
 
     private bool TryGetWaveX(long sampleOffset, long frameCount, Rectangle wave, out float x)
@@ -1857,7 +2173,7 @@ internal sealed class WaveformView : Control
 
         if (square)
         {
-            var side = halfW * 2f / 3f;
+            var side = halfW * 2f / 3f * 0.75f;
             var top = atBottom ? wave.Bottom - side : wave.Top;
             var left = isStart ? x : x - side;
             g.FillRectangle(brush, left, top, side, side);
@@ -2198,7 +2514,50 @@ internal sealed class WaveformView : Control
     /// </summary>
     private void DrawExcludedRegionOverlays(Graphics g, Rectangle wave)
     {
-        if (_peaks is null || _peaks.FrameCount <= 0 || _regions.Count == 0)
+        DrawExcludedRegionOverlays(g, wave, wave);
+    }
+
+    /// <summary>
+    /// -R 範囲を Music Segment / Playlist レーンの上にも被せる。
+    /// </summary>
+    private void DrawExcludedRegionOverlaysOnNameLanes(
+        Graphics g,
+        Rectangle wave,
+        Rectangle segmentLane,
+        Rectangle playlistLane)
+    {
+        if (segmentLane.Height <= 0 && playlistLane.Height <= 0)
+        {
+            return;
+        }
+
+        var top = segmentLane.Height > 0 ? segmentLane.Top : playlistLane.Top;
+        var bottom = playlistLane.Height > 0 ? playlistLane.Bottom : segmentLane.Bottom;
+        if (segmentLane.Height > 0 && playlistLane.Height > 0)
+        {
+            top = Math.Min(segmentLane.Top, playlistLane.Top);
+            bottom = Math.Max(segmentLane.Bottom, playlistLane.Bottom);
+        }
+
+        var band = new Rectangle(wave.Left, top, wave.Width, Math.Max(0, bottom - top));
+        if (band.Height <= 0)
+        {
+            return;
+        }
+
+        DrawExcludedRegionOverlays(g, wave, band);
+    }
+
+    /// <summary>
+    /// -R 範囲を <paramref name="fillBounds"/> の縦範囲に重ねる。横位置は <paramref name="xRef"/>（波形）基準。
+    /// </summary>
+    private void DrawExcludedRegionOverlays(Graphics g, Rectangle xRef, Rectangle fillBounds)
+    {
+        if (_peaks is null
+            || _peaks.FrameCount <= 0
+            || _regions.Count == 0
+            || xRef.Width <= 0
+            || fillBounds.Height <= 0)
         {
             return;
         }
@@ -2215,13 +2574,13 @@ internal sealed class WaveformView : Control
 
             var a0 = SampleToAbsolute(region.StartSampleOffset, frameCount);
             var a1 = SampleToAbsolute(region.EndSampleOffset, frameCount);
-            if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
+            if (!TryMapAbsoluteRange(a0, a1, xRef, out var x0, out var x1))
             {
                 continue;
             }
 
             var width = Math.Max(1f, x1 - x0);
-            g.FillRectangle(excluded, x0, wave.Top, width, wave.Height);
+            g.FillRectangle(excluded, x0, fillBounds.Top, width, fillBounds.Height);
         }
     }
 
@@ -2255,28 +2614,121 @@ internal sealed class WaveformView : Control
         return false;
     }
 
-    private void DrawOutputPartLabels(Graphics g, Rectangle wave)
+    private void DrawPlaylistNameLabels(Graphics g, Rectangle wave, Rectangle playlistLane)
     {
-        if (_peaks is null || _peaks.FrameCount <= 0 || _outputParts.Count == 0 || wave.Height <= 0)
+        if (_outputParts.Count == 0 || playlistLane.Height <= 0)
         {
             return;
         }
 
-        var frameCount = _peaks.FrameCount;
-        var idealFontSize = Math.Clamp(wave.Height * 0.22f, 13f, 28f);
-        const float minFontSize = 8f;
-        // 隣ラベルとのすき間は約2文字分（重なり無しでも密に見えないように）
-        float gap;
-        using (var gapProbe = new Font(Font.FontFamily, idealFontSize, FontStyle.Bold, GraphicsUnit.Pixel))
-        {
-            gap = g.MeasureString("WW", gapProbe).Width;
-        }
-
-        var parts = new List<(string Text, float X0, float X1, float Mid)>(_outputParts.Count);
+        // Playlist 名に " (.wav)" を添えて表示
+        var items = new List<(string Text, long Start, long End)>(_outputParts.Count);
         foreach (var part in _outputParts)
         {
-            var a0 = SampleToAbsolute(part.StartSampleOffset, frameCount);
-            var a1 = SampleToAbsolute(part.EndSampleOffset, frameCount);
+            var name = Path.GetFileNameWithoutExtension(part.FileName);
+            if (string.IsNullOrEmpty(name))
+            {
+                name = part.FileName;
+            }
+
+            items.Add(($"{name} (.wav)", part.StartSampleOffset, part.EndSampleOffset));
+        }
+
+        DrawTimedNameLane(g, wave, playlistLane, items, FontStyle.Bold, UiColors.MusicPlaylistLaneBg);
+    }
+
+    private void DrawSegmentNameLabels(Graphics g, Rectangle wave, Rectangle segmentLane)
+    {
+        if (_segmentNames.Count == 0 || segmentLane.Height <= 0)
+        {
+            return;
+        }
+
+        // リージョン束ね単位 = Music Segment（_a / _b …）。Playlist より細かい。
+        var items = new List<(string Text, long Start, long End)>(_segmentNames.Count);
+        foreach (var segment in _segmentNames)
+        {
+            items.Add((segment.Name, segment.StartSampleOffset, segment.EndSampleOffset));
+        }
+
+        DrawTimedNameLane(g, wave, segmentLane, items, FontStyle.Regular, UiColors.MusicSegmentLaneBg);
+        DrawSegmentLaneDividers(g, wave, segmentLane);
+    }
+
+    /// <summary>
+    /// 隣り合う Music Segment の境に、波形背景色の縦線をレーン内だけ描く。
+    /// </summary>
+    private void DrawSegmentLaneDividers(Graphics g, Rectangle wave, Rectangle segmentLane)
+    {
+        if (_peaks is null || _peaks.FrameCount <= 0 || _segmentNames.Count < 2 || segmentLane.Height <= 0)
+        {
+            return;
+        }
+
+        var ordered = _segmentNames
+            .OrderBy(s => s.StartSampleOffset)
+            .ToList();
+        var frameCount = _peaks.FrameCount;
+        using var pen = new Pen(UiColors.WaveformBack, 3f);
+
+        for (var i = 1; i < ordered.Count; i++)
+        {
+            // 隙間（-R など）がある場合は隣り合っていないので線を引かない
+            if (ordered[i - 1].EndSampleOffset != ordered[i].StartSampleOffset)
+            {
+                continue;
+            }
+
+            if (!TryGetWaveX(ordered[i].StartSampleOffset, frameCount, wave, out var x))
+            {
+                continue;
+            }
+
+            g.DrawLine(pen, x, segmentLane.Top, x, segmentLane.Bottom);
+        }
+    }
+
+    /// <summary>
+    /// 波形時間範囲に紐づく名前を下部レーンへ描画。
+    /// 隣ラベルと重ならないよう幅に応じて縮小する。クリップはせず範囲外へのはみ出しは許容。
+    /// </summary>
+    private void DrawTimedNameLane(
+        Graphics g,
+        Rectangle wave,
+        Rectangle lane,
+        IReadOnlyList<(string Text, long Start, long End)> items,
+        FontStyle fontStyle,
+        Color laneBackColor)
+    {
+        if (_peaks is null
+            || _peaks.FrameCount <= 0
+            || items.Count == 0
+            || wave.Width <= 0
+            || lane.Height <= 0)
+        {
+            return;
+        }
+
+        using (var laneBg = new SolidBrush(laneBackColor))
+        {
+            g.FillRectangle(laneBg, lane);
+        }
+
+        var frameCount = _peaks.FrameCount;
+        // レーン高さに収まる最大サイズ（上下レーン同士の縦重なり防止）
+        var fontMaxPx = FitFontSizeToLaneHeight(g, Font.FontFamily, fontStyle, lane.Height);
+        var idealFontSize = Math.Clamp(
+            wave.Height * NameLaneFontScale,
+            NameLaneFontMinPx,
+            fontMaxPx);
+        // セグメント幅に収まるまで縮小（見えなくても拡大で読める）
+        const float minFontSize = 0.5f;
+
+        var parts = new List<(string Text, float X0, float X1)>(items.Count);
+        foreach (var item in items)
+        {
+            var a0 = SampleToAbsolute(item.Start, frameCount);
+            var a1 = SampleToAbsolute(item.End, frameCount);
             if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
             {
                 continue;
@@ -2287,7 +2739,7 @@ internal sealed class WaveformView : Control
                 continue;
             }
 
-            parts.Add((part.FileName, x0, x1, (x0 + x1) * 0.5f));
+            parts.Add((item.Text, x0, x1));
         }
 
         if (parts.Count == 0)
@@ -2295,50 +2747,78 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        using var brush = new SolidBrush(UiColors.OutputPartFg);
-        using var shadow = new SolidBrush(UiColors.OutputPartShadow);
-        var bottomMargin = Math.Max(10f, wave.Height * 0.12f);
+        using var brush = new SolidBrush(UiColors.WaveformInfoFg);
 
         for (var i = 0; i < parts.Count; i++)
         {
-            // 隣パートとの中間までをこのラベルの領域とする（リージョン外はみ出し可・他文字とは被らない）
-            var slotLeft = i == 0
-                ? wave.Left
-                : (parts[i - 1].Mid + parts[i].Mid) * 0.5f + gap * 0.5f;
-            var slotRight = i + 1 >= parts.Count
-                ? wave.Right
-                : (parts[i].Mid + parts[i + 1].Mid) * 0.5f - gap * 0.5f;
-            var slotWidth = Math.Max(1f, slotRight - slotLeft);
+            // 白い境界線の内側＝セグメント幅に収める
+            var slotWidth = Math.Max(1f, parts[i].X1 - parts[i].X0);
 
             var fontSize = idealFontSize;
-            using (var probe = new Font(Font.FontFamily, idealFontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var probe = new Font(Font.FontFamily, idealFontSize, fontStyle, GraphicsUnit.Pixel))
             {
                 var idealWidth = g.MeasureString(parts[i].Text, probe).Width;
-                if (idealWidth > slotWidth)
+                if (idealWidth > slotWidth && idealWidth > 0.01f)
                 {
                     fontSize = Math.Max(minFontSize, idealFontSize * slotWidth / idealWidth);
                 }
             }
 
-            using var labelFont = new Font(Font.FontFamily, fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
-            var textWidth = g.MeasureString(parts[i].Text, labelFont).Width;
-            var preferredX = parts[i].X0 + (parts[i].X1 - parts[i].X0 - textWidth) * 0.5f;
-            var x = ClampLabelX(preferredX, textWidth, slotLeft, slotRight);
-            var labelHeight = labelFont.GetHeight(g);
-            var y = wave.Bottom - labelHeight - bottomMargin;
+            // 測定誤差でまだはみ出す場合はさらに縮小
+            for (var attempt = 0; attempt < 4; attempt++)
+            {
+                using var measureFont = new Font(Font.FontFamily, fontSize, fontStyle, GraphicsUnit.Pixel);
+                var measured = g.MeasureString(parts[i].Text, measureFont).Width;
+                if (measured <= slotWidth || measured <= 0.01f)
+                {
+                    break;
+                }
 
-            // スロット外に描画しない（隣ラベルとの重なり防止）。狭いときは文字が切れる。
-            var clip = g.Clip;
-            g.SetClip(new RectangleF(slotLeft, y - 4f, slotWidth, labelHeight + 8f), System.Drawing.Drawing2D.CombineMode.Intersect);
-            try
-            {
-                DrawLabeledShadow(g, parts[i].Text, labelFont, brush, shadow, x, y);
+                fontSize = Math.Max(minFontSize, fontSize * slotWidth / measured);
             }
-            finally
+
+            using var labelFont = new Font(Font.FontFamily, fontSize, fontStyle, GraphicsUnit.Pixel);
+            var textWidth = Math.Max(0.01f, g.MeasureString(parts[i].Text, labelFont).Width);
+            // 下限フォントでも幅が足りないときは横だけ潰して収める
+            var scaleX = textWidth > slotWidth ? slotWidth / textWidth : 1f;
+            var drawWidth = textWidth * scaleX;
+            var x = parts[i].X0 + (slotWidth - drawWidth) * 0.5f;
+            var labelHeight = labelFont.GetHeight(g);
+            var y = lane.Top + (lane.Height - labelHeight) * 0.5f;
+
+            if (scaleX < 0.999f)
             {
-                g.Clip = clip;
+                var state = g.Save();
+                g.TranslateTransform(x, y);
+                g.ScaleTransform(scaleX, 1f);
+                g.DrawString(parts[i].Text, labelFont, brush, 0f, 0f);
+                g.Restore(state);
+            }
+            else
+            {
+                g.DrawString(parts[i].Text, labelFont, brush, x, y);
             }
         }
+    }
+
+    /// <summary>GetHeight がレーン高さに収まる最大ピクセルサイズを求める。</summary>
+    private static float FitFontSizeToLaneHeight(
+        Graphics g,
+        FontFamily family,
+        FontStyle style,
+        int laneHeight)
+    {
+        var maxTry = Math.Max(NameLaneFontMinPx, laneHeight - 1f);
+        for (var size = maxTry; size >= NameLaneFontMinPx; size -= 0.5f)
+        {
+            using var probe = new Font(family, size, style, GraphicsUnit.Pixel);
+            if (probe.GetHeight(g) <= laneHeight - 1f)
+            {
+                return size;
+            }
+        }
+
+        return NameLaneFontMinPx;
     }
 
     /// <summary>
@@ -2374,12 +2854,12 @@ internal sealed class WaveformView : Control
     /// <summary>
     /// 書き出し中パートの枠をパルス発光させる（進行中の見た目用）。
     /// </summary>
-    private void DrawExportPartGlow(Graphics g, Rectangle content)
+    private void DrawExportPartGlow(Graphics g, Rectangle timelineBounds)
     {
         if (_exportHighlightPartNumber is not int partNumber
             || _peaks is null
             || _peaks.FrameCount <= 0
-            || content.Width <= 0)
+            || timelineBounds.Width <= 0)
         {
             return;
         }
@@ -2399,7 +2879,8 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        var (_, _, wave, _) = GetLayout(content, g);
+        var layoutContent = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var (_, _, wave, _, _, _) = GetLayout(layoutContent, g);
         if (wave.Width <= 0 || wave.Height <= 0)
         {
             return;
@@ -2436,30 +2917,6 @@ internal sealed class WaveformView : Control
         // コアの細線
         using var corePen = new Pen(Color.FromArgb((int)(220 * pulse), baseColor), 1f);
         g.DrawRectangle(corePen, rect.X, rect.Y, rect.Width, rect.Height);
-    }
-
-    private static void DrawLabeledShadow(
-        Graphics g,
-        string text,
-        Font font,
-        Brush textBrush,
-        Brush shadowBrush,
-        float x,
-        float y)
-    {
-        ReadOnlySpan<(float Dx, float Dy)> offsets =
-        [
-            (-2f, 0f), (2f, 0f), (0f, -2f), (0f, 2f),
-            (-2f, -2f), (2f, -2f), (-2f, 2f), (2f, 2f),
-            (3f, 2f), (2f, 3f), (3f, 3f),
-        ];
-
-        foreach (var (dx, dy) in offsets)
-        {
-            g.DrawString(text, font, shadowBrush, x + dx, y + dy);
-        }
-
-        g.DrawString(text, font, textBrush, x, y);
     }
 
     private void DrawBars(Graphics g, Rectangle labels, Rectangle wave, float rowHeight)

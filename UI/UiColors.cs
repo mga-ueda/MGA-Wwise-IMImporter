@@ -11,7 +11,7 @@ internal static class UiColors
 
     // --- ウィンドウ／ログ ---
     public static Color WindowBack { get; set; } = Color.FromArgb(30, 30, 30);
-    public static Color WindowFore { get; set; } = Color.White;
+    public static Color WindowFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color LogBack { get; set; } = Color.FromArgb(30, 30, 30);
     public static Color LogDefault { get; set; } = Color.FromArgb(220, 220, 220);
     public static Color LogHeader { get; set; } = Color.FromArgb(110, 180, 255);
@@ -51,8 +51,12 @@ internal static class UiColors
     public static Color RegionWaveFillAnacrusis { get; set; } = Color.FromArgb(255, 52, 70, 32);
     /// <summary>波形リージョン塗り（-E）。</summary>
     public static Color RegionWaveFillExit { get; set; } = Color.FromArgb(255, 68, 30, 30);
-    public static Color OutputPartFg { get; set; } = Color.FromArgb(255, 255, 255);
+    public static Color OutputPartFg { get; set; } = Color.FromArgb(255, 235, 235, 235);
     public static Color OutputPartShadow { get; set; } = Color.FromArgb(230, 0, 0, 0);
+    /// <summary>Music Segment Name レーン背景。</summary>
+    public static Color MusicSegmentLaneBg { get; set; } = Color.FromArgb(50, 58, 73);
+    /// <summary>Music Playlist Name レーン背景。</summary>
+    public static Color MusicPlaylistLaneBg { get; set; } = Color.FromArgb(39, 43, 63);
     public static Color ExportPartGlow { get; set; } = Color.FromArgb(255, 0, 245, 255);
     /// <summary>リージョン固まり境界の縦線・半三角。</summary>
     public static Color RegionBoundaryMarker { get; set; } = Color.FromArgb(195, 195, 195);
@@ -96,6 +100,8 @@ internal static class UiColors
         new("RegionWaveFillExit", "波形リージョン塗り（-E）", () => RegionWaveFillExit, c => RegionWaveFillExit = c),
         new("OutputPartFg", "出力パート名・文字", () => OutputPartFg, c => OutputPartFg = c),
         new("OutputPartShadow", "出力パート名・影", () => OutputPartShadow, c => OutputPartShadow = c),
+        new("MusicSegmentLaneBg", "Music Segment Name・背景", () => MusicSegmentLaneBg, c => MusicSegmentLaneBg = c),
+        new("MusicPlaylistLaneBg", "Music Playlist Name・背景", () => MusicPlaylistLaneBg, c => MusicPlaylistLaneBg = c),
         new("ExportPartGlow", "書き出し中パート枠", () => ExportPartGlow, c => ExportPartGlow = c),
         new("RegionBoundaryMarker", "リージョン境界マーカー", () => RegionBoundaryMarker, c => RegionBoundaryMarker = c),
         new("EntryCueMarker", "Entry Cue マーカー", () => EntryCueMarker, c => EntryCueMarker = c),

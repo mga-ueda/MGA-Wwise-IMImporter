@@ -75,6 +75,45 @@ internal static class WwiseMusicPlanBuilder
         };
     }
 
+    /// <summary>
+    /// プレビュー用。Wwise 計画と同じ規則で Music Segment 名とソース波形上の範囲を列挙する。
+    /// </summary>
+    public static IReadOnlyList<WaveformSegmentNameMark> BuildSegmentLabelMarks(
+        string sourcePath,
+        IReadOnlyList<WaveformOutputPart> outputParts,
+        IReadOnlyList<WaveformRegionMark> regions)
+    {
+        if (outputParts.Count == 0)
+        {
+            return [];
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(sourcePath);
+        if (string.IsNullOrEmpty(baseName))
+        {
+            baseName = "wave";
+        }
+
+        var marks = new List<WaveformSegmentNameMark>();
+        foreach (var part in outputParts)
+        {
+            var playlistName = Path.GetFileNameWithoutExtension(part.FileName);
+            var segmentBase = outputParts.Count > 1 ? playlistName : baseName;
+            var partRegions = CollectPartRegions(part, regions);
+            var groups = GroupRegions(partRegions);
+            for (var i = 0; i < groups.Count; i++)
+            {
+                var group = groups[i];
+                marks.Add(new WaveformSegmentNameMark(
+                    $"{segmentBase}_{IndexToLetters(i)}",
+                    group[0].StartSampleOffset,
+                    group[^1].EndSampleOffset));
+            }
+        }
+
+        return marks;
+    }
+
     private static List<WaveformRegionMark> CollectPartRegions(
         WaveformOutputPart part,
         IReadOnlyList<WaveformRegionMark> regions)

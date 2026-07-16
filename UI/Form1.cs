@@ -59,7 +59,7 @@ public partial class Form1 : Form
                 _resumePlaybackAfterBackwardSeek = false;
                 _playheadTimer.Stop();
                 AnchorPlayhead(0);
-                waveformView.SetPlayhead(0, recordTrail: false);
+                waveformView.SetPlayhead(0, recordTrail: false, ensureVisible: true);
                 waveformView.SetExitPlayhead(null);
             });
         };
@@ -256,7 +256,7 @@ public partial class Form1 : Form
     }
 
     private static bool IsBackwardSeekKey(Keys keyCode) =>
-        keyCode is Keys.Home or Keys.Left;
+        keyCode is Keys.Home or Keys.Left or Keys.PageUp;
 
     /// <summary>
     /// 波形ビュー操作用ショートカット。ログ欄フォーカス時も <see cref="ShortcutForwardingRichTextBox"/> 経由で呼ばれる。
@@ -340,6 +340,19 @@ public partial class Form1 : Form
         if (keyData == Keys.End)
         {
             waveformView.SeekToNextBar();
+            return true;
+        }
+
+        if (keyData == Keys.PageUp)
+        {
+            PauseForBackwardSeekHold();
+            waveformView.SeekToPreviousPage();
+            return true;
+        }
+
+        if (keyData == Keys.PageDown)
+        {
+            waveformView.SeekToNextPage();
             return true;
         }
 
