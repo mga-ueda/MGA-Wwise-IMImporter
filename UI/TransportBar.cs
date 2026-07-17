@@ -228,7 +228,7 @@ internal sealed class TransportPositionDisplay : Control
         ForeColor = UiColors.TransportFore;
         Font = new Font("Yu Gothic UI", 9.5F, FontStyle.Bold);
         Margin = Padding.Empty;
-        Size = new Size(280, 30);
+        Size = new Size(312, 30);
         TabStop = false;
         SetStyle(
             ControlStyles.AllPaintingInWmPaint
@@ -291,8 +291,8 @@ internal sealed class TransportPositionDisplay : Control
         DrawQuarterNote(g, iconPen, iconBrush, 5, iconTop + 7f);
         DrawText(g, bpm, new Rectangle(22, 0, 32, Height));
         DrawText(g, signature, new Rectangle(64, 0, 38, Height));
-        DrawText(g, musicalPosition, new Rectangle(107, 0, 58, Height));
-        DrawText(g, time, new Rectangle(174, 0, 104, Height));
+        DrawText(g, musicalPosition, new Rectangle(107, 0, 74, Height));
+        DrawText(g, time, new Rectangle(186, 0, 124, Height));
     }
 
     protected override void ScaleControl(SizeF factor, BoundsSpecified specified)

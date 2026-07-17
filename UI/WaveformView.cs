@@ -1,5 +1,19 @@
 namespace MgaWwiseIMImporter.UI;
 
+internal enum MarkerEditMode
+{
+    Add,
+    Remove,
+}
+
+internal sealed class MarkerEditRequestedEventArgs(
+    MarkerEditMode mode,
+    IReadOnlyList<long> sampleOffsets) : EventArgs
+{
+    public MarkerEditMode Mode { get; } = mode;
+    public IReadOnlyList<long> SampleOffsets { get; } = sampleOffsets;
+}
+
 /// <summary>
 /// 読み込んだ Wave のピーク波形と再生位置（シークバー）を描画する。
 /// </summary>
@@ -102,6 +116,8 @@ internal sealed class WaveformView : Control
     private bool _fadeOutTrailActive;
     private bool _fadeOutPlayheadIsExit;
     private bool _isDraggingSeek;
+    private MarkerEditMode? _markerEditMode;
+    private int _markerStrokeLastX;
     private float? _mouseGuideX;
     private Bitmap? _staticLayer;
     private bool _staticLayerDirty = true;
@@ -189,6 +205,13 @@ internal sealed class WaveformView : Control
 
         _holdScaffold = false;
         StartRevealAnimation();
+        TimeViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SetMarkers(IReadOnlyList<WaveformMarkerMark> markers)
+    {
+        _markers = markers;
+        RebuildPresentationLayers(clearDetailPeaks: false);
     }
 
     /// <summary>
@@ -257,6 +280,7 @@ internal sealed class WaveformView : Control
         ResetAmpZoom(refresh: false);
         ClearExportHighlight();
         _isDraggingSeek = false;
+        _markerEditMode = null;
         _mouseGuideX = null;
         ClearPlayhead();
         Cursor = Cursors.Default;
@@ -264,6 +288,7 @@ internal sealed class WaveformView : Control
         InvalidateRevealLayers();
         Invalidate();
         Update();
+        TimeViewChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -812,7 +837,54 @@ internal sealed class WaveformView : Control
         AdjustTimeZoom(factor, anchor);
     }
 
-    /// <summary>マウスホイールによる縦方向（振幅）ズーム（Shift+ホイール）。</summary>
+    /// <summary>Shift+マウスホイールによる時間軸の左右スクロール。</summary>
+    public void PanTimeByWheel(int wheelDelta)
+    {
+        if (_peaks is null
+            || _peaks.IsEmpty
+            || wheelDelta == 0
+            || _timeZoom <= TimeZoomMin + 1e-9)
+        {
+            return;
+        }
+
+        var notches = Math.Max(1.0, Math.Abs(wheelDelta) / 120.0);
+        var previous = _viewStart;
+        var distance = ViewSpan * 0.1d * notches;
+        _viewStart += wheelDelta < 0 ? distance : -distance;
+        ClampTimeViewWindow();
+        if (Math.Abs(_viewStart - previous) < 1e-12)
+        {
+            return;
+        }
+
+        NotifyTimeViewChanged();
+    }
+
+    /// <summary>スクロールバーから表示左端を設定する。</summary>
+    public void SetTimeViewStart(double viewStart)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        var previous = _viewStart;
+        _viewStart = viewStart;
+        ClampTimeViewWindow();
+        if (Math.Abs(_viewStart - previous) < 1e-12)
+        {
+            return;
+        }
+
+        NotifyTimeViewChanged();
+    }
+
+    public double TimeViewStart => _viewStart;
+
+    public double TimeViewSpan => ViewSpan;
+
+    /// <summary>Ctrl+マウスホイールによる縦方向（振幅）ズーム。</summary>
     public void ZoomAmpByWheel(int wheelDelta)
     {
         if (_peaks is null || _peaks.IsEmpty || wheelDelta == 0)
@@ -1076,7 +1148,11 @@ internal sealed class WaveformView : Control
 
     private void NotifyAmpViewChanged() => RebuildPresentationLayers(clearDetailPeaks: false);
 
-    private void NotifyTimeViewChanged() => RebuildPresentationLayers(clearDetailPeaks: true);
+    private void NotifyTimeViewChanged()
+    {
+        RebuildPresentationLayers(clearDetailPeaks: true);
+        TimeViewChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private void RebuildPresentationLayers(bool clearDetailPeaks)
     {
@@ -1155,6 +1231,12 @@ internal sealed class WaveformView : Control
 
     /// <summary>クリック／ドラッグでシーク（0〜1）。</summary>
     public event EventHandler<double>? SeekRequested;
+
+    /// <summary>時間軸の表示位置または倍率が変更された。</summary>
+    public event EventHandler? TimeViewChanged;
+
+    /// <summary>Marker レーンで追加マーカーの描画／消去が要求された。</summary>
+    public event EventHandler<MarkerEditRequestedEventArgs>? MarkerEditRequested;
 
     /// <summary>マウス直下の Music Playlist 番号。範囲外では null。</summary>
     public event EventHandler<int?>? PlaylistHoverChanged;
@@ -1412,7 +1494,17 @@ internal sealed class WaveformView : Control
     {
         base.OnMouseDown(e);
         UpdateMouseGuide(e.X);
-        if (e.Button != MouseButtons.Left || !TryGetProgressFromX(e.X, out var progress))
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        if (TryBeginMarkerStroke(e.Location))
+        {
+            return;
+        }
+
+        if (!TryGetProgressFromX(e.X, out var progress))
         {
             return;
         }
@@ -1426,6 +1518,11 @@ internal sealed class WaveformView : Control
     {
         base.OnMouseDoubleClick(e);
         if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        if (_markerEditMode is not null)
         {
             return;
         }
@@ -1444,6 +1541,13 @@ internal sealed class WaveformView : Control
         UpdateMouseGuide(e.X);
         UpdateTimelineToolTip(e.Location);
 
+        if (_markerEditMode is not null)
+        {
+            ApplyMarkerStroke(_markerStrokeLastX, e.X, includeNearest: true);
+            _markerStrokeLastX = e.X;
+            return;
+        }
+
         if (!_isDraggingSeek || !TryGetProgressFromX(e.X, out var progress))
         {
             return;
@@ -1456,6 +1560,14 @@ internal sealed class WaveformView : Control
     {
         base.OnMouseUp(e);
         UpdateMouseGuide(e.X);
+        if (e.Button == MouseButtons.Left && _markerEditMode is not null)
+        {
+            ApplyMarkerStroke(_markerStrokeLastX, e.X, includeNearest: true);
+            _markerEditMode = null;
+            Capture = false;
+            return;
+        }
+
         if (e.Button != MouseButtons.Left || !_isDraggingSeek)
         {
             return;
@@ -1474,7 +1586,7 @@ internal sealed class WaveformView : Control
         base.OnMouseLeave(e);
         UpdateTimelineToolTip(null);
         SetHoveredPlaylistPart(null);
-        if (_isDraggingSeek)
+        if (_isDraggingSeek || _markerEditMode is not null)
         {
             return;
         }
@@ -1485,6 +1597,201 @@ internal sealed class WaveformView : Control
             Invalidate();
         }
     }
+
+    private bool TryBeginMarkerStroke(Point location)
+    {
+        var modifiers = ModifierKeys;
+        var editMode = (modifiers & Keys.Control) == Keys.Control
+            ? MarkerEditMode.Remove
+            : (modifiers & Keys.Shift) == Keys.Shift
+                ? MarkerEditMode.Add
+                : (MarkerEditMode?)null;
+        if (editMode is null
+            || _peaks is null
+            || _peaks.IsEmpty
+            || !TryGetMarkerLane(out var markerLane, out _)
+            || !markerLane.Contains(location))
+        {
+            return false;
+        }
+
+        _isDraggingSeek = false;
+        _markerEditMode = editMode;
+        _markerStrokeLastX = location.X;
+        Capture = true;
+        ApplyMarkerStroke(location.X, location.X, includeNearest: true);
+        return true;
+    }
+
+    private void ApplyMarkerStroke(int fromX, int toX, bool includeNearest)
+    {
+        if (_markerEditMode is not { } mode
+            || !TryGetMarkerLane(out _, out var labels)
+            || labels.Width <= 0)
+        {
+            return;
+        }
+
+        var points = EnumerateVisibleMarkerGrid(labels);
+        if (points.Count == 0)
+        {
+            return;
+        }
+
+        var minX = Math.Min(fromX, toX);
+        var maxX = Math.Max(fromX, toX);
+        var samples = points
+            .Where(point => point.X >= minX - 0.5f && point.X <= maxX + 0.5f)
+            .Select(point => point.SampleOffset)
+            .ToHashSet();
+
+        if (includeNearest)
+        {
+            var clampedX = Math.Clamp(toX, labels.Left, labels.Right);
+            var nearest = points.MinBy(point => Math.Abs(point.X - clampedX));
+            samples.Add(nearest.SampleOffset);
+        }
+
+        if (samples.Count > 0)
+        {
+            MarkerEditRequested?.Invoke(
+                this,
+                new MarkerEditRequestedEventArgs(mode, samples.Order().ToArray()));
+        }
+    }
+
+    private bool TryGetMarkerLane(out Rectangle markerLane, out Rectangle labels)
+    {
+        markerLane = Rectangle.Empty;
+        labels = Rectangle.Empty;
+        if (_peaks is null || _peaks.IsEmpty || ClientSize.Width <= 8 || ClientSize.Height <= 8)
+        {
+            return false;
+        }
+
+        using var g = CreateGraphics();
+        var content = Rectangle.Inflate(ClientRectangle, -4, -4);
+        (_, labels, _, _, _, var rowHeight) = GetLayout(content, g);
+        if (labels.Width <= 0 || rowHeight <= 0f)
+        {
+            return false;
+        }
+
+        markerLane = Rectangle.FromLTRB(
+            labels.Left,
+            (int)Math.Floor(labels.Top + rowHeight * 3f),
+            labels.Right,
+            (int)Math.Ceiling(labels.Top + rowHeight * 4f));
+        return markerLane.Height > 0;
+    }
+
+    private IReadOnlyList<MarkerGridPoint> EnumerateVisibleMarkerGrid(Rectangle labels)
+    {
+        if (_peaks is null || _peaks.FrameCount <= 0)
+        {
+            return [];
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var barStarts = _bars
+            .Where(bar => !bar.IsTempoChangeOnly)
+            .OrderBy(bar => bar.SampleOffset)
+            .ToArray();
+        if (barStarts.Length == 0)
+        {
+            return [];
+        }
+
+        var points = new List<MarkerGridPoint>();
+        void AddPoint(double sample)
+        {
+            var absolute = sample / frameCount;
+            if (absolute < _viewStart - 1e-9 || absolute > ViewEnd + 1e-9)
+            {
+                return;
+            }
+
+            var sampleOffset = (long)Math.Clamp(
+                Math.Round(sample, MidpointRounding.AwayFromZero),
+                0d,
+                Math.Max(0L, frameCount - 1));
+            if (!_outputParts.Any(part =>
+                    sampleOffset >= part.StartSampleOffset
+                    && sampleOffset < part.EndSampleOffset))
+            {
+                return;
+            }
+
+            if (_regions.Any(region =>
+                    sampleOffset >= region.StartSampleOffset
+                    && sampleOffset < region.EndSampleOffset
+                    && (string.Equals(region.NameSuffix, "-A", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(region.NameSuffix, "-E", StringComparison.OrdinalIgnoreCase))))
+            {
+                return;
+            }
+
+            points.Add(new MarkerGridPoint(sampleOffset, AbsoluteToX(absolute, labels)));
+        }
+
+        if (CalculateVisibleBarCount(barStarts, frameCount) < 8d - 1e-9)
+        {
+            for (var i = 0; i < barStarts.Length; i++)
+            {
+                var bar = barStarts[i];
+                AddPoint(bar.SampleOffset);
+                if (i + 1 >= barStarts.Length
+                    || bar.Numerator <= 1
+                    || barStarts[i + 1].SampleOffset <= bar.SampleOffset)
+                {
+                    continue;
+                }
+
+                var next = barStarts[i + 1];
+                for (var beat = 1; beat < bar.Numerator; beat++)
+                {
+                    AddPoint(
+                        bar.SampleOffset
+                        + (next.SampleOffset - bar.SampleOffset) * beat / (double)bar.Numerator);
+                }
+            }
+        }
+        else
+        {
+            var averageGapPx = EstimateVisibleBarGapPx(labels, frameCount);
+            using var g = CreateGraphics();
+            var minGap = g.MeasureString("000", Font).Width + 6f;
+            var step = ChooseBarThinningStep(averageGapPx, minGap);
+            int? previousTempo = null;
+            int? previousNumerator = null;
+            int? previousDenominator = null;
+
+            foreach (var bar in barStarts)
+            {
+                var tempo = (int)Math.Round(bar.Bpm, MidpointRounding.AwayFromZero);
+                var structural = previousTempo is null
+                    || previousTempo != tempo
+                    || previousNumerator != bar.Numerator
+                    || previousDenominator != bar.Denominator;
+                if (structural || IsBarOnThinningGrid(bar.BarNumber, step))
+                {
+                    AddPoint(bar.SampleOffset);
+                }
+
+                previousTempo = tempo;
+                previousNumerator = bar.Numerator;
+                previousDenominator = bar.Denominator;
+            }
+        }
+
+        return points
+            .GroupBy(point => point.SampleOffset)
+            .Select(group => group.First())
+            .OrderBy(point => point.X)
+            .ToArray();
+    }
+
+    private readonly record struct MarkerGridPoint(long SampleOffset, float X);
 
     private void UpdateMouseGuide(int mouseX)
     {
@@ -3343,24 +3650,7 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        var visibleBarCount = 0d;
-        for (var i = 0; i + 1 < barStarts.Length; i++)
-        {
-            var start = SampleToAbsolute(barStarts[i].SampleOffset, frameCount);
-            var end = SampleToAbsolute(barStarts[i + 1].SampleOffset, frameCount);
-            if (end <= start)
-            {
-                continue;
-            }
-
-            var overlap = Math.Min(end, ViewEnd) - Math.Max(start, _viewStart);
-            if (overlap > 0d)
-            {
-                visibleBarCount += overlap / (end - start);
-            }
-        }
-
-        if (visibleBarCount >= 8d - 1e-9)
+        if (CalculateVisibleBarCount(barStarts, frameCount) >= 8d - 1e-9)
         {
             return;
         }
@@ -3396,6 +3686,30 @@ internal sealed class WaveformView : Control
                 g.DrawLine(beatPen, x, lineTop, x, lineBottom);
             }
         }
+    }
+
+    private double CalculateVisibleBarCount(
+        IReadOnlyList<WaveformBarMark> barStarts,
+        long frameCount)
+    {
+        var visibleBarCount = 0d;
+        for (var i = 0; i + 1 < barStarts.Count; i++)
+        {
+            var start = SampleToAbsolute(barStarts[i].SampleOffset, frameCount);
+            var end = SampleToAbsolute(barStarts[i + 1].SampleOffset, frameCount);
+            if (end <= start)
+            {
+                continue;
+            }
+
+            var overlap = Math.Min(end, ViewEnd) - Math.Max(start, _viewStart);
+            if (overlap > 0d)
+            {
+                visibleBarCount += overlap / (end - start);
+            }
+        }
+
+        return visibleBarCount;
     }
 
     /// <summary>

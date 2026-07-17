@@ -162,11 +162,6 @@ internal static class WaveformExporter
             }
 
             var comment = marker.Comment?.Trim() ?? string.Empty;
-            if (comment.Length == 0)
-            {
-                continue;
-            }
-
             cues.Add(new WavCueItem
             {
                 Id = nextId++,

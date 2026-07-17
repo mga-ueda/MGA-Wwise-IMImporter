@@ -31,6 +31,7 @@ public partial class Form1 : Form
     private readonly System.Windows.Forms.Timer _playheadTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _playlistBlinkTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _playlistTransitionGlowTimer = new() { Interval = 16 };
+    private readonly System.Windows.Forms.Timer _waveformScrollTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _waapiSelectionTimer = new() { Interval = 1500 };
     private double _smoothProgress;
     private double _anchorProgress;
@@ -38,6 +39,7 @@ public partial class Form1 : Form
     private ColorDevPanelForm? _colorDevPanel;
     private int _exportGeneration;
     private WaveformPreviewData? _loadedPreview;
+    private WaveformPreviewSession? _previewSession;
     private bool _exportBusy;
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
@@ -63,6 +65,7 @@ public partial class Form1 : Form
     private long _playlistTransitionGlowStartTickMs;
     private double _playlistTransitionGlowDurationMs;
     private double _playlistTransitionGlowLevel;
+    private double? _pendingWaveformScrollStart;
     /// <summary>
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
     /// </summary>
@@ -141,6 +144,12 @@ public partial class Form1 : Form
             }
         };
         waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
+        waveformView.TimeViewChanged += (_, _) => UpdateWaveformHorizontalScrollBar();
+        waveformHorizontalScrollBar.ScrollRequested += QueueWaveformHorizontalScroll;
+        waveformHorizontalScrollBar.ScrollCompleted += (_, _) => FlushWaveformHorizontalScroll();
+        _waveformScrollTimer.Tick += (_, _) => FlushWaveformHorizontalScroll();
+        UpdateWaveformHorizontalScrollBar();
+        waveformView.MarkerEditRequested += WaveformView_MarkerEditRequested;
         waveformView.PlaylistHoverChanged += (_, partNumber) =>
         {
             _hoveredPlaylistPartNumber = partNumber;
@@ -308,11 +317,13 @@ public partial class Form1 : Form
         _playheadTimer.Stop();
         _playlistBlinkTimer.Stop();
         _playlistTransitionGlowTimer.Stop();
+        _waveformScrollTimer.Stop();
         _audioPlayer.Dispose();
         _waapiSelectionTimer.Dispose();
         _playheadTimer.Dispose();
         _playlistBlinkTimer.Dispose();
         _playlistTransitionGlowTimer.Dispose();
+        _waveformScrollTimer.Dispose();
         WindowSettings.FromForm(this).Save();
         base.OnFormClosing(e);
     }
@@ -635,6 +646,40 @@ public partial class Form1 : Form
         waapiStatusBar.ApplyColors();
         transportBar.ApplyColors();
         waveformView.RefreshAppearance();
+        waveformHostPanel.BackColor = UiColors.ForControlBack(UiColors.WaveformScrollTrack);
+        waveformHorizontalScrollBar.ApplyColors();
+    }
+
+    private void UpdateWaveformHorizontalScrollBar()
+    {
+        waveformHorizontalScrollBar.SetViewport(
+            waveformView.TimeViewStart,
+            waveformView.TimeViewSpan);
+    }
+
+    private void QueueWaveformHorizontalScroll(object? sender, double viewStart)
+    {
+        _pendingWaveformScrollStart = viewStart;
+        if (!_waveformScrollTimer.Enabled)
+        {
+            _waveformScrollTimer.Start();
+        }
+    }
+
+    private void FlushWaveformHorizontalScroll()
+    {
+        if (_pendingWaveformScrollStart is not double viewStart)
+        {
+            _waveformScrollTimer.Stop();
+            return;
+        }
+
+        _pendingWaveformScrollStart = null;
+        waveformView.SetTimeViewStart(viewStart);
+        if (_pendingWaveformScrollStart is null)
+        {
+            _waveformScrollTimer.Stop();
+        }
     }
 
     private void ApplyActionBarTextColors()
@@ -675,8 +720,10 @@ public partial class Form1 : Form
 
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = actionBar.BackColor;
+        RefreshFlatOptionControl(topMostCheckBox);
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.BackColor = actionBar.BackColor;
+        RefreshFlatOptionControl(detailedLogCheckBox);
     }
 
     private void ApplyLogButtonColors()
@@ -763,6 +810,7 @@ public partial class Form1 : Form
         {
             radio.BackColor = back;
             radio.ForeColor = UiColors.PlaylistOptionFore;
+            RefreshFlatOptionControl(radio);
         }
 
         foreach (Control control in playlistListLayout.Controls)
@@ -787,17 +835,20 @@ public partial class Form1 : Form
 
             if (_audioPlayer.IsPlaying && isPending)
             {
-                button.BackColor = BlendColor(
-                    back,
-                    UiColors.ForControlBack(UiColors.PlaylistAutoBack),
+                button.FlatAppearance.BorderSize = 2;
+                button.FlatAppearance.BorderColor = BlendColor(
+                    UiColors.ForControlBack(UiColors.PlaylistButtonBorder),
+                    UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
                     _pendingPlaylistBlinkLevel);
                 button.ForeColor = UiColors.PlaylistActiveFore;
             }
             else if (_audioPlayer.IsPlaying && (isAutomatic || isManual))
             {
-                button.BackColor = isAutomatic
-                    ? UiColors.ForControlBack(UiColors.PlaylistAutoBack)
-                    : UiColors.ForControlBack(UiColors.PlaylistManualBack);
+                button.FlatAppearance.BorderSize = 2;
+                button.FlatAppearance.BorderColor = UiColors.ForControlBack(
+                    isManual
+                        ? UiColors.PlaylistManualBorder
+                        : UiColors.PlaylistTransitionBorder);
                 button.ForeColor = UiColors.PlaylistActiveFore;
             }
             else if (_hoveredPlaylistPartNumber == part.Number
@@ -809,15 +860,29 @@ public partial class Form1 : Form
             if (_playlistTransitionGlowPartNumber == part.Number
                 && _playlistTransitionGlowLevel > 0d)
             {
-                button.FlatAppearance.BorderSize = 1;
-                button.FlatAppearance.BorderColor = BlendColor(
+                button.BackColor = BlendColor(
                     button.BackColor,
-                    UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
+                    UiColors.ForControlBack(isManual
+                        ? UiColors.PlaylistManualBack
+                        : UiColors.PlaylistAutoBack),
                     _playlistTransitionGlowLevel);
             }
         }
 
         EnsureHighlightedPlaylistVisible();
+    }
+
+    private static void RefreshFlatOptionControl(Control control)
+    {
+        switch (control)
+        {
+            case FlatOptionRadioButton radio:
+                radio.ApplyColors();
+                break;
+            case FlatOptionCheckBox checkBox:
+                checkBox.ApplyColors();
+                break;
+        }
     }
 
     private void EnsureHighlightedPlaylistVisible()
@@ -1240,7 +1305,7 @@ public partial class Form1 : Form
             waveformView.SetFadeOutPlayhead(null);
             _playheadTimer.Start();
             UpdateTransportPlaybackState();
-            ApplyPlaylistSelectorColors();
+            StartPlaylistTransitionGlow();
             WritePlaybackDiagnostic(
                 "playlist.immediate-started",
                 new { target = target.Number, progress });
@@ -1282,6 +1347,7 @@ public partial class Form1 : Form
         var exitSourceMode = _playlistExitSourceMode;
         var boundaries = GetPlaylistExitBoundaries(
             preview,
+            _previewSession?.EffectiveMarkers ?? preview.Markers,
             exitSourceMode,
             currentSample,
             currentPartStart,
@@ -1488,6 +1554,7 @@ public partial class Form1 : Form
 
     private static IReadOnlyList<long> GetPlaylistExitBoundaries(
         WaveformPreviewData preview,
+        IReadOnlyList<WaveformMarkerMark> markers,
         PlaylistExitSourceMode mode,
         long currentSample,
         long currentPartStart,
@@ -1506,7 +1573,7 @@ public partial class Form1 : Form
                     preview.Bars,
                     transitionLimit)
                 .Append(transitionLimit),
-            PlaylistExitSourceMode.NextCue => preview.Markers
+            PlaylistExitSourceMode.NextCue => markers
                 .Where(marker =>
                     marker.SampleOffset >= currentPartStart
                     && marker.SampleOffset < currentPartEnd)
@@ -1816,8 +1883,12 @@ public partial class Form1 : Form
 
     private void StartPlaylistTransitionGlow()
     {
-        if (_activeAutomaticPlaylistPartNumber is not int partNumber)
+        var activePartNumber = _automaticPlaylistPlayback
+            ? _activeAutomaticPlaylistPartNumber
+            : _manualPlaylistPartNumber;
+        if (activePartNumber is not int partNumber)
         {
+            ApplyPlaylistSelectorColors();
             return;
         }
 
@@ -1984,6 +2055,7 @@ public partial class Form1 : Form
         _exportGeneration++;
         _exportBusy = false;
         _loadedPreview = null;
+        _previewSession = null;
         _resumePlaybackAfterBackwardSeek = false;
         ClearPendingPlaylistUiTransition();
         _playheadTimer.Stop();
@@ -2143,6 +2215,7 @@ public partial class Form1 : Form
     {
         var exportGeneration = ++_exportGeneration;
         _loadedPreview = null;
+        _previewSession = null;
         _exportBusy = false;
         UpdateTransportPosition();
         ClearPendingPlaylistUiTransition();
@@ -2176,18 +2249,20 @@ public partial class Form1 : Form
             _audioPlayer.Clear();
             waveformView.ClearPreview();
             _loadedPreview = null;
+            _previewSession = null;
             UpdateTransportPosition();
             ClearPlaylistChoices("Playlist を取得できませんでした");
             UpdateExportButtonState();
             return;
         }
 
+        _previewSession = new WaveformPreviewSession(preview);
         waveformView.SetPreview(
             preview.Peaks,
             preview.SourcePath,
             preview.WavInfo,
             preview.Bars,
-            preview.Markers,
+            _previewSession.EffectiveMarkers,
             preview.Cycles,
             preview.Regions,
             preview.OutputParts);
@@ -2246,19 +2321,21 @@ public partial class Form1 : Form
         }
 
         var exportGeneration = _exportGeneration;
+        var exportMarkers = (_previewSession?.EffectiveMarkers ?? preview.Markers).ToArray();
+        var wwiseMarkers = (_previewSession?.WwiseMarkers ?? preview.Markers).ToArray();
         _exportBusy = true;
         UpdateExportButtonState();
 
         try
         {
-            await RunExportAsync(preview, exportGeneration);
+            await RunExportAsync(preview, exportMarkers, exportGeneration);
 
             if (IsDisposed || exportGeneration != _exportGeneration)
             {
                 return;
             }
 
-            await RunWwiseImportAsync(preview, exportGeneration);
+            await RunWwiseImportAsync(preview, wwiseMarkers, exportGeneration);
         }
         finally
         {
@@ -2274,7 +2351,10 @@ public partial class Form1 : Form
     /// エクスポート済み WAV を Wwise の選択位置へ Music 構造として流し込む。
     /// 接続不可・未選択・キャンセル時はログを残してスキップする。
     /// </summary>
-    private async Task RunWwiseImportAsync(WaveformPreviewData preview, int exportGeneration)
+    private async Task RunWwiseImportAsync(
+        WaveformPreviewData preview,
+        IReadOnlyList<WaveformMarkerMark> markers,
+        int exportGeneration)
     {
         // 書き出しに失敗したパートがあるときは中断（全ファイルの存在を確認）
         var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
@@ -2330,7 +2410,7 @@ public partial class Form1 : Form
                 preview.OutputParts,
                 preview.Regions,
                 preview.Bars,
-                preview.Markers);
+                markers);
         }
         catch (Exception ex)
         {
@@ -2458,7 +2538,10 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task RunExportAsync(WaveformPreviewData preview, int exportGeneration)
+    private async Task RunExportAsync(
+        WaveformPreviewData preview,
+        IReadOnlyList<WaveformMarkerMark> markers,
+        int exportGeneration)
     {
         try
         {
@@ -2468,7 +2551,7 @@ public partial class Form1 : Form
                 preview.OutputParts,
                 preview.Regions,
                 preview.Bars,
-                preview.Markers,
+                markers,
                 onPartBegin: part =>
                 {
                     // 書き出し開始の瞬間に発光を点ける（見えてから I/O へ）
@@ -2598,10 +2681,11 @@ public partial class Form1 : Form
             return;
         }
 
+        var wasPlaying = _audioPlayer.IsPlaying;
         var hadPendingPlaylistTransition = _pendingPlaylistTransitionGeneration != 0;
         WritePlaybackDiagnostic(
             "transport.toggle-requested",
-            new { wasPlaying = _audioPlayer.IsPlaying, hadPendingPlaylistTransition });
+            new { wasPlaying, hadPendingPlaylistTransition });
         if (!_automaticPlaylistPlayback)
         {
             SetManualPlaylistHighlight(_smoothProgress);
@@ -2629,7 +2713,14 @@ public partial class Form1 : Form
         }
 
         UpdatePlayhead();
-        ApplyPlaylistSelectorColors();
+        if (!wasPlaying && _audioPlayer.IsPlaying)
+        {
+            StartPlaylistTransitionGlow();
+        }
+        else
+        {
+            ApplyPlaylistSelectorColors();
+        }
         UpdateTransportPlaybackState();
         WritePlaybackDiagnostic(
             "transport.toggle-completed",
@@ -2715,6 +2806,36 @@ public partial class Form1 : Form
             beatZeroBased + 1,
             subdivision,
             TimeSpan.FromSeconds(timeSample / (double)preview.WavInfo.SampleRate)));
+    }
+
+    private void WaveformView_MarkerEditRequested(
+        object? sender,
+        MarkerEditRequestedEventArgs e)
+    {
+        if (_previewSession is not { } session)
+        {
+            return;
+        }
+
+        var changed = e.Mode switch
+        {
+            MarkerEditMode.Add => session.AddMarkers(e.SampleOffsets),
+            MarkerEditMode.Remove => session.RemoveMarkers(e.SampleOffsets),
+            _ => false,
+        };
+        if (!changed)
+        {
+            return;
+        }
+
+        waveformView.SetMarkers(session.EffectiveMarkers);
+        WritePlaybackDiagnostic(
+            e.Mode == MarkerEditMode.Add ? "marker.added" : "marker.removed",
+            new
+            {
+                samples = e.SampleOffsets,
+                effectiveCount = session.EffectiveMarkers.Count,
+            });
     }
 
     private void SeekPlayback(double progress)
@@ -3110,9 +3231,13 @@ public partial class Form1 : Form
             {
                 // high word of wParam is signed wheel delta
                 var wheelDelta = (short)((m.WParam.ToInt64() >> 16) & 0xFFFF);
-                if ((ModifierKeys & Keys.Shift) == Keys.Shift)
+                if ((ModifierKeys & Keys.Control) == Keys.Control)
                 {
                     waveformView.ZoomAmpByWheel(wheelDelta);
+                }
+                else if ((ModifierKeys & Keys.Shift) == Keys.Shift)
+                {
+                    waveformView.PanTimeByWheel(wheelDelta);
                 }
                 else
                 {

@@ -49,6 +49,9 @@ internal static class UiColors
     public static Color SeekAnacrusis { get; set; } = Color.FromArgb(80, 220, 110);
     public static Color SeekFadeOut { get; set; } = Color.White;
     public static Color MouseGuide { get; set; } = Color.FromArgb(220, 255, 255, 255);
+    public static Color WaveformScrollTrack { get; set; } = Color.FromArgb(18, 18, 18);
+    public static Color WaveformScrollThumb { get; set; } = Color.FromArgb(72, 72, 72);
+    public static Color WaveformScrollThumbHover { get; set; } = Color.FromArgb(91, 91, 91);
 
     // --- トランスポート ---
     public static Color TransportBack { get; set; } = Color.FromArgb(26, 27, 38);
@@ -71,6 +74,13 @@ internal static class UiColors
     public static Color LogButtonBorder { get; set; } = Color.FromArgb(55, 55, 58);
     public static Color LogButtonHoverBack { get; set; } = Color.FromArgb(39, 43, 63);
 
+    // --- 共通オプションコントロール ---
+    public static Color OptionGlyphBorder { get; set; } = Color.FromArgb(150, 150, 150);
+    public static Color OptionGlyphChecked { get; set; } = Color.FromArgb(0, 245, 255);
+    public static Color OptionGlyphHover { get; set; } = Color.FromArgb(235, 235, 235);
+    public static Color OptionGlyphDisabled { get; set; } = Color.FromArgb(90, 90, 94);
+    public static Color OptionGlyphCheckMark { get; set; } = Color.FromArgb(26, 27, 38);
+
     // --- Transition Settings / Playlist ---
     public static Color PlaylistBack { get; set; } = Color.FromArgb(30, 30, 30);
     public static Color PlaylistDefaultFore { get; set; } = Color.FromArgb(150, 150, 150);
@@ -82,6 +92,7 @@ internal static class UiColors
     public static Color PlaylistManualBack { get; set; } = Color.FromArgb(89, 89, 0);
     public static Color PlaylistHoverBorder { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color PlaylistTransitionBorder { get; set; } = Color.FromArgb(0, 245, 255);
+    public static Color PlaylistManualBorder { get; set; } = Color.FromArgb(255, 255, 0);
 
     // --- 下部アクションバー ---
     public static Color ActionBarBack { get; set; } = Color.FromArgb(26, 27, 38);
@@ -160,6 +171,9 @@ internal static class UiColors
         new("SeekAnacrusis", "アウフタクト先行再生ヘッド", () => SeekAnacrusis, c => SeekAnacrusis = c),
         new("SeekFadeOut", "遷移元フェードアウトヘッド", () => SeekFadeOut, c => SeekFadeOut = c),
         new("MouseGuide", "マウスガイド", () => MouseGuide, c => MouseGuide = c),
+        new("WaveformScrollTrack", "波形スクロール・トラック", () => WaveformScrollTrack, c => WaveformScrollTrack = c),
+        new("WaveformScrollThumb", "波形スクロール・つまみ", () => WaveformScrollThumb, c => WaveformScrollThumb = c),
+        new("WaveformScrollThumbHover", "波形スクロール・ホバー", () => WaveformScrollThumbHover, c => WaveformScrollThumbHover = c),
 
         new("TransportBack", "Transport・背景", () => TransportBack, c => TransportBack = c),
         new("TransportBorder", "Transport・境界線", () => TransportBorder, c => TransportBorder = c),
@@ -180,16 +194,23 @@ internal static class UiColors
         new("LogButtonBorder", "ログボタン・枠", () => LogButtonBorder, c => LogButtonBorder = c),
         new("LogButtonHoverBack", "ログボタン・ホバー背景", () => LogButtonHoverBack, c => LogButtonHoverBack = c),
 
+        new("OptionGlyphBorder", "オプション・通常枠", () => OptionGlyphBorder, c => OptionGlyphBorder = c),
+        new("OptionGlyphChecked", "オプション・選択色", () => OptionGlyphChecked, c => OptionGlyphChecked = c),
+        new("OptionGlyphHover", "オプション・ホバー枠", () => OptionGlyphHover, c => OptionGlyphHover = c),
+        new("OptionGlyphDisabled", "オプション・無効色", () => OptionGlyphDisabled, c => OptionGlyphDisabled = c),
+        new("OptionGlyphCheckMark", "オプション・チェック線", () => OptionGlyphCheckMark, c => OptionGlyphCheckMark = c),
+
         new("PlaylistBack", "Settings／Playlist・背景", () => PlaylistBack, c => PlaylistBack = c),
         new("PlaylistDefaultFore", "Settings／Playlist・見出し／通常文字", () => PlaylistDefaultFore, c => PlaylistDefaultFore = c),
         new("PlaylistOptionFore", "Settings・選択肢文字", () => PlaylistOptionFore, c => PlaylistOptionFore = c),
         new("PlaylistHoverFore", "Playlist・波形ホバー文字", () => PlaylistHoverFore, c => PlaylistHoverFore = c),
         new("PlaylistActiveFore", "Playlist・再生中文字", () => PlaylistActiveFore, c => PlaylistActiveFore = c),
         new("PlaylistButtonBorder", "Playlist・ボタン枠", () => PlaylistButtonBorder, c => PlaylistButtonBorder = c),
-        new("PlaylistAutoBack", "Playlist・自動再生背景", () => PlaylistAutoBack, c => PlaylistAutoBack = c),
-        new("PlaylistManualBack", "Playlist・手動再生背景", () => PlaylistManualBack, c => PlaylistManualBack = c),
+        new("PlaylistAutoBack", "Playlist・自動再生開始フェード塗り", () => PlaylistAutoBack, c => PlaylistAutoBack = c),
+        new("PlaylistManualBack", "Playlist・手動再生開始フェード塗り", () => PlaylistManualBack, c => PlaylistManualBack = c),
         new("PlaylistHoverBorder", "Playlist・波形ホバー枠", () => PlaylistHoverBorder, c => PlaylistHoverBorder = c),
-        new("PlaylistTransitionBorder", "Playlist・遷移完了枠", () => PlaylistTransitionBorder, c => PlaylistTransitionBorder = c),
+        new("PlaylistTransitionBorder", "Playlist・自動再生中／遷移待機枠", () => PlaylistTransitionBorder, c => PlaylistTransitionBorder = c),
+        new("PlaylistManualBorder", "Playlist・手動再生中枠", () => PlaylistManualBorder, c => PlaylistManualBorder = c),
 
         new("ActionBarBack", "Action Bar・背景", () => ActionBarBack, c => ActionBarBack = c),
         new("ActionOptionFore", "Action Bar・オプション文字", () => ActionOptionFore, c => ActionOptionFore = c),
@@ -284,6 +305,10 @@ internal static class UiColors
             "PlaylistMeterMaximum",
             "ActionButtonDisabledBack",
             "TransportAccent",
+            "WaveformScrollThumbPressed",
+            "LogPlaylistScrollTrack",
+            "LogPlaylistScrollThumb",
+            "LogPlaylistScrollThumbHover",
         ];
 
         var changed = false;

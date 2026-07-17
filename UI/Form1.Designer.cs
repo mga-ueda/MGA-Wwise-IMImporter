@@ -3,7 +3,9 @@ namespace MgaWwiseIMImporter.UI;
 partial class Form1
 {
     private System.ComponentModel.IContainer components = null;
+    private Panel waveformHostPanel;
     private WaveformView waveformView;
+    private ThinHorizontalScrollBar waveformHorizontalScrollBar;
     private TransportBar transportBar;
     private Panel logAreaPanel;
     private Panel logEditorPanel;
@@ -18,32 +20,32 @@ partial class Form1
     private Panel fadeInSectionPanel;
     private Label fadeInHeaderLabel;
     private FlowLayoutPanel fadeInChoicesPanel;
-    private RadioButton fadeInNoneRadio;
-    private RadioButton fadeInOneSecondRadio;
-    private RadioButton fadeInThreeSecondsRadio;
-    private RadioButton fadeInSixSecondsRadio;
-    private RadioButton fadeInNineSecondsRadio;
+    private FlatOptionRadioButton fadeInNoneRadio;
+    private FlatOptionRadioButton fadeInOneSecondRadio;
+    private FlatOptionRadioButton fadeInThreeSecondsRadio;
+    private FlatOptionRadioButton fadeInSixSecondsRadio;
+    private FlatOptionRadioButton fadeInNineSecondsRadio;
     private Panel fadeOutSectionPanel;
     private Label transitionTimeHeaderLabel;
     private FlowLayoutPanel transitionTimeChoicesPanel;
-    private RadioButton transitionTimeHalfSecondRadio;
-    private RadioButton transitionTimeOneSecondRadio;
-    private RadioButton transitionTimeThreeSecondsRadio;
-    private RadioButton transitionTimeSixSecondsRadio;
-    private RadioButton transitionTimeNineSecondsRadio;
+    private FlatOptionRadioButton transitionTimeHalfSecondRadio;
+    private FlatOptionRadioButton transitionTimeOneSecondRadio;
+    private FlatOptionRadioButton transitionTimeThreeSecondsRadio;
+    private FlatOptionRadioButton transitionTimeSixSecondsRadio;
+    private FlatOptionRadioButton transitionTimeNineSecondsRadio;
     private Panel exitSourceAtSectionPanel;
     private Label exitSourceAtHeaderLabel;
     private FlowLayoutPanel exitSourceAtChoicesPanel;
-    private RadioButton exitSourceImmediateRadio;
-    private RadioButton exitSourceNextBarRadio;
-    private RadioButton exitSourceNextBeatRadio;
-    private RadioButton exitSourceNextCueRadio;
-    private RadioButton exitSourceExitCueRadio;
+    private FlatOptionRadioButton exitSourceImmediateRadio;
+    private FlatOptionRadioButton exitSourceNextBarRadio;
+    private FlatOptionRadioButton exitSourceNextBeatRadio;
+    private FlatOptionRadioButton exitSourceNextCueRadio;
+    private FlatOptionRadioButton exitSourceExitCueRadio;
     private Panel destinationSyncSectionPanel;
     private Label destinationSyncHeaderLabel;
     private FlowLayoutPanel destinationSyncChoicesPanel;
-    private RadioButton destinationSyncEntryCueRadio;
-    private RadioButton destinationSyncSameTimeRadio;
+    private FlatOptionRadioButton destinationSyncEntryCueRadio;
+    private FlatOptionRadioButton destinationSyncSameTimeRadio;
     private Panel playlistSelectorPanel;
     private Panel playlistSeparator;
     private Label playlistHeaderLabel;
@@ -54,8 +56,8 @@ partial class Form1
     private PictureBox brandLogoPictureBox;
     private LinkLabel copyrightLinkLabel;
     private FlowLayoutPanel actionControlsPanel;
-    private CheckBox detailedLogCheckBox;
-    private CheckBox topMostCheckBox;
+    private FlatOptionCheckBox detailedLogCheckBox;
+    private FlatOptionCheckBox topMostCheckBox;
     private RoundedButton clearButton;
     private RoundedButton exportButton;
     private WaapiStatusBar waapiStatusBar;
@@ -79,7 +81,9 @@ partial class Form1
     private void InitializeComponent()
     {
         components = new System.ComponentModel.Container();
+        waveformHostPanel = new Panel();
         waveformView = new WaveformView();
+        waveformHorizontalScrollBar = new ThinHorizontalScrollBar();
         transportBar = new TransportBar();
         logAreaPanel = new Panel();
         logEditorPanel = new Panel();
@@ -94,32 +98,32 @@ partial class Form1
         fadeInSectionPanel = new Panel();
         fadeInHeaderLabel = new Label();
         fadeInChoicesPanel = new FlowLayoutPanel();
-        fadeInNoneRadio = new RadioButton();
-        fadeInOneSecondRadio = new RadioButton();
-        fadeInThreeSecondsRadio = new RadioButton();
-        fadeInSixSecondsRadio = new RadioButton();
-        fadeInNineSecondsRadio = new RadioButton();
+        fadeInNoneRadio = new FlatOptionRadioButton();
+        fadeInOneSecondRadio = new FlatOptionRadioButton();
+        fadeInThreeSecondsRadio = new FlatOptionRadioButton();
+        fadeInSixSecondsRadio = new FlatOptionRadioButton();
+        fadeInNineSecondsRadio = new FlatOptionRadioButton();
         fadeOutSectionPanel = new Panel();
         transitionTimeHeaderLabel = new Label();
         transitionTimeChoicesPanel = new FlowLayoutPanel();
-        transitionTimeHalfSecondRadio = new RadioButton();
-        transitionTimeOneSecondRadio = new RadioButton();
-        transitionTimeThreeSecondsRadio = new RadioButton();
-        transitionTimeSixSecondsRadio = new RadioButton();
-        transitionTimeNineSecondsRadio = new RadioButton();
+        transitionTimeHalfSecondRadio = new FlatOptionRadioButton();
+        transitionTimeOneSecondRadio = new FlatOptionRadioButton();
+        transitionTimeThreeSecondsRadio = new FlatOptionRadioButton();
+        transitionTimeSixSecondsRadio = new FlatOptionRadioButton();
+        transitionTimeNineSecondsRadio = new FlatOptionRadioButton();
         exitSourceAtSectionPanel = new Panel();
         exitSourceAtHeaderLabel = new Label();
         exitSourceAtChoicesPanel = new FlowLayoutPanel();
-        exitSourceImmediateRadio = new RadioButton();
-        exitSourceNextBarRadio = new RadioButton();
-        exitSourceNextBeatRadio = new RadioButton();
-        exitSourceNextCueRadio = new RadioButton();
-        exitSourceExitCueRadio = new RadioButton();
+        exitSourceImmediateRadio = new FlatOptionRadioButton();
+        exitSourceNextBarRadio = new FlatOptionRadioButton();
+        exitSourceNextBeatRadio = new FlatOptionRadioButton();
+        exitSourceNextCueRadio = new FlatOptionRadioButton();
+        exitSourceExitCueRadio = new FlatOptionRadioButton();
         destinationSyncSectionPanel = new Panel();
         destinationSyncHeaderLabel = new Label();
         destinationSyncChoicesPanel = new FlowLayoutPanel();
-        destinationSyncEntryCueRadio = new RadioButton();
-        destinationSyncSameTimeRadio = new RadioButton();
+        destinationSyncEntryCueRadio = new FlatOptionRadioButton();
+        destinationSyncSameTimeRadio = new FlatOptionRadioButton();
         playlistSelectorPanel = new Panel();
         playlistSeparator = new Panel();
         playlistHeaderLabel = new Label();
@@ -130,12 +134,13 @@ partial class Form1
         brandLogoPictureBox = new PictureBox();
         copyrightLinkLabel = new LinkLabel();
         actionControlsPanel = new FlowLayoutPanel();
-        detailedLogCheckBox = new CheckBox();
-        topMostCheckBox = new CheckBox();
+        detailedLogCheckBox = new FlatOptionCheckBox();
+        topMostCheckBox = new FlatOptionCheckBox();
         clearButton = new RoundedButton();
         exportButton = new RoundedButton();
         waapiStatusBar = new WaapiStatusBar();
         SuspendLayout();
+        waveformHostPanel.SuspendLayout();
         logAreaPanel.SuspendLayout();
         logEditorPanel.SuspendLayout();
         logButtonPanel.SuspendLayout();
@@ -155,15 +160,35 @@ partial class Form1
         actionControlsPanel.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).BeginInit();
         //
+        // waveformHostPanel
+        //
+        waveformHostPanel.AllowDrop = true;
+        waveformHostPanel.BackColor = UiColors.WaveformScrollTrack;
+        waveformHostPanel.Controls.Add(waveformView);
+        waveformHostPanel.Controls.Add(waveformHorizontalScrollBar);
+        waveformHostPanel.Dock = DockStyle.Top;
+        waveformHostPanel.Height = 220;
+        waveformHostPanel.Name = "waveformHostPanel";
+        waveformHostPanel.TabIndex = 1;
+        waveformHostPanel.DragEnter += EditorTextBox_DragEnter;
+        waveformHostPanel.DragDrop += EditorTextBox_DragDrop;
+        //
         // waveformView
         //
         waveformView.AllowDrop = true;
         waveformView.BackColor = UiColors.WaveformBack;
-        waveformView.Dock = DockStyle.Top;
+        waveformView.Dock = DockStyle.Fill;
         waveformView.Name = "waveformView";
         waveformView.TabIndex = 1;
         waveformView.DragEnter += EditorTextBox_DragEnter;
         waveformView.DragDrop += EditorTextBox_DragDrop;
+        //
+        // waveformHorizontalScrollBar
+        //
+        waveformHorizontalScrollBar.Dock = DockStyle.Bottom;
+        waveformHorizontalScrollBar.Height = 10;
+        waveformHorizontalScrollBar.Name = "waveformHorizontalScrollBar";
+        waveformHorizontalScrollBar.TabIndex = 2;
         //
         // transportBar
         //
@@ -189,7 +214,6 @@ partial class Form1
         editorTextBox.WordWrap = true;
         editorTextBox.DragEnter += EditorTextBox_DragEnter;
         editorTextBox.DragDrop += EditorTextBox_DragDrop;
-        //
         // logButtonPanel
         //
         logButtonPanel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
@@ -796,7 +820,7 @@ partial class Form1
         Controls.Add(actionBar);
         Controls.Add(waapiStatusBar);
         Controls.Add(transportBar);
-        Controls.Add(waveformView);
+        Controls.Add(waveformHostPanel);
         ForeColor = UiColors.WindowFore;
         MaximizeBox = true;
         MinimizeBox = true;
@@ -805,6 +829,7 @@ partial class Form1
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MGA Wwise IMImporter - Version 1.00 β";
         ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).EndInit();
+        waveformHostPanel.ResumeLayout(false);
         actionControlsPanel.ResumeLayout(false);
         actionControlsPanel.PerformLayout();
         actionBar.ResumeLayout(false);
