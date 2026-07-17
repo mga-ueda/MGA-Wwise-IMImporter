@@ -8,6 +8,10 @@ internal sealed class ColorDevPanelForm : Form
 {
     private readonly Dictionary<string, Panel> _swatches = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBox> _hexInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TableLayoutPanel _root;
+    private readonly Panel _scroll;
+    private readonly TableLayoutPanel _list;
+    private readonly FlowLayoutPanel _buttons;
     private bool _suppressHexEvents;
 
     public event EventHandler? ColorsChanged;
@@ -21,45 +25,47 @@ internal sealed class ColorDevPanelForm : Form
         Size = new Size(560, 640);
         ShowInTaskbar = false;
         KeyPreview = true;
-        BackColor = Color.FromArgb(40, 40, 42);
-        ForeColor = Color.FromArgb(230, 230, 230);
+        BackColor = UiColors.ForControlBack(UiColors.ColorPanelBack);
+        ForeColor = UiColors.ColorPanelInputFore;
         Font = new Font("Yu Gothic UI", 9F);
 
-        var root = new TableLayoutPanel
+        _root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
             Padding = new Padding(8),
+            BackColor = BackColor,
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
 
-        var scroll = new Panel
+        _scroll = new Panel
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
-            BackColor = Color.FromArgb(32, 32, 34),
+            BackColor = UiColors.ForControlBack(UiColors.ColorPanelListBack),
         };
 
-        var list = new TableLayoutPanel
+        _list = new TableLayoutPanel
         {
             ColumnCount = 3,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Top,
             Padding = new Padding(4),
+            BackColor = _scroll.BackColor,
         };
         // 最長ラベル「波形リージョン塗り（通常）」などが切れない幅
-        list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250f));
-        list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48f));
-        list.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        _list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250f));
+        _list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48f));
+        _list.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
         for (var i = 0; i < UiColors.Entries.Count; i++)
         {
             var entry = UiColors.Entries[i];
-            list.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
-            list.RowCount = i + 1;
+            _list.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
+            _list.RowCount = i + 1;
 
             var nameLabel = new Label
             {
@@ -85,8 +91,8 @@ internal sealed class ColorDevPanelForm : Form
                 Dock = DockStyle.Fill,
                 Margin = new Padding(4, 3, 4, 3),
                 Font = new Font("Consolas", 9F),
-                BackColor = Color.FromArgb(28, 28, 30),
-                ForeColor = Color.FromArgb(220, 220, 220),
+                BackColor = UiColors.ForControlBack(UiColors.ColorPanelInputBack),
+                ForeColor = UiColors.ColorPanelInputFore,
                 BorderStyle = BorderStyle.FixedSingle,
                 Tag = entry.Key,
             };
@@ -94,19 +100,20 @@ internal sealed class ColorDevPanelForm : Form
             hex.KeyDown += Hex_KeyDown;
             _hexInputs[entry.Key] = hex;
 
-            list.Controls.Add(nameLabel, 0, i);
-            list.Controls.Add(swatch, 1, i);
-            list.Controls.Add(hex, 2, i);
+            _list.Controls.Add(nameLabel, 0, i);
+            _list.Controls.Add(swatch, 1, i);
+            _list.Controls.Add(hex, 2, i);
         }
 
-        scroll.Controls.Add(list);
+        _scroll.Controls.Add(_list);
 
-        var buttons = new FlowLayoutPanel
+        _buttons = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
             Padding = new Padding(0, 4, 0, 0),
+            BackColor = BackColor,
         };
 
         var closeButton = new Button { Text = "閉じる", AutoSize = true, FlatStyle = FlatStyle.System };
@@ -117,16 +124,17 @@ internal sealed class ColorDevPanelForm : Form
         {
             UiColors.ResetToDefaults();
             UiColors.SaveToIni();
+            ApplyPanelColors();
             RefreshRows();
             ColorsChanged?.Invoke(this, EventArgs.Empty);
         };
 
-        buttons.Controls.Add(closeButton);
-        buttons.Controls.Add(resetButton);
+        _buttons.Controls.Add(closeButton);
+        _buttons.Controls.Add(resetButton);
 
-        root.Controls.Add(scroll, 0, 0);
-        root.Controls.Add(buttons, 0, 1);
-        Controls.Add(root);
+        _root.Controls.Add(_scroll, 0, 0);
+        _root.Controls.Add(_buttons, 0, 1);
+        Controls.Add(_root);
 
         RefreshRows();
     }
@@ -225,6 +233,7 @@ internal sealed class ColorDevPanelForm : Form
         var alpha = UiColors.GetDefaultAlpha(key);
         var next = Color.FromArgb(alpha, parsed.R, parsed.G, parsed.B);
         entry.Set(next);
+        ApplyPanelColors();
         RefreshRows();
         UiColors.SaveToIni();
         ColorsChanged?.Invoke(this, EventArgs.Empty);
@@ -256,6 +265,7 @@ internal sealed class ColorDevPanelForm : Form
         var alpha = UiColors.GetDefaultAlpha(key);
         var next = Color.FromArgb(alpha, dialog.Color.R, dialog.Color.G, dialog.Color.B);
         entry.Set(next);
+        ApplyPanelColors();
         RefreshRows();
         UiColors.SaveToIni();
         ColorsChanged?.Invoke(this, EventArgs.Empty);
@@ -263,4 +273,27 @@ internal sealed class ColorDevPanelForm : Form
 
     private static UiColorEntry? FindEntry(string key) =>
         UiColors.Entries.FirstOrDefault(e => string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase));
+
+    private void ApplyPanelColors()
+    {
+        BackColor = UiColors.ForControlBack(UiColors.ColorPanelBack);
+        ForeColor = UiColors.ColorPanelInputFore;
+        _root.BackColor = BackColor;
+        _scroll.BackColor = UiColors.ForControlBack(UiColors.ColorPanelListBack);
+        _list.BackColor = _scroll.BackColor;
+        _buttons.BackColor = BackColor;
+
+        foreach (var label in _list.Controls.OfType<Label>())
+        {
+            label.ForeColor = ForeColor;
+        }
+
+        foreach (var input in _hexInputs.Values)
+        {
+            input.BackColor = UiColors.ForControlBack(UiColors.ColorPanelInputBack);
+            input.ForeColor = UiColors.ColorPanelInputFore;
+        }
+
+        Invalidate(true);
+    }
 }

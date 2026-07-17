@@ -4,13 +4,14 @@ partial class Form1
 {
     private System.ComponentModel.IContainer components = null;
     private WaveformView waveformView;
+    private TransportBar transportBar;
     private Panel logAreaPanel;
     private Panel logEditorPanel;
     private ShortcutForwardingRichTextBox editorTextBox;
     private FlowLayoutPanel logButtonPanel;
-    private Button logClearButton;
-    private Button logCopyButton;
-    private Button logDownloadButton;
+    private TransportIconButton logClearButton;
+    private TransportIconButton logCopyButton;
+    private TransportIconButton logDownloadButton;
     private Panel transitionTimePanel;
     private FlowLayoutPanel transitionSettingsPanel;
     private Panel transitionTimeSeparator;
@@ -50,6 +51,9 @@ partial class Form1
     private TableLayoutPanel playlistListLayout;
     private ToolTip playlistToolTip;
     private Panel actionBar;
+    private PictureBox brandLogoPictureBox;
+    private LinkLabel copyrightLinkLabel;
+    private FlowLayoutPanel actionControlsPanel;
     private CheckBox detailedLogCheckBox;
     private CheckBox topMostCheckBox;
     private RoundedButton clearButton;
@@ -58,6 +62,11 @@ partial class Form1
 
     protected override void Dispose(bool disposing)
     {
+        if (disposing)
+        {
+            brandLogoPictureBox?.Image?.Dispose();
+        }
+
         if (disposing && (components != null))
         {
             components.Dispose();
@@ -71,13 +80,14 @@ partial class Form1
     {
         components = new System.ComponentModel.Container();
         waveformView = new WaveformView();
+        transportBar = new TransportBar();
         logAreaPanel = new Panel();
         logEditorPanel = new Panel();
         editorTextBox = new ShortcutForwardingRichTextBox();
         logButtonPanel = new FlowLayoutPanel();
-        logClearButton = new Button();
-        logCopyButton = new Button();
-        logDownloadButton = new Button();
+        logClearButton = new TransportIconButton(TransportIcon.Clear);
+        logCopyButton = new TransportIconButton(TransportIcon.Copy);
+        logDownloadButton = new TransportIconButton(TransportIcon.Download);
         transitionTimePanel = new Panel();
         transitionSettingsPanel = new FlowLayoutPanel();
         transitionTimeSeparator = new Panel();
@@ -117,6 +127,9 @@ partial class Form1
         playlistListLayout = new TableLayoutPanel();
         playlistToolTip = new ToolTip(components);
         actionBar = new Panel();
+        brandLogoPictureBox = new PictureBox();
+        copyrightLinkLabel = new LinkLabel();
+        actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new CheckBox();
         topMostCheckBox = new CheckBox();
         clearButton = new RoundedButton();
@@ -139,6 +152,8 @@ partial class Form1
         playlistSelectorPanel.SuspendLayout();
         playlistScrollPanel.SuspendLayout();
         actionBar.SuspendLayout();
+        actionControlsPanel.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).BeginInit();
         //
         // waveformView
         //
@@ -150,6 +165,13 @@ partial class Form1
         waveformView.DragEnter += EditorTextBox_DragEnter;
         waveformView.DragDrop += EditorTextBox_DragDrop;
         //
+        // transportBar
+        //
+        transportBar.Dock = DockStyle.Top;
+        transportBar.Name = "transportBar";
+        transportBar.TabIndex = 2;
+        transportBar.CommandInvoked += TransportBar_CommandInvoked;
+        //
         // editorTextBox
         //
         editorTextBox.AllowDrop = true;
@@ -157,7 +179,7 @@ partial class Form1
         editorTextBox.BorderStyle = BorderStyle.None;
         editorTextBox.DetectUrls = false;
         editorTextBox.Dock = DockStyle.Fill;
-        editorTextBox.Font = new Font("MS Gothic", 10F);
+        editorTextBox.Font = new Font(AppFonts.LogFamilyName, 10F);
         editorTextBox.ForeColor = UiColors.LogDefault;
         editorTextBox.HideSelection = false;
         editorTextBox.Name = "editorTextBox";
@@ -175,7 +197,7 @@ partial class Form1
         logButtonPanel.FlowDirection = FlowDirection.RightToLeft;
         logButtonPanel.Name = "logButtonPanel";
         logButtonPanel.Padding = new Padding(2, 0, 2, 2);
-        logButtonPanel.Size = new Size(148, 20);
+        logButtonPanel.Size = new Size(82, 28);
         logButtonPanel.TabIndex = 1;
         logButtonPanel.WrapContents = false;
         logButtonPanel.Controls.Add(logDownloadButton);
@@ -184,35 +206,32 @@ partial class Form1
         //
         // logClearButton
         //
-        logClearButton.FlatStyle = FlatStyle.Flat;
-        logClearButton.Font = new Font("Yu Gothic UI", 6F);
+        logClearButton.AccessibleName = "Clear log";
         logClearButton.Margin = new Padding(2, 0, 0, 1);
         logClearButton.Name = "logClearButton";
-        logClearButton.Size = new Size(42, 18);
+        logClearButton.Size = new Size(24, 24);
         logClearButton.TabIndex = 0;
-        logClearButton.Text = "クリア";
+        playlistToolTip.SetToolTip(logClearButton, "Clear");
         logClearButton.Click += LogClearButton_Click;
         //
         // logCopyButton
         //
-        logCopyButton.FlatStyle = FlatStyle.Flat;
-        logCopyButton.Font = new Font("Yu Gothic UI", 6F);
+        logCopyButton.AccessibleName = "Copy log";
         logCopyButton.Margin = new Padding(2, 0, 0, 1);
         logCopyButton.Name = "logCopyButton";
-        logCopyButton.Size = new Size(42, 18);
+        logCopyButton.Size = new Size(24, 24);
         logCopyButton.TabIndex = 1;
-        logCopyButton.Text = "コピー";
+        playlistToolTip.SetToolTip(logCopyButton, "Copy");
         logCopyButton.Click += LogCopyButton_Click;
         //
         // logDownloadButton
         //
-        logDownloadButton.FlatStyle = FlatStyle.Flat;
-        logDownloadButton.Font = new Font("Yu Gothic UI", 6F);
+        logDownloadButton.AccessibleName = "Download log";
         logDownloadButton.Margin = new Padding(2, 0, 0, 1);
         logDownloadButton.Name = "logDownloadButton";
-        logDownloadButton.Size = new Size(54, 18);
+        logDownloadButton.Size = new Size(24, 24);
         logDownloadButton.TabIndex = 2;
-        logDownloadButton.Text = "ダウンロード";
+        playlistToolTip.SetToolTip(logDownloadButton, "Download");
         logDownloadButton.Click += LogDownloadButton_Click;
         //
         // logEditorPanel
@@ -246,7 +265,7 @@ partial class Form1
         //
         // transitionSettingsPanel
         //
-        transitionSettingsPanel.AutoScroll = true;
+        transitionSettingsPanel.AutoScroll = false;
         transitionSettingsPanel.Dock = DockStyle.Fill;
         transitionSettingsPanel.FlowDirection = FlowDirection.LeftToRight;
         transitionSettingsPanel.Name = "transitionSettingsPanel";
@@ -610,7 +629,6 @@ partial class Form1
         playlistSelectorPanel.Size = new Size(240, 100);
         playlistSelectorPanel.TabIndex = 1;
         playlistSelectorPanel.Controls.Add(playlistScrollPanel);
-        playlistSelectorPanel.Controls.Add(playlistHeaderLabel);
         playlistSelectorPanel.Controls.Add(playlistSeparator);
         playlistSelectorPanel.DragEnter += EditorTextBox_DragEnter;
         playlistSelectorPanel.DragDrop += EditorTextBox_DragDrop;
@@ -645,6 +663,7 @@ partial class Form1
         playlistScrollPanel.Padding = new Padding(9, 0, 8, 8);
         playlistScrollPanel.TabIndex = 1;
         playlistScrollPanel.Controls.Add(playlistListLayout);
+        playlistScrollPanel.Controls.Add(playlistHeaderLabel);
         playlistScrollPanel.DragEnter += EditorTextBox_DragEnter;
         playlistScrollPanel.DragDrop += EditorTextBox_DragDrop;
         //
@@ -668,57 +687,97 @@ partial class Form1
         actionBar.Dock = DockStyle.Bottom;
         actionBar.Height = 44;
         actionBar.Name = "actionBar";
-        actionBar.Padding = new Padding(10, 6, 10, 6);
+        actionBar.Padding = new Padding(10, 6, 8, 6);
         actionBar.TabIndex = 2;
-        actionBar.Controls.Add(detailedLogCheckBox);
-        actionBar.Controls.Add(topMostCheckBox);
-        actionBar.Controls.Add(clearButton);
-        actionBar.Controls.Add(exportButton);
-        actionBar.Resize += (_, _) => LayoutActionBarControls();
+        actionBar.Controls.Add(brandLogoPictureBox);
+        actionBar.Controls.Add(copyrightLinkLabel);
+        actionBar.Controls.Add(actionControlsPanel);
+        //
+        // brandLogoPictureBox
+        //
+        brandLogoPictureBox.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        brandLogoPictureBox.BackColor = Color.Transparent;
+        brandLogoPictureBox.Location = new Point(10, 6);
+        brandLogoPictureBox.Name = "brandLogoPictureBox";
+        brandLogoPictureBox.Size = new Size(214, 32);
+        brandLogoPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
+        brandLogoPictureBox.TabStop = false;
+        //
+        // copyrightLinkLabel
+        //
+        copyrightLinkLabel.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        copyrightLinkLabel.AutoEllipsis = true;
+        copyrightLinkLabel.BackColor = Color.Transparent;
+        copyrightLinkLabel.Font = new Font("Yu Gothic UI", 7.5F);
+        copyrightLinkLabel.LinkBehavior = LinkBehavior.HoverUnderline;
+        copyrightLinkLabel.Location = new Point(232, 16);
+        copyrightLinkLabel.Name = "copyrightLinkLabel";
+        copyrightLinkLabel.Size = new Size(300, 22);
+        copyrightLinkLabel.TabIndex = 0;
+        copyrightLinkLabel.TabStop = true;
+        copyrightLinkLabel.Text = "© 2026 MIYABI GAME AUDIO INC.  Version 1.00 β  GitHub";
+        copyrightLinkLabel.TextAlign = ContentAlignment.BottomLeft;
+        copyrightLinkLabel.LinkArea = new LinkArea(47, 6);
+        copyrightLinkLabel.LinkClicked += CopyrightLinkLabel_LinkClicked;
+        //
+        // actionControlsPanel
+        //
+        actionControlsPanel.AutoSize = true;
+        actionControlsPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        actionControlsPanel.Dock = DockStyle.Right;
+        actionControlsPanel.FlowDirection = FlowDirection.RightToLeft;
+        actionControlsPanel.Name = "actionControlsPanel";
+        actionControlsPanel.Padding = new Padding(0, 0, 0, 0);
+        actionControlsPanel.TabIndex = 1;
+        actionControlsPanel.WrapContents = false;
+        actionControlsPanel.Controls.Add(exportButton);
+        actionControlsPanel.Controls.Add(clearButton);
+        actionControlsPanel.Controls.Add(topMostCheckBox);
+        actionControlsPanel.Controls.Add(detailedLogCheckBox);
         //
         // detailedLogCheckBox
         //
-        detailedLogCheckBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         detailedLogCheckBox.AutoSize = true;
         detailedLogCheckBox.Checked = true;
         detailedLogCheckBox.CheckState = CheckState.Checked;
         detailedLogCheckBox.Font = new Font("Yu Gothic UI", 9F);
+        detailedLogCheckBox.Margin = new Padding(0, 8, 8, 0);
         detailedLogCheckBox.Name = "detailedLogCheckBox";
         detailedLogCheckBox.TabIndex = 0;
-        detailedLogCheckBox.Text = "詳細ログ";
+        detailedLogCheckBox.Text = "Debug Log";
         detailedLogCheckBox.UseVisualStyleBackColor = true;
         detailedLogCheckBox.CheckedChanged += DetailedLogCheckBox_CheckedChanged;
         //
         // topMostCheckBox
         //
-        topMostCheckBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         topMostCheckBox.AutoSize = true;
         topMostCheckBox.Font = new Font("Yu Gothic UI", 9F);
+        topMostCheckBox.Margin = new Padding(0, 8, 8, 0);
         topMostCheckBox.Name = "topMostCheckBox";
         topMostCheckBox.TabIndex = 1;
-        topMostCheckBox.Text = "最前面";
+        topMostCheckBox.Text = "Always on Top";
         topMostCheckBox.UseVisualStyleBackColor = true;
         topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
         //
         // clearButton
         //
-        clearButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         clearButton.Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold);
+        clearButton.Margin = new Padding(0, 0, 8, 0);
         clearButton.Name = "clearButton";
-        clearButton.Size = new Size(88, 32);
+        clearButton.Size = new Size(108, 32);
         clearButton.TabIndex = 2;
-        clearButton.Text = "クリア";
+        clearButton.Text = "CLEAR";
         clearButton.Click += ClearButton_Click;
         //
         // exportButton
         //
-        exportButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         exportButton.Enabled = false;
         exportButton.Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold);
+        exportButton.Margin = Padding.Empty;
         exportButton.Name = "exportButton";
-        exportButton.Size = new Size(120, 32);
+        exportButton.Size = new Size(108, 32);
         exportButton.TabIndex = 3;
-        exportButton.Text = "エクスポート";
+        exportButton.Text = "EXPORT";
         exportButton.Click += ExportButton_Click;
         //
         // waapiStatusBar
@@ -736,6 +795,7 @@ partial class Form1
         Controls.Add(logAreaPanel);
         Controls.Add(actionBar);
         Controls.Add(waapiStatusBar);
+        Controls.Add(transportBar);
         Controls.Add(waveformView);
         ForeColor = UiColors.WindowFore;
         MaximizeBox = true;
@@ -743,7 +803,10 @@ partial class Form1
         MinimumSize = new Size(480, 320);
         Name = "Form1";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "MGA Wwise IMImporter";
+        Text = "MGA Wwise IMImporter - Version 1.00 β";
+        ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).EndInit();
+        actionControlsPanel.ResumeLayout(false);
+        actionControlsPanel.PerformLayout();
         actionBar.ResumeLayout(false);
         actionBar.PerformLayout();
         logButtonPanel.ResumeLayout(false);

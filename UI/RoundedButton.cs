@@ -16,9 +16,19 @@ internal sealed class RoundedButton : Button
 
     public Color PressedBackColor { get; set; }
 
-    public Color DisabledBackColor { get; set; } = Color.FromArgb(70, 70, 74);
+    public Color DisabledBackColor { get; set; } = UiColors.ForControlBack(UiColors.ActionButtonInnerBack);
 
-    public Color DisabledForeColor { get; set; } = Color.FromArgb(150, 150, 154);
+    public Color DisabledForeColor { get; set; } = UiColors.ActionButtonDisabledFore;
+
+    public Color BorderColor { get; set; }
+
+    public Color HoverBorderColor { get; set; }
+
+    public Color PressedBorderColor { get; set; }
+
+    public Color DisabledBorderColor { get; set; }
+
+    public int BorderSize { get; set; }
 
     public RoundedButton()
     {
@@ -88,6 +98,22 @@ internal sealed class RoundedButton : Button
         using var brush = new SolidBrush(fill);
         g.FillPath(brush, path);
 
+        var borderColor = ResolveBorderColor();
+        if (BorderSize > 0 && !borderColor.IsEmpty)
+        {
+            var inset = BorderSize / 2f;
+            var borderBounds = new RectangleF(
+                inset,
+                inset,
+                Math.Max(0f, Width - 1f - BorderSize),
+                Math.Max(0f, Height - 1f - BorderSize));
+            using var borderPath = CreateRoundedRectanglePath(
+                Rectangle.Round(borderBounds),
+                Math.Max(0, CornerRadius - (int)Math.Ceiling(inset)));
+            using var pen = new Pen(borderColor, BorderSize);
+            g.DrawPath(pen, borderPath);
+        }
+
         TextRenderer.DrawText(
             g,
             Text,
@@ -118,6 +144,26 @@ internal sealed class RoundedButton : Button
         }
 
         return BackColor;
+    }
+
+    private Color ResolveBorderColor()
+    {
+        if (!Enabled && !DisabledBorderColor.IsEmpty)
+        {
+            return DisabledBorderColor;
+        }
+
+        if (_pressed && !PressedBorderColor.IsEmpty)
+        {
+            return PressedBorderColor;
+        }
+
+        if (_hover && !HoverBorderColor.IsEmpty)
+        {
+            return HoverBorderColor;
+        }
+
+        return BorderColor;
     }
 
     private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)

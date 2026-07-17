@@ -19,10 +19,6 @@ internal sealed class BarJumpDialogForm : Form
     private const int ShadowOffsetX = 0;
     private const int ShadowOffsetY = 5;
     private const int ShadowMaxAlpha = 10;
-    private static readonly Color BodyColor = Color.FromArgb(40, 40, 42);
-    private static readonly Color InputBackColor = Color.FromArgb(28, 28, 30);
-    private static readonly Color TextColor = Color.FromArgb(230, 230, 230);
-
     private readonly int _pad;
     private readonly Rectangle _contentBounds;
     private readonly Rectangle _inputBounds;
@@ -45,15 +41,15 @@ internal sealed class BarJumpDialogForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         KeyPreview = true;
-        BackColor = Color.Black;
+        BackColor = UiColors.ForControlBack(UiColors.DialogShadow);
         ClientSize = new Size(ContentWidth + _pad * 2, ContentHeight + _pad * 2);
 
         _barNumberBox = new TextBox
         {
             Dock = DockStyle.Fill,
             Font = new Font("Yu Gothic UI", 14F),
-            BackColor = InputBackColor,
-            ForeColor = TextColor,
+            BackColor = UiColors.ForControlBack(UiColors.DialogInputBack),
+            ForeColor = UiColors.DialogFore,
             BorderStyle = BorderStyle.None,
             TextAlign = HorizontalAlignment.Center,
             Margin = Padding.Empty,
@@ -71,7 +67,7 @@ internal sealed class BarJumpDialogForm : Form
             FormBorderStyle = FormBorderStyle.None,
             ShowInTaskbar = false,
             StartPosition = FormStartPosition.Manual,
-            BackColor = InputBackColor,
+            BackColor = UiColors.ForControlBack(UiColors.DialogInputBack),
             Size = new Size(_inputBounds.Width - 4, _inputBounds.Height - 4),
             Padding = Padding.Empty,
         };
@@ -259,26 +255,26 @@ internal sealed class BarJumpDialogForm : Form
 
         // 枠線なし：本体と入力ウェルを塗りだけ
         using (var bodyPath = CreateRoundedRectanglePath(_contentBounds, CornerRadius))
-        using (var bodyBrush = new SolidBrush(BodyColor))
+        using (var bodyBrush = new SolidBrush(UiColors.DialogBodyBack))
         {
             g.FillPath(bodyBrush, bodyPath);
         }
 
         using (var inputPath = CreateRoundedRectanglePath(_inputBounds, InputCornerRadius))
-        using (var inputBrush = new SolidBrush(InputBackColor))
+        using (var inputBrush = new SolidBrush(UiColors.DialogInputBack))
         {
             g.FillPath(inputBrush, inputPath);
         }
 
         var titleRect = new Rectangle(_contentBounds.X, _contentBounds.Y + 8, ContentWidth, 22);
         using var titleFont = new Font("Yu Gothic UI", 9F);
-        using var titleBrush = new SolidBrush(TextColor);
+        using var titleBrush = new SolidBrush(UiColors.DialogFore);
         using var format = new StringFormat
         {
             Alignment = StringAlignment.Center,
             LineAlignment = StringAlignment.Center,
         };
-        g.DrawString("小節ジャンプ", titleFont, titleBrush, titleRect, format);
+        g.DrawString("Go To Measure", titleFont, titleBrush, titleRect, format);
 
         return bmp;
     }
@@ -300,7 +296,7 @@ internal sealed class BarJumpDialogForm : Form
 
             var bounds = Rectangle.Inflate(shadowBase, i, i);
             using var path = CreateRoundedRectanglePath(bounds, CornerRadius + i);
-            using var brush = new SolidBrush(Color.FromArgb(alpha, 0, 0, 0));
+            using var brush = new SolidBrush(Color.FromArgb(alpha, UiColors.DialogShadow));
             g.FillPath(brush, path);
         }
     }

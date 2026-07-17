@@ -51,6 +51,7 @@ public partial class Form1 : Form
     private int? _manualPlaylistPartNumber;
     private int? _hoveredPlaylistPartNumber;
     private int? _hoveredPlaylistListPartNumber;
+    private int? _lastAutoScrolledPlaylistPartNumber;
     private long _pendingPlaylistTransitionGeneration;
     private long _pendingPlaylistBoundarySample;
     private long _pendingPlaylistSyncBoundarySample;
@@ -71,10 +72,16 @@ public partial class Form1 : Form
     public Form1()
     {
         UiColors.LoadFromIni();
+        AppFonts.EnsureRegistered();
         InitializeComponent();
-        actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
+        brandLogoPictureBox.Image = LoadBrandLogo();
+        // 初回レイアウト途中のフレームを見せず、描画完了後に一度で表示する。
+        Opacity = 0d;
+        actionBar.BackColor = UiColors.ForControlBack(UiColors.ActionBarBack);
         ApplyActionBarButtonColors();
-        LayoutActionBarControls();
+        ApplyActionBarTextColors();
+        transportBar.ApplyColors();
+        UpdateTransportPlaybackState();
         ClearPlaylistChoices("Playlist はありません");
         ApplyPlaylistSelectorColors();
         KeyPreview = true;
@@ -111,6 +118,8 @@ public partial class Form1 : Form
                 waveformView.SetPlayhead(resetProgress, recordTrail: false, ensureVisible: true);
                 waveformView.SetExitPlayhead(null);
                 waveformView.SetFadeOutPlayhead(null);
+                UpdateTransportPlaybackState();
+                UpdateTransportPosition();
             });
         };
         _audioPlayer.Diagnostic += (_, message) =>
@@ -139,6 +148,8 @@ public partial class Form1 : Form
         };
         editorTextBox.ShortcutHandler = TryProcessWaveformShortcut;
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
+        playlistScrollPanel.HandleCreated += (_, _) => ApplyDarkScrollChrome(playlistScrollPanel);
+        transportBar.HandleCreated += (_, _) => ApplyDarkScrollChrome(transportBar);
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -147,11 +158,29 @@ public partial class Form1 : Form
         ApplyDarkTitleBar();
         ApplyFixedLogLineSpacing();
         ApplyDarkEditorChrome();
+        ApplyDarkScrollableChrome();
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        BeginInvoke(CompleteInitialRender);
+    }
+
+    private void CompleteInitialRender()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        // Visible かつ透明な状態で全コントロールのレイアウトと初回描画を同期完了させる。
+        PerformLayout();
+        Refresh();
+        Update();
+        Opacity = 1d;
+        Activate();
+
         BeginInvoke(RunStartupSequenceAsync);
     }
 
@@ -292,7 +321,9 @@ public partial class Form1 : Form
     {
         // Playlist一覧でも Space は全体の再生／一時停止を優先する。
         // 矢印キーだけはボタン間のフォーカス移動へ渡す。
-        if ((playlistSelectorPanel.ContainsFocus || transitionTimePanel.ContainsFocus)
+        if ((playlistSelectorPanel.ContainsFocus
+                || transitionTimePanel.ContainsFocus
+                || transportBar.ContainsFocus)
             && keyData is Keys.Up or Keys.Down or Keys.Left or Keys.Right)
         {
             return base.ProcessCmdKey(ref msg, keyData);
@@ -474,6 +505,48 @@ public partial class Form1 : Form
         return false;
     }
 
+    private void TransportBar_CommandInvoked(object? sender, TransportCommand command)
+    {
+        var keyData = command switch
+        {
+            TransportCommand.TogglePlayback => Keys.Space,
+            TransportCommand.JumpToBar => Keys.G,
+            TransportCommand.GoToStart => Keys.Control | Keys.Home,
+            TransportCommand.PreviousRegion => Keys.Control | Keys.Left,
+            TransportCommand.PreviousBar => Keys.Home,
+            TransportCommand.PreviousPage => Keys.PageUp,
+            TransportCommand.NextPage => Keys.PageDown,
+            TransportCommand.NextBar => Keys.End,
+            TransportCommand.NextRegion => Keys.Control | Keys.Right,
+            TransportCommand.GoToEnd => Keys.Control | Keys.End,
+            TransportCommand.TimeZoomIn => Keys.Up,
+            TransportCommand.TimeZoomOut => Keys.Down,
+            TransportCommand.TimeZoomMax => Keys.Control | Keys.Up,
+            TransportCommand.TimeZoomReset => Keys.Control | Keys.Down,
+            TransportCommand.AmpZoomIn => Keys.Shift | Keys.Up,
+            TransportCommand.AmpZoomOut => Keys.Shift | Keys.Down,
+            TransportCommand.AmpZoomMax => Keys.Control | Keys.Shift | Keys.Up,
+            TransportCommand.AmpZoomReset => Keys.Control | Keys.Shift | Keys.Down,
+            _ => Keys.None,
+        };
+
+        if (keyData == Keys.None)
+        {
+            return;
+        }
+
+        TryProcessWaveformShortcut(keyData);
+
+        // キーボードではキーを離すまで一時停止する「戻る」操作も、
+        // ボタンではクリック完了時点をキーアップ相当として直ちに再開する。
+        if (_resumePlaybackAfterBackwardSeek)
+        {
+            ResumePlaybackAfterBackwardSeek();
+        }
+
+        UpdateTransportPlaybackState();
+    }
+
     /// <summary>
     /// 戻る方向ジャンプ中は再生ヘッドが進まないよう一時停止する（キーアップで再開）。
     /// </summary>
@@ -494,6 +567,7 @@ public partial class Form1 : Form
 
         _playheadTimer.Stop();
         _audioPlayer.Pause();
+        UpdateTransportPlaybackState();
         SeekPlayback(_smoothProgress);
         _resumePlaybackAfterBackwardSeek = true;
         UpdatePlayhead();
@@ -517,6 +591,7 @@ public partial class Form1 : Form
         AnchorPlayhead(_smoothProgress);
         _playheadTimer.Start();
         UpdatePlayhead();
+        UpdateTransportPlaybackState();
     }
 
     private void ShowColorDevPanel()
@@ -552,29 +627,55 @@ public partial class Form1 : Form
         logButtonPanel.BackColor = editorTextBox.BackColor;
         ApplyLogButtonColors();
         ApplyPlaylistSelectorColors();
-        actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
+        actionBar.BackColor = UiColors.ForControlBack(UiColors.ActionBarBack);
         ApplyActionBarButtonColors();
-        topMostCheckBox.ForeColor = UiColors.WindowFore;
-        detailedLogCheckBox.ForeColor = UiColors.WindowFore;
+        ApplyActionBarTextColors();
+        topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
+        detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         waapiStatusBar.ApplyColors();
+        transportBar.ApplyColors();
         waveformView.RefreshAppearance();
+    }
+
+    private void ApplyActionBarTextColors()
+    {
+        copyrightLinkLabel.ForeColor = UiColors.ActionCopyrightFore;
+        copyrightLinkLabel.LinkColor = UiColors.ActionLinkFore;
+        copyrightLinkLabel.ActiveLinkColor = UiColors.ActionLinkHoverFore;
+        copyrightLinkLabel.VisitedLinkColor = UiColors.ActionLinkFore;
     }
 
     private void ApplyActionBarButtonColors()
     {
-        exportButton.BackColor = Color.FromArgb(30, 110, 210);
-        exportButton.ForeColor = Color.White;
-        exportButton.HoverBackColor = Color.FromArgb(45, 130, 230);
-        exportButton.PressedBackColor = Color.FromArgb(20, 90, 180);
+        var innerBack = UiColors.ForControlBack(UiColors.ActionButtonInnerBack);
 
-        clearButton.BackColor = Color.FromArgb(190, 50, 50);
-        clearButton.ForeColor = Color.White;
-        clearButton.HoverBackColor = Color.FromArgb(210, 70, 70);
-        clearButton.PressedBackColor = Color.FromArgb(160, 35, 35);
+        exportButton.BackColor = innerBack;
+        exportButton.ForeColor = UiColors.ExportButtonFore;
+        exportButton.HoverBackColor = innerBack;
+        exportButton.PressedBackColor = innerBack;
+        exportButton.DisabledBackColor = innerBack;
+        exportButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
+        exportButton.BorderColor = UiColors.ForControlBack(UiColors.ExportButtonBack);
+        exportButton.HoverBorderColor = UiColors.ForControlBack(UiColors.ExportButtonHoverBack);
+        exportButton.PressedBorderColor = UiColors.ForControlBack(UiColors.ExportButtonPressedBack);
+        exportButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
+        exportButton.BorderSize = 2;
 
-        topMostCheckBox.ForeColor = UiColors.WindowFore;
+        clearButton.BackColor = innerBack;
+        clearButton.ForeColor = UiColors.ClearButtonFore;
+        clearButton.HoverBackColor = innerBack;
+        clearButton.PressedBackColor = innerBack;
+        clearButton.DisabledBackColor = innerBack;
+        clearButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
+        clearButton.BorderColor = UiColors.ForControlBack(UiColors.ClearButtonBack);
+        clearButton.HoverBorderColor = UiColors.ForControlBack(UiColors.ClearButtonHoverBack);
+        clearButton.PressedBorderColor = UiColors.ForControlBack(UiColors.ClearButtonPressedBack);
+        clearButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
+        clearButton.BorderSize = 2;
+
+        topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = actionBar.BackColor;
-        detailedLogCheckBox.ForeColor = UiColors.WindowFore;
+        detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.BackColor = actionBar.BackColor;
     }
 
@@ -582,10 +683,12 @@ public partial class Form1 : Form
     {
         foreach (var button in new[] { logClearButton, logCopyButton, logDownloadButton })
         {
-            button.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
-            button.ForeColor = UiColors.LogDefault;
-            button.FlatAppearance.BorderColor = UiColors.ForControlBack(UiColors.StatusBarBorder);
-            button.FlatAppearance.MouseOverBackColor = UiColors.ForControlBack(UiColors.MusicPlaylistLaneBg);
+            button.BackColor = UiColors.ForControlBack(UiColors.LogButtonBack);
+            button.ForeColor = UiColors.LogButtonFore;
+            button.HoverBackColor = UiColors.ForControlBack(UiColors.LogButtonHoverBack);
+            button.PressedBackColor = UiColors.ForControlBack(UiColors.LogButtonHoverBack);
+            button.AccentColor = UiColors.ForControlBack(UiColors.LogButtonBorder);
+            button.ActiveForeColor = UiColors.LogButtonFore;
         }
     }
 
@@ -616,7 +719,7 @@ public partial class Form1 : Form
         playlistListLayout.BackColor = back;
         playlistHeaderLabel.BackColor = back;
         playlistHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
-        playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.StatusBarBorder);
+        playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
         transitionTimePanel.BackColor = back;
         transitionSettingsPanel.BackColor = back;
         fadeInSectionPanel.BackColor = back;
@@ -636,7 +739,7 @@ public partial class Form1 : Form
         destinationSyncHeaderLabel.BackColor = back;
         destinationSyncHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         transitionTimeSeparator.BackColor =
-            UiColors.ForControlBack(UiColors.StatusBarBorder);
+            UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
         foreach (var radio in new[]
         {
             fadeInNoneRadio,
@@ -659,7 +762,7 @@ public partial class Form1 : Form
         })
         {
             radio.BackColor = back;
-            radio.ForeColor = Color.White;
+            radio.ForeColor = UiColors.PlaylistOptionFore;
         }
 
         foreach (Control control in playlistListLayout.Controls)
@@ -712,6 +815,50 @@ public partial class Form1 : Form
                     UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
                     _playlistTransitionGlowLevel);
             }
+        }
+
+        EnsureHighlightedPlaylistVisible();
+    }
+
+    private void EnsureHighlightedPlaylistVisible()
+    {
+        int? targetPartNumber = null;
+        if (_pendingPlaylistTransitionGeneration != 0)
+        {
+            targetPartNumber = _requestedPlaylistPartNumber;
+        }
+
+        targetPartNumber ??= _hoveredPlaylistPartNumber;
+        if (targetPartNumber is null && _audioPlayer.IsPlaying)
+        {
+            targetPartNumber = _automaticPlaylistPlayback
+                ? _activeAutomaticPlaylistPartNumber
+                : _manualPlaylistPartNumber;
+        }
+
+        targetPartNumber ??= _playlistTransitionGlowLevel > 0d
+            ? _playlistTransitionGlowPartNumber
+            : null;
+
+        if (_lastAutoScrolledPlaylistPartNumber == targetPartNumber)
+        {
+            return;
+        }
+
+        _lastAutoScrolledPlaylistPartNumber = targetPartNumber;
+        if (targetPartNumber is not int partNumber)
+        {
+            return;
+        }
+
+        var targetButton = playlistListLayout.Controls
+            .OfType<Button>()
+            .FirstOrDefault(button =>
+                button.Tag is WaveformOutputPart part
+                && part.Number == partNumber);
+        if (targetButton is not null)
+        {
+            playlistScrollPanel.ScrollControlIntoView(targetButton);
         }
     }
 
@@ -931,6 +1078,7 @@ public partial class Form1 : Form
         _manualPlaylistPartNumber = null;
         _hoveredPlaylistPartNumber = null;
         _hoveredPlaylistListPartNumber = null;
+        _lastAutoScrolledPlaylistPartNumber = null;
         ClearPlaylistTransitionGlow();
         waveformView.SetPlaylistHoverHighlight(null);
         var controls = playlistListLayout.Controls.Cast<Control>().ToArray();
@@ -1091,6 +1239,7 @@ public partial class Form1 : Form
             waveformView.SetExitPlayhead(null);
             waveformView.SetFadeOutPlayhead(null);
             _playheadTimer.Start();
+            UpdateTransportPlaybackState();
             ApplyPlaylistSelectorColors();
             WritePlaybackDiagnostic(
                 "playlist.immediate-started",
@@ -1722,23 +1871,16 @@ public partial class Form1 : Form
         ApplyPlaylistSelectorColors();
     }
 
-    private void LayoutActionBarControls()
+    private static Image? LoadBrandLogo()
     {
-        const int pad = 10;
-        const int gap = 8;
-        var right = actionBar.ClientSize.Width - pad;
-        var buttonY = Math.Max(0, (actionBar.ClientSize.Height - exportButton.Height) / 2);
+        var path = Path.Combine(AppContext.BaseDirectory, "Branding", "MiyabiGameAudio.png");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
 
-        exportButton.Location = new Point(right - exportButton.Width, buttonY);
-        clearButton.Location = new Point(exportButton.Left - gap - clearButton.Width, buttonY);
-
-        var checkY = Math.Max(0, (actionBar.ClientSize.Height - topMostCheckBox.PreferredSize.Height) / 2);
-        topMostCheckBox.Location = new Point(
-            clearButton.Left - gap - topMostCheckBox.PreferredSize.Width,
-            checkY);
-        detailedLogCheckBox.Location = new Point(
-            topMostCheckBox.Left - gap - detailedLogCheckBox.PreferredSize.Width,
-            checkY);
+        using var source = Image.FromFile(path);
+        return new Bitmap(source);
     }
 
     private void UpdateExportButtonState()
@@ -1752,6 +1894,27 @@ public partial class Form1 : Form
     {
         TopMost = topMostCheckBox.Checked;
         DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
+    }
+
+    private void CopyrightLinkLabel_LinkClicked(object? sender, LinkLabelLinkClickedEventArgs e)
+    {
+        const string repositoryUrl = "https://github.com/mga-ueda/MGA-Wwise-IMImporter";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(repositoryUrl)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Unable to open GitHub",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     private void DetailedLogCheckBox_CheckedChanged(object? sender, EventArgs e)
@@ -1826,7 +1989,9 @@ public partial class Form1 : Form
         _playheadTimer.Stop();
         _audioPlayer.Stop();
         _audioPlayer.Clear();
+        UpdateTransportPlaybackState();
         waveformView.ClearPreview();
+        UpdateTransportPosition();
         editorTextBox.Clear();
         ClearPlaylistChoices("Playlist はありません");
         UpdateExportButtonState();
@@ -1835,7 +2000,19 @@ public partial class Form1 : Form
     private void RestoreWindowBounds()
     {
         var settings = WindowSettings.Load();
-        if (settings is null || !settings.TryApply(this))
+        if (settings is null)
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+            return;
+        }
+
+        if (settings.Width > 0 && settings.Height > 0)
+        {
+            // 起動時に INI から読んだ外形サイズを、このセッションの縮小限界にする。
+            MinimumSize = new Size(settings.Width, settings.Height);
+        }
+
+        if (!settings.TryApply(this))
         {
             StartPosition = FormStartPosition.CenterScreen;
         }
@@ -1871,6 +2048,23 @@ public partial class Form1 : Form
 
         // Win10 1809+ / Win11: Explorer ダーク・スクロールバー
         _ = SetWindowTheme(editorTextBox.Handle, "DarkMode_Explorer", null);
+    }
+
+    private void ApplyDarkScrollableChrome()
+    {
+        ApplyDarkScrollChrome(playlistScrollPanel);
+        ApplyDarkScrollChrome(transportBar);
+    }
+
+    private static void ApplyDarkScrollChrome(Control control)
+    {
+        if (!control.IsHandleCreated)
+        {
+            return;
+        }
+
+        _ = SetWindowTheme(control.Handle, "DarkMode_Explorer", null);
+        control.Invalidate(invalidateChildren: true);
     }
 
     private void ApplyFixedLogLineSpacing(bool entireDocument = false)
@@ -1950,12 +2144,14 @@ public partial class Form1 : Form
         var exportGeneration = ++_exportGeneration;
         _loadedPreview = null;
         _exportBusy = false;
+        UpdateTransportPosition();
         ClearPendingPlaylistUiTransition();
         ClearPlaylistChoices("読み込み中…");
         UpdateExportButtonState();
         waveformView.ClearExportHighlight();
         _playheadTimer.Stop();
         _audioPlayer.Stop();
+        UpdateTransportPlaybackState();
 
         // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
         waveformView.CommitDarkFrame();
@@ -1980,6 +2176,7 @@ public partial class Form1 : Form
             _audioPlayer.Clear();
             waveformView.ClearPreview();
             _loadedPreview = null;
+            UpdateTransportPosition();
             ClearPlaylistChoices("Playlist を取得できませんでした");
             UpdateExportButtonState();
             return;
@@ -2008,6 +2205,7 @@ public partial class Form1 : Form
         }
 
         _loadedPreview = preview;
+        UpdateTransportPosition();
         PopulatePlaylistChoices(preview.OutputParts);
         WritePlaybackDiagnostic(
             "source.loaded",
@@ -2388,7 +2586,7 @@ public partial class Form1 : Form
         if (!waveformView.TrySeekToBarNumber(barNumber))
         {
             AppendReport(
-                $"=== 小節ジャンプ ==={Environment.NewLine}"
+                $"=== Go To Measure ==={Environment.NewLine}"
                 + $"Message : 小節 {barNumber} が見つかりません。{Environment.NewLine}{Environment.NewLine}");
         }
     }
@@ -2432,9 +2630,91 @@ public partial class Form1 : Form
 
         UpdatePlayhead();
         ApplyPlaylistSelectorColors();
+        UpdateTransportPlaybackState();
         WritePlaybackDiagnostic(
             "transport.toggle-completed",
             new { isPlaying = _audioPlayer.IsPlaying });
+    }
+
+    private void UpdateTransportPlaybackState()
+    {
+        transportBar.IsPlaying = _audioPlayer.IsPlaying;
+    }
+
+    private void UpdateTransportPosition()
+    {
+        if (_loadedPreview is not { } preview
+            || preview.WavInfo.FrameCount <= 0
+            || preview.WavInfo.SampleRate == 0
+            || preview.Bars.Count == 0)
+        {
+            transportBar.SetPosition(null);
+            return;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        var timeSample = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
+        timeSample = Math.Clamp(timeSample, 0L, frameCount);
+        var positionSample = Math.Min(timeSample, frameCount - 1);
+
+        WaveformBarMark? activeBar = null;
+        WaveformBarMark? activeState = null;
+        WaveformBarMark? nextBar = null;
+        foreach (var mark in preview.Bars)
+        {
+            if (mark.SampleOffset <= positionSample)
+            {
+                activeState = mark;
+                if (!mark.IsTempoChangeOnly)
+                {
+                    activeBar = mark;
+                }
+                continue;
+            }
+
+            if (!mark.IsTempoChangeOnly)
+            {
+                nextBar = mark;
+                break;
+            }
+        }
+
+        activeBar ??= preview.Bars.FirstOrDefault(mark => !mark.IsTempoChangeOnly);
+        activeState ??= activeBar;
+        if (activeBar is not { } bar || activeState is not { } state)
+        {
+            transportBar.SetPosition(null);
+            return;
+        }
+
+        var estimatedBarSamples = state.Bpm > 0d && state.Denominator > 0
+            ? (long)Math.Round(
+                60d / state.Bpm
+                * state.Numerator
+                * 4d / state.Denominator
+                * preview.WavInfo.SampleRate)
+            : frameCount - bar.SampleOffset;
+        var barEndSample = nextBar?.SampleOffset
+            ?? Math.Min(frameCount, bar.SampleOffset + Math.Max(1L, estimatedBarSamples));
+        var barLengthSamples = Math.Max(1L, barEndSample - bar.SampleOffset);
+        var offsetInBar = Math.Clamp(positionSample - bar.SampleOffset, 0L, barLengthSamples - 1);
+        var beatPosition = offsetInBar / (double)barLengthSamples * Math.Max(1, state.Numerator);
+        var beatZeroBased = Math.Min(
+            Math.Max(0, state.Numerator - 1),
+            Math.Max(0, (int)Math.Floor(beatPosition)));
+        var subdivision = Math.Clamp(
+            (int)Math.Floor((beatPosition - beatZeroBased) * 4d) + 1,
+            1,
+            4);
+
+        transportBar.SetPosition(new TransportPositionInfo(
+            state.Bpm,
+            state.Numerator,
+            state.Denominator,
+            Math.Max(0, bar.BarNumber),
+            beatZeroBased + 1,
+            subdivision,
+            TimeSpan.FromSeconds(timeSample / (double)preview.WavInfo.SampleRate)));
     }
 
     private void SeekPlayback(double progress)
@@ -2459,6 +2739,7 @@ public partial class Form1 : Form
         waveformView.SetPlayhead(clamped, recordTrail: false);
         waveformView.SetExitPlayhead(null);
         waveformView.SetFadeOutPlayhead(null);
+        UpdateTransportPosition();
         WritePlaybackDiagnostic(
             "transport.seek-completed",
             new { clampedProgress = clamped });
@@ -2469,6 +2750,7 @@ public partial class Form1 : Form
         if (!_audioPlayer.HasSource)
         {
             waveformView.SetPlayhead(null);
+            transportBar.SetPosition(null);
             UpdateSourceLevelMeter();
             return;
         }
@@ -2598,6 +2880,7 @@ public partial class Form1 : Form
             waveformView.SetFadeOutPlayhead(null);
         }
 
+        UpdateTransportPosition();
         UpdateSourceLevelMeter();
     }
 

@@ -20,7 +20,7 @@ internal sealed class WaapiStatusBar : Panel
         {
             AutoSize = true,
             Text = "WAAPI",
-            Font = new Font("MS Gothic", 9F, FontStyle.Bold),
+            Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold),
             Location = new Point(10, 7),
             TabStop = false,
         };
@@ -29,7 +29,7 @@ internal sealed class WaapiStatusBar : Panel
         {
             AutoSize = true,
             Text = "—",
-            Font = new Font("MS Gothic", 9F, FontStyle.Bold),
+            Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold),
             Location = new Point(58, 7),
             TabStop = false,
         };
@@ -38,7 +38,7 @@ internal sealed class WaapiStatusBar : Panel
         {
             AutoEllipsis = true,
             Text = string.Empty,
-            Font = new Font("MS Gothic", 9F),
+            Font = new Font("Yu Gothic UI", 9F),
             Location = new Point(100, 7),
             TabStop = false,
         };
@@ -55,43 +55,43 @@ internal sealed class WaapiStatusBar : Panel
     public void ApplyColors()
     {
         BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
-        _titleLabel.ForeColor = UiColors.LogMuted;
+        _titleLabel.ForeColor = UiColors.StatusBarTitleFore;
         _titleLabel.BackColor = BackColor;
         _badgeLabel.BackColor = BackColor;
         _detailLabel.BackColor = BackColor;
 
         if (_badgeLabel.Text == "OK")
         {
-            _badgeLabel.ForeColor = UiColors.SeekCyan;
-            _detailLabel.ForeColor = UiColors.LogDefault;
+            _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+            _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
         }
         else if (_badgeLabel.Text is "NG")
         {
-            _badgeLabel.ForeColor = UiColors.LogError;
-            _detailLabel.ForeColor = UiColors.LogError;
+            _badgeLabel.ForeColor = UiColors.StatusBarErrorFore;
+            _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
         }
         else
         {
-            _badgeLabel.ForeColor = UiColors.LogMuted;
-            _detailLabel.ForeColor = UiColors.LogMuted;
+            _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
+            _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         }
     }
 
     public void SetPending()
     {
         _badgeLabel.Text = "…";
-        _badgeLabel.ForeColor = UiColors.LogMuted;
+        _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
         _detailLabel.Text = "確認中…";
-        _detailLabel.ForeColor = UiColors.LogMuted;
+        _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         LayoutLabels();
     }
 
     public void SetSkipped()
     {
         _badgeLabel.Text = "—";
-        _badgeLabel.ForeColor = UiColors.LogMuted;
+        _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
         _detailLabel.Text = "起動時チェックオフ";
-        _detailLabel.ForeColor = UiColors.LogMuted;
+        _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         LayoutLabels();
     }
 
@@ -100,14 +100,14 @@ internal sealed class WaapiStatusBar : Panel
         if (result.Ok)
         {
             _badgeLabel.Text = "OK";
-            _badgeLabel.ForeColor = UiColors.SeekCyan;
-            _detailLabel.ForeColor = UiColors.LogDefault;
+            _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+            _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
         }
         else
         {
             _badgeLabel.Text = "NG";
-            _badgeLabel.ForeColor = UiColors.LogError;
-            _detailLabel.ForeColor = UiColors.LogError;
+            _badgeLabel.ForeColor = UiColors.StatusBarErrorFore;
+            _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
         }
 
         _detailLabel.Text = result.FormatStatusDetail();
@@ -118,8 +118,8 @@ internal sealed class WaapiStatusBar : Panel
     public void UpdateSelection(string wwiseVersion, string projectName, string selectedPath)
     {
         _badgeLabel.Text = "OK";
-        _badgeLabel.ForeColor = UiColors.SeekCyan;
-        _detailLabel.ForeColor = UiColors.LogDefault;
+        _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+        _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
 
         var parts = new List<string>();
         if (wwiseVersion.Length > 0)

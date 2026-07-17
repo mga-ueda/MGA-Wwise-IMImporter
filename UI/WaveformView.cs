@@ -63,6 +63,14 @@ internal sealed class WaveformView : Control
     private int? _playlistHoverHighlightPartNumber;
     private int? _exportHighlightPartNumber;
     private readonly System.Windows.Forms.Timer _exportGlowTimer;
+    private readonly ToolTip _timelineToolTip = new()
+    {
+        InitialDelay = 450,
+        ReshowDelay = 100,
+        AutoPopDelay = 4000,
+        ShowAlways = true,
+    };
+    private string? _timelineToolTipText;
 
     // 時間軸ズーム（1=全体表示。既定より縮小しない）
     private const double TimeZoomMin = 1.0;
@@ -120,7 +128,7 @@ internal sealed class WaveformView : Control
             | ControlStyles.Opaque,
             true);
         BackColor = UiColors.ForControlBack(UiColors.WaveformBack);
-        Font = new Font("MS Gothic", 8.5F);
+        Font = new Font("Yu Gothic UI", 8.5F);
         Height = 210;
         TabStop = false;
         Cursor = Cursors.Default;
@@ -164,7 +172,7 @@ internal sealed class WaveformView : Control
         ClearExportHighlight();
         ClearPlayhead();
         _mouseGuideX = null;
-        Cursor = Cursors.Hand;
+        Cursor = Cursors.Default;
 
         // 重いレイヤ生成の前にダークな足場だけ先に出す（白フラッシュ防止）
         DisposeStaticLayer();
@@ -241,6 +249,7 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        UpdateTimelineToolTip(null);
         SetHoveredPlaylistPart(null);
         SetPlaylistHoverHighlight(null);
         _segmentNames = [];
@@ -1293,6 +1302,7 @@ internal sealed class WaveformView : Control
             _exportGlowTimer.Stop();
             _exportGlowTimer.Dispose();
             _revealTimer.Dispose();
+            _timelineToolTip.Dispose();
             DisposeStaticLayer();
             InvalidateRevealLayers();
         }
@@ -1425,12 +1435,14 @@ internal sealed class WaveformView : Control
         _isDraggingSeek = false;
         Capture = false;
         ZoomTimeToPlaylistUnderMouse(e.X);
+        UpdateTimelineToolTip(e.Location);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         UpdateMouseGuide(e.X);
+        UpdateTimelineToolTip(e.Location);
 
         if (!_isDraggingSeek || !TryGetProgressFromX(e.X, out var progress))
         {
@@ -1460,6 +1472,7 @@ internal sealed class WaveformView : Control
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
+        UpdateTimelineToolTip(null);
         SetHoveredPlaylistPart(null);
         if (_isDraggingSeek)
         {
@@ -1509,6 +1522,28 @@ internal sealed class WaveformView : Control
 
         _mouseGuideX = x;
         Invalidate();
+    }
+
+    private void UpdateTimelineToolTip(Point? mouseLocation)
+    {
+        string? text = null;
+        if (mouseLocation is { } location
+            && !_isDraggingSeek
+            && _outputParts.Count > 0
+            && GetTimelineContentRect().Contains(location))
+        {
+            text = CountPlaylistsIntersectingView() == 1
+                ? "Double-click to show the full timeline"
+                : "Double-click to zoom Music Playlist";
+        }
+
+        if (string.Equals(_timelineToolTipText, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _timelineToolTipText = text;
+        _timelineToolTip.SetToolTip(this, text);
     }
 
     private void UpdateHoveredPlaylistPart(int mouseX)
@@ -1819,12 +1854,12 @@ internal sealed class WaveformView : Control
         var rect = new Rectangle(left, wave.Top, edgeX - left, wave.Height);
         using var brush = new System.Drawing.Drawing2D.LinearGradientBrush(
             new Rectangle(rect.Left - 1, rect.Top, rect.Width + 2, rect.Height),
-            Color.FromArgb(0, 200, 240, 255),
-            Color.FromArgb(90, 180, 240, 255),
+            Color.FromArgb(0, UiColors.WaveRevealEdge),
+            Color.FromArgb(90, UiColors.WaveRevealEdge),
             0f);
         g.FillRectangle(brush, rect);
 
-        using var pen = new Pen(Color.FromArgb(160, 140, 230, 255), 1.5f);
+        using var pen = new Pen(Color.FromArgb(160, UiColors.WaveRevealEdge), 1.5f);
         g.DrawLine(pen, edgeX, wave.Top, edgeX, wave.Bottom);
     }
 
@@ -1891,19 +1926,19 @@ internal sealed class WaveformView : Control
     private int MeasureInfoLaneWidth(Graphics g, int contentWidth)
     {
         float maxText = 0f;
+        using var infoFont = new Font(Font, FontStyle.Bold);
         foreach (var label in InfoRowLabels)
         {
-            maxText = Math.Max(maxText, g.MeasureString(label, Font).Width);
+            maxText = Math.Max(maxText, g.MeasureString(label, infoFont).Width);
         }
 
-        maxText = Math.Max(maxText, g.MeasureString("Music Playlist Name", Font).Width);
-        maxText = Math.Max(maxText, g.MeasureString("Music Segment Name", Font).Width);
+        maxText = Math.Max(maxText, g.MeasureString("Music Playlist Name", infoFont).Width);
+        maxText = Math.Max(maxText, g.MeasureString("Music Segment Name", infoFont).Width);
         if (_sourceDisplayName.Length > 0)
         {
-            using var nameFont = new Font(Font, FontStyle.Bold);
             maxText = Math.Max(
                 maxText,
-                g.MeasureString(_sourceDisplayName, nameFont).Width
+                g.MeasureString(_sourceDisplayName, infoFont).Width
                 + 2f
                 + SourceMeterGapPx
                 + SourceMeterWidthPx);
@@ -2007,6 +2042,7 @@ internal sealed class WaveformView : Control
         ];
 
         using var textBrush = new SolidBrush(UiColors.WaveformInfoFg);
+        using var infoFont = new Font(Font, FontStyle.Bold);
         using var format = new StringFormat
         {
             Alignment = StringAlignment.Far,
@@ -2023,7 +2059,7 @@ internal sealed class WaveformView : Control
             g.FillRectangle(bg, info.Left, top, info.Width, rowHeight);
             g.DrawString(
                 InfoRowLabels[i],
-                Font,
+                infoFont,
                 textBrush,
                 new RectangleF(
                     info.Left + InfoLanePadX,
@@ -2045,9 +2081,9 @@ internal sealed class WaveformView : Control
         }
 
         DrawBottomLaneInfoLabel(
-            g, info, segmentLane, "Music Segment Name", Font, textBrush, format, UiColors.MusicSegmentLaneBg);
+            g, info, segmentLane, "Music Segment Name", infoFont, textBrush, format, UiColors.MusicSegmentLaneBg);
         DrawBottomLaneInfoLabel(
-            g, info, playlistLane, "Music Playlist Name", Font, textBrush, format, UiColors.MusicPlaylistLaneBg);
+            g, info, playlistLane, "Music Playlist Name", infoFont, textBrush, format, UiColors.MusicPlaylistLaneBg);
 
         if (_sourceDisplayName.Length == 0 || wave.Height <= 0)
         {
@@ -2067,7 +2103,6 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        using var nameFont = new Font(Font, FontStyle.Bold);
         using var nameFormat = new StringFormat
         {
             Alignment = StringAlignment.Center,
@@ -2077,7 +2112,7 @@ internal sealed class WaveformView : Control
         };
         g.DrawString(
             _sourceDisplayName,
-            nameFont,
+            infoFont,
             textBrush,
             new RectangleF(info.Left + InfoLanePadX, wave.Top + 2f, nameWidth, nameHeight),
             nameFormat);
@@ -2101,7 +2136,7 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        using var trackBrush = new SolidBrush(Color.FromArgb(18, 18, 18));
+        using var trackBrush = new SolidBrush(UiColors.WaveformSourceMeterTrack);
         g.FillRectangle(trackBrush, meter);
 
         var fillHeight = (int)Math.Round(meter.Height * _outputLevel);
@@ -2956,7 +2991,8 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        using var brush = new SolidBrush(UiColors.WaveformInfoFg);
+        using var brush = new SolidBrush(UiColors.OutputPartFg);
+        using var shadowBrush = new SolidBrush(UiColors.OutputPartShadow);
 
         for (var i = 0; i < parts.Count; i++)
         {
@@ -3000,11 +3036,13 @@ internal sealed class WaveformView : Control
                 var state = g.Save();
                 g.TranslateTransform(x, y);
                 g.ScaleTransform(scaleX, 1f);
+                g.DrawString(parts[i].Text, labelFont, shadowBrush, 1f, 1f);
                 g.DrawString(parts[i].Text, labelFont, brush, 0f, 0f);
                 g.Restore(state);
             }
             else
             {
+                g.DrawString(parts[i].Text, labelFont, shadowBrush, x + 1f, y + 1f);
                 g.DrawString(parts[i].Text, labelFont, brush, x, y);
             }
         }

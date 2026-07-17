@@ -10,6 +10,10 @@
     <AssemblyName>MgaWwiseIMImporter</AssemblyName>
     <Product>MGA Wwise IMImporter</Product>
     <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
+    <Version>1.0.0-beta</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.00 β</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +27,22 @@
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- SIL Open Font License 1.1。フォント本体とライセンスを必ず一緒に配布する。 -->
+    <None Update="Assets\Fonts\UDEVGothic-Regular.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Fonts\UDEVGothic-Regular.ttf</TargetPath>
+    </None>
+    <None Update="Assets\Fonts\LICENSE-UDEV-GOTHIC.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Fonts\LICENSE-UDEV-GOTHIC.txt</TargetPath>
+    </None>
+    <None Update="Assets\Branding\MiyabiGameAudio.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Branding\MiyabiGameAudio.png</TargetPath>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
