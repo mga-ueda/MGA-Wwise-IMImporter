@@ -53,14 +53,14 @@ internal sealed class WaveformView : Control
 
     // プレビュー初回表示の段階演出（オーバーラップ・フェード／ワイプ）
     private const int RevealTickMs = 16;
-    private const int RevealTotalMs = 900;
+    private const int RevealTotalMs = 1000;
     private static readonly (int StartMs, int DurationMs)[] RevealLayerWindows =
     [
-        (0, 240),    // labels
-        (70, 420),   // wave wipe
-        (300, 260),  // bars
-        (420, 240),  // markers
-        (520, 300),  // captions
+        (0, 260),    // labels
+        (60, 540),   // wave wipe（長め＋緩い ease で視認しやすく）
+        (320, 280),  // bars
+        (460, 260),  // markers
+        (560, 320),  // captions
     ];
 
     private WavPeakData? _peaks;
@@ -155,6 +155,8 @@ internal sealed class WaveformView : Control
     private bool _revealLayersDirty = true;
     private Rectangle _revealWaveRect;
     private bool _revealRebuildQueued;
+    private bool _pendingPresentationRebuild;
+    private bool _pendingClearDetailPeaks;
 
     private const int WmEraseBkgnd = 0x0014;
 
@@ -1264,6 +1266,18 @@ internal sealed class WaveformView : Control
             ClearDetailPeaks();
         }
 
+        // 演出中にレイヤを壊して再生成するとワイプが止まる／飛ぶので、終了後にまとめる。
+        // （プレイリスト名反映・ピーク階層完成などが SetPreview 直後に来る）
+        if (_revealActive)
+        {
+            _pendingPresentationRebuild = true;
+            _pendingClearDetailPeaks |= clearDetailPeaks;
+            return;
+        }
+
+        _pendingPresentationRebuild = false;
+        _pendingClearDetailPeaks = false;
+
         // Bitmap は破棄せずダーティ化のみ（直後の BuildStaticLayer で同サイズなら再利用）
         _staticLayerDirty = true;
         InvalidateRevealLayers();
@@ -1277,18 +1291,7 @@ internal sealed class WaveformView : Control
         var bounds = ClientRectangle;
         if (bounds.Width > 2 && bounds.Height > 2 && _peaks is not null && !_peaks.IsEmpty)
         {
-            if (_revealActive)
-            {
-                // 再生成中に壁時計が進むと序盤のカスケード／ワイプが飛ぶため、
-                // かかった時間だけ演出開始時刻を後ろへずらす。
-                var rebuildStarted = Environment.TickCount64;
-                EnsureRevealLayers(bounds);
-                _revealStartTickMs += Environment.TickCount64 - rebuildStarted;
-            }
-            else
-            {
-                BuildStaticLayer(bounds);
-            }
+            BuildStaticLayer(bounds);
         }
 
         Invalidate();
@@ -1548,6 +1551,8 @@ internal sealed class WaveformView : Control
     private void StartRevealAnimation()
     {
         DisposeStaticLayer();
+        _pendingPresentationRebuild = false;
+        _pendingClearDetailPeaks = false;
         _revealActive = true;
         _revealStartTickMs = Environment.TickCount64;
         _revealCompleted?.TrySetCanceled();
@@ -1560,6 +1565,8 @@ internal sealed class WaveformView : Control
     {
         _revealTimer.Stop();
         _revealActive = false;
+        _pendingPresentationRebuild = false;
+        _pendingClearDetailPeaks = false;
         _revealCompleted?.TrySetCanceled();
         _revealCompleted = null;
     }
@@ -1569,15 +1576,28 @@ internal sealed class WaveformView : Control
         _revealTimer.Stop();
         _revealActive = false;
 
-        // OnPaint 外で静的レイヤを焼き、次フレームを即座に出せるようにする
-        var bounds = ClientRectangle;
-        if (bounds.Width > 2 && bounds.Height > 2)
+        InvalidateRevealLayers();
+
+        if (_pendingPresentationRebuild)
         {
-            BuildStaticLayer(bounds);
+            var clearDetail = _pendingClearDetailPeaks;
+            _pendingPresentationRebuild = false;
+            _pendingClearDetailPeaks = false;
+            // 演出中に溜めた名前／ピーク階層などの差分を静的レイヤへ反映
+            RebuildPresentationLayers(clearDetailPeaks: clearDetail);
+        }
+        else
+        {
+            // OnPaint 外で静的レイヤを焼き、次フレームを即座に出せるようにする
+            var bounds = ClientRectangle;
+            if (bounds.Width > 2 && bounds.Height > 2)
+            {
+                BuildStaticLayer(bounds);
+            }
+
+            Invalidate();
         }
 
-        InvalidateRevealLayers();
-        Invalidate();
         _revealCompleted?.TrySetResult();
     }
 
@@ -1625,11 +1645,11 @@ internal sealed class WaveformView : Control
         return 1f - u * u * u;
     }
 
-    private static float EaseOutQuint(float t)
+    private static float EaseOutQuad(float t)
     {
         t = Math.Clamp(t, 0f, 1f);
         var u = 1f - t;
-        return 1f - u * u * u * u * u;
+        return 1f - u * u;
     }
 
     private static float LayerLocalT(int layerIndex, long elapsedMs)
@@ -2513,11 +2533,11 @@ internal sealed class WaveformView : Control
             DrawLabelRows(g, labels, rowHeight, rows);
         }
 
-        // 1: 波形（左→右ソフトワイプ）
+        // 1: 波形（左→右ソフトワイプ。Quint だと序盤でほぼ全面になり視認しづらい）
         var waveT = LayerLocalT(1, elapsed);
         if (waveT > 0f)
         {
-            DrawWaveLayerWiped(g, _revealLayers[0], EaseOutQuint(waveT), bounds);
+            DrawWaveLayerWiped(g, _revealLayers[0], EaseOutQuad(waveT), bounds);
         }
 
         // 2: 小節（フェード）

@@ -4067,6 +4067,30 @@ public partial class Form1 : Form
 
         _previewSession = new WaveformPreviewSession(preview);
         _previewSession.SetCommentRule(_markerSettings.ToCommentRule());
+
+        // 再生用一時コピーは大きな WAV だと数秒かかる。
+        // SetPreview（演出開始）のあと UI スレッドを塞ぐと WinForms.Timer が動けず、
+        // 最初の Tick 時点ですでに RevealTotalMs を超えて一瞬表示になる。
+        try
+        {
+            await Task.Run(() =>
+            {
+                _audioPlayer.Load(preview.SourcePath);
+                _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendReport(
+                $"=== エラー ==={Environment.NewLine}"
+                + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+        }
+
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
         waveformView.SetPreview(
             preview.Peaks,
             preview.SourcePath,
@@ -4076,21 +4100,18 @@ public partial class Form1 : Form
             preview.Cycles,
             preview.Regions,
             preview.OutputParts);
-        try
-        {
-            _audioPlayer.Load(preview.SourcePath);
-            _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
-            waveformView.SetPlayhead(0, recordTrail: false);
-        }
-        catch (Exception ex)
-        {
-            AppendReport(
-                $"=== エラー ==={Environment.NewLine}"
-                + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
-        }
+        waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
         UpdateTransportPosition();
+
+        // プレイリスト UI 構築も重いので、演出が終わってから行う
+        await waveformView.WaitForRevealAsync();
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
         PopulatePlaylistChoices(preview.OutputParts);
         WritePlaybackDiagnostic(
             "source.loaded",
