@@ -251,6 +251,8 @@ public partial class Form1 : Form
                 waveformView.SetFadeOutPlayhead(null);
                 UpdateTransportPlaybackState();
                 UpdateTransportPosition();
+                // タイマー停止後は UpdatePlayhead が回らないため、メーターを明示的に落とす
+                UpdateSourceLevelMeter();
             });
         };
         _audioPlayer.Diagnostic += (_, message) =>
