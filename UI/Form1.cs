@@ -46,7 +46,7 @@ internal static class PlaylistUiNames
     /// <summary>Fade In / Fade Out の秒数に対応する表示名。</summary>
     public static string ToFadeUiName(double seconds, bool isFadeIn)
     {
-        if (isFadeIn && seconds <= 0d)
+        if (seconds <= 0d)
         {
             return "None";
         }
@@ -104,7 +104,7 @@ public partial class Form1 : Form
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
     private double _playlistFadeInSeconds;
-    private double _playlistFadeSeconds = 0.5d;
+    private double _playlistFadeSeconds;
     private PlaylistExitSourceMode _playlistExitSourceMode = PlaylistExitSourceMode.NextBar;
     private int? _activeAutomaticPlaylistPartNumber;
     private int? _requestedPlaylistPartNumber;
@@ -142,6 +142,8 @@ public partial class Form1 : Form
     private bool _playlistGroupPaintErase;
     private int? _playlistGroupPaintGroupId;
     private int? _playlistGroupPaintLastPartNumber;
+    /// <summary>Shift 押し続け中に再利用するグループ ID。キーを離すまで維持する。</summary>
+    private int? _playlistGroupPaintStickyGroupId;
     private bool _playlistDisablePaintActive;
     private bool _playlistDisablePaintSetDisabled;
     private int? _playlistDisablePaintLastPartNumber;
@@ -164,7 +166,12 @@ public partial class Form1 : Form
         InitializeComponent();
         ApplyActionBarToolTips();
         UpdateMinimumWindowSize();
-        DpiChanged += (_, _) => UpdateMinimumWindowSize();
+        DpiChanged += (_, _) =>
+        {
+            UpdateMinimumWindowSize();
+            LayoutActionBarCopyright();
+        };
+        actionBar.SizeChanged += (_, _) => LayoutActionBarCopyright();
         ApplyWindowIcon();
         brandLogoPictureBox.Image = LoadBrandLogo();
         // 初回レイアウト途中のフレームを見せず、描画完了後に一度で表示する。
@@ -172,6 +179,7 @@ public partial class Form1 : Form
         actionBar.BackColor = UiColors.ForControlBack(UiColors.ActionBarBack);
         ApplyActionBarButtonColors();
         ApplyActionBarTextColors();
+        LayoutActionBarCopyright();
         ApplyLogButtonColors();
         transportBar.ApplyColors();
         UpdateTransportPlaybackState();
@@ -199,6 +207,7 @@ public partial class Form1 : Form
         actionControlsPanel.Controls.Remove(detailedLogCheckBox);
 #endif
         RestoreWindowBounds();
+        LayoutActionBarCopyright();
 
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
         _playlistBlinkTimer.Tick += (_, _) => UpdatePendingPlaylistBlink();
@@ -295,6 +304,7 @@ public partial class Form1 : Form
 
         // Visible かつ透明な状態で全コントロールのレイアウトと初回描画を同期完了させる。
         PerformLayout();
+        LayoutActionBarCopyright();
         Refresh();
         Update();
         Opacity = 1d;
@@ -548,6 +558,11 @@ public partial class Form1 : Form
 
     protected override void OnKeyUp(KeyEventArgs e)
     {
+        if (e.KeyCode is Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey)
+        {
+            ClearPlaylistGroupPaintStickyId();
+        }
+
         if (_activeTransportShortcutCommand is not null
             && e.KeyCode == _activeTransportShortcutKeyCode)
         {
@@ -565,6 +580,7 @@ public partial class Form1 : Form
 
     protected override void OnDeactivate(EventArgs e)
     {
+        ClearPlaylistGroupPaintStickyId();
         EndActiveTransportShortcutFeedback();
         base.OnDeactivate(e);
     }
@@ -958,6 +974,33 @@ public partial class Form1 : Form
         copyrightLinkLabel.LinkColor = UiColors.ActionLinkFore;
         copyrightLinkLabel.ActiveLinkColor = UiColors.ActionLinkHoverFore;
         copyrightLinkLabel.VisitedLinkColor = UiColors.ActionLinkFore;
+    }
+
+    /// <summary>
+    /// 権利表記をロゴ下端に揃え、右側の操作群（Debug Log 等）と重ならない幅に抑える。
+    /// </summary>
+    private void LayoutActionBarCopyright()
+    {
+        if (actionBar is null || copyrightLinkLabel is null || brandLogoPictureBox is null)
+        {
+            return;
+        }
+
+        // 操作群を前面に置き、万一の重なりでもクリック・描画を優先する。
+        actionControlsPanel.BringToFront();
+        brandLogoPictureBox.BringToFront();
+
+        const int gap = 12;
+        var left = copyrightLinkLabel.Left;
+        var rightLimit = actionControlsPanel.Left;
+        if (rightLimit <= left)
+        {
+            rightLimit = actionBar.ClientSize.Width - actionBar.Padding.Right;
+        }
+
+        var maxWidth = Math.Max(80, rightLimit - left - gap);
+        copyrightLinkLabel.Width = maxWidth;
+        copyrightLinkLabel.Top = brandLogoPictureBox.Bottom - copyrightLinkLabel.Height;
     }
 
     private void ApplyActionBarButtonColors()
@@ -1687,6 +1730,7 @@ public partial class Form1 : Form
         _playlistGroupColorIndexes.Clear();
         _nextPlaylistGroupId = 1;
         _nextPlaylistGroupColorIndex = 0;
+        _playlistGroupPaintStickyGroupId = null;
         ApplyPlaylistGroupMarkerSharing();
         EndPlaylistGroupPaint();
     }
@@ -1708,10 +1752,16 @@ public partial class Form1 : Form
         _playlistGroupPaintErase = false;
         _playlistGroupPaintGroupId = null;
         _playlistGroupPaintLastPartNumber = null;
+        // Sticky ID は Shift 押し続け中に残し、隙間を跨いだ再ドラッグでも同 ID を使う。
         if (_loadedPreview is { } preview)
         {
             UpdatePlaylistDisplayNames(preview.OutputParts);
         }
+    }
+
+    private void ClearPlaylistGroupPaintStickyId()
+    {
+        _playlistGroupPaintStickyGroupId = null;
     }
 
     private void EndPlaylistDisablePaint()
@@ -1794,13 +1844,18 @@ public partial class Form1 : Form
         var shift = (modifiers & Keys.Shift) == Keys.Shift;
         if (ctrl && shift)
         {
-            _suppressNextPlaylistClick = sender is Button;
-            _playlistDisablePaintActive = true;
-            _playlistDisablePaintSetDisabled =
-                !_disabledPlaylistPartNumbers.Contains(part.Number);
-            _playlistDisablePaintLastPartNumber = null;
-            ApplyPlaylistDisablePaintAtCursor();
-            return;
+        _suppressNextPlaylistClick = sender is Button;
+        _playlistDisablePaintActive = true;
+        _playlistDisablePaintSetDisabled =
+            !_disabledPlaylistPartNumbers.Contains(part.Number);
+        _playlistDisablePaintLastPartNumber = null;
+        if (sender is Control disableTarget)
+        {
+            disableTarget.Capture = true;
+        }
+
+        ApplyPlaylistDisablePaintAtCursor();
+        return;
         }
 
         var erase = ctrl;
@@ -1820,19 +1875,32 @@ public partial class Form1 : Form
         _playlistGroupPaintActive = true;
         _playlistGroupPaintErase = erase;
         _playlistGroupPaintLastPartNumber = null;
+        if (sender is Control paintTarget)
+        {
+            paintTarget.Capture = true;
+        }
+
         if (erase)
         {
             _playlistGroupPaintGroupId = null;
         }
         else if (_playlistPartGroupIds.TryGetValue(part.Number, out var existingGroupId))
         {
+            // 既存グループ上から始めた場合はその ID を継承し、Shift 中は固定する。
             _playlistGroupPaintGroupId = existingGroupId;
+            _playlistGroupPaintStickyGroupId = existingGroupId;
+        }
+        else if (_playlistGroupPaintStickyGroupId is int stickyGroupId)
+        {
+            // Shift 押し続け中なら、隙間を跨いでも同じ ID を使う。
+            _playlistGroupPaintGroupId = stickyGroupId;
         }
         else
         {
             var groupId = _nextPlaylistGroupId++;
             _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
             _playlistGroupPaintGroupId = groupId;
+            _playlistGroupPaintStickyGroupId = groupId;
         }
 
         ApplyPlaylistGroupPaintAtCursor();

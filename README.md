@@ -34,7 +34,7 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | 波形ファイル名 | 左側情報欄の幅をファイル名が一行で収まるよう自動調整し、名前の右側に再生出力の縦型レベルメーターを表示。最小／最大色のグラデーションは色設定から変更可能 |
 | 波形ファイル名をダブルクリック | 表示位置に直接現れる入力欄で、拡張子なしの基底名を編集。Enter またはフォーカス移動で確定、Esc でキャンセル。変更は直ちに Playlist／Segment 表示へ反映され、書き出す WAV ファイル名と Wwise の Container／Playlist／Segment／Track 名にも使用 |
 | Fade In | Playlist左側のラジオボタンから遷移先のフェードイン時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。再生中のPlaylist遷移だけに適用し、停止中からの開始には適用しない。遷移先が `-A` なら先行再生開始からフェードインし、Entry Cue後も同じ包絡線を継続。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
-| Fade Out | Playlist左側のラジオボタンから遷移元のフェードアウト時間を `0.5 / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
+| Fade Out | Playlist左側のラジオボタンから遷移元のフェードアウト時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
 | Exit Source At | Fade Out下のラジオボタンから遷移元の退出位置を選択。`Immediate`＝即時、`Next Bar`＝次の小節、`Next Beat`＝次の拍、`Next Cue`＝現在Playlist内の次の単発マーカー、`Exit Cue`＝Playlist終端（末尾が `-E` ならその開始）。既定は `Next Bar`。変更は次の遷移予約から適用 |
 | 遷移先同期（自動） | 同一グループ内の遷移は `Same Time`、異なるグループ間または未グループとの遷移は `Entry Cue` を自動選択する。`Same Time` は実際の退出時点における現在 Playlist 先頭からの経過時間を遷移先へ引き継ぐ。引継ぎ位置が遷移先の長さ以上なら予約しない |
 | Music Playlist 一覧 | ログ右側の `Music Playlist` 一覧から遷移先を選択。一覧幅はファイル名が改行されない必要幅へ自動可変（表示領域を超える場合だけ省略表示）。停止／一時停止中は対象の頭から即再生し、再生中は `Exit Source At` の位置で遷移。同一グループ内の `Same Time` では相対位置から直接開始し、それ以外の `Entry Cue` で遷移先冒頭が `-A` の場合は、その長さだけ先行して重ねる。Next Bar／Next Beatでは境界に `-A` 終端を揃え、Next Cue／Exit Cueまでの時間が足りない場合は `-A` を即開始して退出だけを指定 Cue に揃える。Immediateでは旧曲フェードと `-A` を同時に即開始する。先行再生中の位置と残像は緑色、フェードアウト中は白、`-E` 到達後は赤で表示する。通常時は枠なし、再生中は背景を塗り、遷移完了時は枠をフェード発光する。遷移待機中は予約先の枠がテンポ／拍子に同期して点滅する |
@@ -87,7 +87,7 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 
 ### Wwise インポート（WAAPI）
 
-書き出し完了後、Wwise（WAAPI 接続中）の**選択オブジェクトの下**へ Music 構造を自動生成できます（確認ダイアログあり）。
+書き出し完了後、Wwise（WAAPI 接続中）の**選択オブジェクトの下**へ Music 構造を自動生成できます（確認ダイアログあり）。利用条件・商標については [商標・ライセンス](#商標ライセンス) を参照してください。
 
 - グループ化されていない出力パート 1 つ、またはグループ 1 つを Music Playlist Container 1 つとして扱う
 - 2 パート以上のグループは、1 つの Music Segment 内へ複数 Music Track を置く縦レイヤーとして生成する。Playlist／Segment 名はグループ化後の連番へ詰める
@@ -117,6 +117,30 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 名前空間はフォルダに合わせます（例: `MgaWwiseIMImporter.UI`、`MgaWwiseIMImporter.Wave`）。
 
 UI はダーク基調（`UiColors`）。タイトルバーとログまわりもそれに寄せています。
+
+---
+
+## 商標・ライセンス
+
+### Audiokinetic / Wwise / WAAPI
+
+本ツールは Audiokinetic のソフトウェアを同梱・再配布しません。Wwise Authoring へはローカル HTTP 経由の **WAAPI**（JSON 呼び出し）のみで通信します。
+
+- **Wwise®** および **Audiokinetic®** は Audiokinetic Inc. の商標または登録商標です（米国その他）。
+- 本ツールは Audiokinetic Inc. と提携・後援・公式認定された製品ではありません。
+- WAAPI を利用するには、利用者が有効な **Wwise ライセンス**（プロジェクト登録とライセンスキー）を持つ必要があります。本ツールはそれを代替しません。
+- Audiokinetic のロゴやマークは使用していません。アプリ名・説明文での "Wwise" 表記は、対応先を示す説明的な用法です。
+
+アプリ下部には次の英文を表示します。
+
+> Wwise® and Audiokinetic® are trademarks of Audiokinetic Inc.
+
+### 同梱ライブラリ・フォント
+
+| 名称 | 用途 | ライセンス |
+|------|------|------------|
+| NAudio | WAV 読み書き・再生 | Microsoft Public License (Ms-PL) |
+| UDEV Gothic | ログ表示フォント | SIL Open Font License 1.1（`Fonts/LICENSE-UDEV-GOTHIC.txt` を同梱） |
 
 ---
 

@@ -53,8 +53,8 @@ internal static class UiColors
     public static Color ExitCueMarker { get; set; } = Color.FromArgb(255, 186, 0, 0);
     public static Color OutputPartFg => PrimaryFore;
     public static Color OutputPartShadow { get; set; } = Color.FromArgb(230, 0, 0, 0);
-    public static Color MusicSegmentLaneBg { get; set; } = Color.FromArgb(50, 58, 73);
-    public static Color MusicPlaylistLaneBg { get; set; } = Color.FromArgb(39, 43, 63);
+    public static Color MusicSegmentLaneBg { get; set; } = Color.FromArgb(44, 46, 58);
+    public static Color MusicPlaylistLaneBg { get; set; } = Color.FromArgb(53, 55, 70);
     public static Color ExportPartGlow => AccentCyan;
     public static Color SeekCyan => AccentCyan;
     public static Color SeekExit { get; set; } = Color.FromArgb(255, 220, 45, 45);
@@ -107,8 +107,8 @@ internal static class UiColors
     public static Color PlaylistHoverFore => PrimaryFore;
     public static Color PlaylistActiveFore => PrimaryFore;
     public static Color PlaylistButtonBorder => ChromeBorder;
-    public static Color PlaylistAutoBack { get; set; } = Color.FromArgb(0, 92, 98);
-    public static Color PlaylistManualBack { get; set; } = Color.FromArgb(89, 89, 0);
+    public static Color PlaylistAutoBack { get; set; } = Color.FromArgb(35, 52, 75);
+    public static Color PlaylistManualBack { get; set; } = Color.FromArgb(65, 64, 33);
     public static Color PlaylistHoverBorder => PrimaryFore;
     public static Color PlaylistTransitionBorder => AccentCyan;
     public static Color PlaylistManualBorder { get; set; } = Color.FromArgb(255, 255, 0);

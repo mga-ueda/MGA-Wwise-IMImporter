@@ -51,7 +51,7 @@ partial class Form1
     private ToolTip playlistToolTip;
     private Panel actionBar;
     private PictureBox brandLogoPictureBox;
-    private LinkLabel copyrightLinkLabel;
+    private SmoothLinkLabel copyrightLinkLabel;
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
@@ -127,7 +127,7 @@ partial class Form1
         playlistToolTip = new DarkToolTip(components);
         actionBar = new Panel();
         brandLogoPictureBox = new PictureBox();
-        copyrightLinkLabel = new LinkLabel();
+        copyrightLinkLabel = new SmoothLinkLabel();
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
@@ -466,8 +466,8 @@ partial class Form1
         transitionTimeHalfSecondRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeHalfSecondRadio.Name = "transitionTimeHalfSecondRadio";
         transitionTimeHalfSecondRadio.TabIndex = 0;
-        transitionTimeHalfSecondRadio.Tag = 0.5D;
-        transitionTimeHalfSecondRadio.Text = "0.5 Sec.";
+        transitionTimeHalfSecondRadio.Tag = 0D;
+        transitionTimeHalfSecondRadio.Text = "None";
         transitionTimeHalfSecondRadio.CheckedChanged += TransitionTimeRadio_CheckedChanged;
         //
         // transitionTimeOneSecondRadio
@@ -701,18 +701,23 @@ partial class Form1
         //
         // copyrightLinkLabel
         //
+        // ロゴ（bottom=38）と権利表記2行のボトムラインを揃える。
+        // 幅は LayoutActionBarCopyright で右側コントロールと重ならないよう調整する。
         copyrightLinkLabel.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
         copyrightLinkLabel.AutoEllipsis = true;
         copyrightLinkLabel.BackColor = Color.Transparent;
         copyrightLinkLabel.Font = new Font("Yu Gothic UI", 7.5F);
         copyrightLinkLabel.LinkBehavior = LinkBehavior.HoverUnderline;
-        copyrightLinkLabel.Location = new Point(232, 16);
+        copyrightLinkLabel.Location = new Point(232, 8);
         copyrightLinkLabel.Name = "copyrightLinkLabel";
-        copyrightLinkLabel.Size = new Size(300, 22);
+        copyrightLinkLabel.Size = new Size(240, 30);
         copyrightLinkLabel.TabIndex = 0;
         copyrightLinkLabel.TabStop = false;
-        copyrightLinkLabel.Text = "© 2026 MIYABI GAME AUDIO INC.  Version 1.00 β  GitHub";
+        copyrightLinkLabel.Text =
+            "© 2026 MIYABI GAME AUDIO INC.  Version 1.00 β  GitHub"
+            + "\nWwise® and Audiokinetic® are trademarks of Audiokinetic Inc.";
         copyrightLinkLabel.TextAlign = ContentAlignment.BottomLeft;
+        // "GitHub" は1行目の47文字目から（商標行の追加で変わらない）。
         copyrightLinkLabel.LinkArea = new LinkArea(47, 6);
         copyrightLinkLabel.LinkClicked += CopyrightLinkLabel_LinkClicked;
         //

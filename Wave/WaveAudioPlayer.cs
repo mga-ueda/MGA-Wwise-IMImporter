@@ -396,7 +396,7 @@ internal sealed class WaveAudioPlayer : IDisposable
             || !double.IsFinite(fadeInSeconds)
             || fadeInSeconds < 0d
             || !double.IsFinite(fadeSeconds)
-            || fadeSeconds <= 0d
+            || fadeSeconds < 0d
             || !IsValidPlaylistRange(startSample, endSample))
         {
             Trace($"playlist.schedule rejected playing={_isPlaying} start={startSample} end={endSample} sourceExit={sourceExitSample?.ToString() ?? "immediate"} sourcePartStart={sourcePartStartSample} destinationSync={destinationSyncMode} preRoll={preRollFrameCount} allowShortPreRoll={allowShortPreRoll} fadeEnd={fadeSourceEndSample} fadeInSeconds={fadeInSeconds:R} fadeOutSeconds={fadeSeconds:R} frames={FrameCount}");
@@ -410,11 +410,13 @@ internal sealed class WaveAudioPlayer : IDisposable
                 (int)Math.Min(
                     int.MaxValue,
                     Math.Round(_provider.WaveFormat.SampleRate * fadeInSeconds)));
-        var fadeFrameCount = Math.Max(
-            1,
-            (int)Math.Min(
-                int.MaxValue,
-                Math.Round(_provider.WaveFormat.SampleRate * fadeSeconds)));
+        var fadeFrameCount = fadeSeconds <= 0d
+            ? 0
+            : Math.Max(
+                1,
+                (int)Math.Min(
+                    int.MaxValue,
+                    Math.Round(_provider.WaveFormat.SampleRate * fadeSeconds)));
         var accepted = _provider.TrySchedulePlaylistTransition(
             startSample,
             endSample,
@@ -971,7 +973,7 @@ internal sealed class WaveAudioPlayer : IDisposable
                         syncBoundarySample,
                         Math.Max(syncBoundarySample, fadeSourceEndSample),
                         Math.Max(0, fadeInFrameCount),
-                        Math.Max(1, fadeFrameCount),
+                        Math.Max(0, fadeFrameCount),
                         findPlan(targetEntrySample),
                         generation);
                     _pendingPlaylistTransition = transition;
@@ -1492,7 +1494,8 @@ internal sealed class WaveAudioPlayer : IDisposable
                             sourcePlan.LoopEndSample
                             - transition.SyncBoundarySample);
                 // 同時に保持できる旧フェードはこの1本だけ。再遷移時は上書きして先頭から開始。
-                _playlistFadePlaying = true;
+                // Fade Out=None（0フレーム）のときは旧ソースを重ねず即切り替え。
+                _playlistFadePlaying = transition.FadeFrameCount > 0;
                 _playlistFadeStartSample = transition.SyncBoundarySample;
                 _playlistFadeEndSample = transition.FadeSourceEndSample;
                 _playlistFadeStartTickMs = Environment.TickCount64;
