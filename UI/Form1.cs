@@ -13,6 +13,48 @@ internal enum PlaylistExitSourceMode
     ExitCue,
 }
 
+internal static class PlaylistUiNames
+{
+    /// <summary>Exit Source At ラジオの表示名。</summary>
+    public static string ToUiName(this PlaylistExitSourceMode mode) => mode switch
+    {
+        PlaylistExitSourceMode.Immediate => "Immediate",
+        PlaylistExitSourceMode.NextBar => "Next Bar",
+        PlaylistExitSourceMode.NextBeat => "Next Beat",
+        PlaylistExitSourceMode.NextCue => "Next Cue",
+        PlaylistExitSourceMode.ExitCue => "Exit Cue",
+        _ => mode.ToString(),
+    };
+
+    /// <summary>Dest. Sync To ラジオの表示名。</summary>
+    public static string ToUiName(this PlaylistDestinationSyncMode mode) => mode switch
+    {
+        PlaylistDestinationSyncMode.EntryCue => "Entry Cue",
+        PlaylistDestinationSyncMode.SameTime => "Same Time",
+        _ => mode.ToString(),
+    };
+
+    /// <summary>Marker Grid ラジオの表示名。</summary>
+    public static string ToUiName(this MarkerGridOverrideMode mode) => mode switch
+    {
+        MarkerGridOverrideMode.Default => "Timeline",
+        MarkerGridOverrideMode.Bar => "Bar",
+        MarkerGridOverrideMode.Beat => "Beat",
+        _ => mode.ToString(),
+    };
+
+    /// <summary>Fade In / Fade Out の秒数に対応する表示名。</summary>
+    public static string ToFadeUiName(double seconds, bool isFadeIn)
+    {
+        if (isFadeIn && seconds <= 0d)
+        {
+            return "None";
+        }
+
+        return $"{seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} Sec.";
+    }
+}
+
 public partial class Form1 : Form
 {
     // Exact line height in twips (1 pt = 20 twips). Keeps JP + Latin rows uniform.
@@ -65,6 +107,8 @@ public partial class Form1 : Form
     private long _pendingPlaylistTargetSample;
     private long _pendingPlaylistTargetEntrySample;
     private bool _pendingPlaylistAudioStarted;
+    private double? _pendingSourceLoopStart;
+    private double? _pendingSourceLoopEnd;
     private double _pendingPlaylistBlinkLevel;
     private int? _playlistTransitionGlowPartNumber;
     private long _playlistTransitionGlowStartTickMs;
@@ -77,6 +121,7 @@ public partial class Form1 : Form
     private bool _resumePlaybackAfterBackwardSeek;
     private TransportCommand? _activeTransportShortcutCommand;
     private Keys _activeTransportShortcutKeyCode = Keys.None;
+    private readonly MarkerSettings _markerSettings = MarkerSettings.Load();
     private long _diagnosticSequence;
 
     public Form1()
@@ -90,10 +135,18 @@ public partial class Form1 : Form
         actionBar.BackColor = UiColors.ForControlBack(UiColors.ActionBarBack);
         ApplyActionBarButtonColors();
         ApplyActionBarTextColors();
+        ApplyLogButtonColors();
         transportBar.ApplyColors();
         UpdateTransportPlaybackState();
         ClearPlaylistChoices("Playlist はありません");
+        AdjustTransitionSectionHeights();
+        UpdateMarkerOptionsPanelHeight();
+        rightSidePanel.Resize += (_, _) => UpdateMarkerOptionsPanelHeight();
+        markerOptionsPanel.Bind(_markerSettings);
+        markerOptionsPanel.SettingsChanged += (_, _) => ApplyMarkerSettings();
+        waveformView.MarkerGridOverride = _markerSettings.GridOverride;
         ApplyPlaylistSelectorColors();
+        waapiStatusBar.ApplyColors();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
@@ -152,6 +205,8 @@ public partial class Form1 : Form
         };
         waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
         waveformView.TimeViewChanged += (_, _) => UpdateWaveformHorizontalScrollBar();
+        waveformView.TransportFeedbackRequested += (_, command) =>
+            transportBar.PulseCommandFeedback(command);
         waveformHorizontalScrollBar.ScrollRequested += QueueWaveformHorizontalScroll;
         waveformHorizontalScrollBar.ScrollCompleted += (_, _) => FlushWaveformHorizontalScroll();
         _waveformScrollTimer.Tick += (_, _) => FlushWaveformHorizontalScroll();
@@ -796,6 +851,16 @@ public partial class Form1 : Form
 
     private void QueueWaveformHorizontalScroll(object? sender, double viewStart)
     {
+        var currentStart = _pendingWaveformScrollStart ?? waveformView.TimeViewStart;
+        if (viewStart < currentStart - 1e-12)
+        {
+            transportBar.PulseCommandFeedback(TransportCommand.PreviousPage);
+        }
+        else if (viewStart > currentStart + 1e-12)
+        {
+            transportBar.PulseCommandFeedback(TransportCommand.NextPage);
+        }
+
         _pendingWaveformScrollStart = viewStart;
         if (!_waveformScrollTimer.Enabled)
         {
@@ -869,10 +934,12 @@ public partial class Form1 : Form
         {
             button.BackColor = UiColors.ForControlBack(UiColors.LogButtonBack);
             button.ForeColor = UiColors.LogButtonFore;
-            button.HoverBackColor = UiColors.ForControlBack(UiColors.LogButtonHoverBack);
-            button.PressedBackColor = UiColors.ForControlBack(UiColors.LogButtonHoverBack);
-            button.AccentColor = UiColors.ForControlBack(UiColors.LogButtonBorder);
+            // トランスポートと同じホバー／押下の塗り（枠なし）
+            button.HoverBackColor = UiColors.ForControlBack(UiColors.TransportHoverBack);
+            button.PressedBackColor = UiColors.ForControlBack(UiColors.TransportPressedBack);
+            button.AccentColor = Color.Empty;
             button.ActiveForeColor = UiColors.LogButtonFore;
+            button.Invalidate();
         }
     }
 
@@ -895,32 +962,66 @@ public partial class Form1 : Form
         logButtonPanel.BringToFront();
     }
 
+    /// <summary>
+    /// ラジオ行は AutoScale 後も 30px 固定のため、セクションパネルの高さも
+    /// 実際の中身（ヘッダー＋行数）にフィットさせて余白を除去する。
+    /// </summary>
+    private void AdjustTransitionSectionHeights()
+    {
+        AdjustTransitionSectionHeight(fadeInSectionPanel, fadeInHeaderLabel, fadeInChoicesPanel);
+        AdjustTransitionSectionHeight(fadeOutSectionPanel, transitionTimeHeaderLabel, transitionTimeChoicesPanel);
+        AdjustTransitionSectionHeight(exitSourceAtSectionPanel, exitSourceAtHeaderLabel, exitSourceAtChoicesPanel);
+        AdjustTransitionSectionHeight(destinationSyncSectionPanel, destinationSyncHeaderLabel, destinationSyncChoicesPanel);
+    }
+
+    private static void AdjustTransitionSectionHeight(
+        Panel section,
+        Label header,
+        FlowLayoutPanel choices)
+    {
+        var contentHeight = choices.Padding.Vertical;
+        foreach (Control control in choices.Controls)
+        {
+            contentHeight += control.Height + control.Margin.Vertical;
+        }
+
+        section.Height = header.Height + contentHeight;
+    }
+
     private void ApplyPlaylistSelectorColors()
     {
         var back = UiColors.ForControlBack(UiColors.PlaylistBack);
+        var headerBack = UiColors.ForControlBack(UiColors.SectionHeaderBack);
         playlistSelectorPanel.BackColor = back;
         playlistScrollPanel.BackColor = back;
         playlistListLayout.BackColor = back;
         playlistHeaderLabel.BackColor = back;
+        playlistHeaderLabel.BarColor = headerBack;
         playlistHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
+        rightSidePanel.BackColor = back;
+        markerOptionsPanel.ApplyColors();
         transitionTimePanel.BackColor = back;
         transitionSettingsPanel.BackColor = back;
         fadeInSectionPanel.BackColor = back;
         fadeInChoicesPanel.BackColor = back;
         fadeInHeaderLabel.BackColor = back;
+        fadeInHeaderLabel.BarColor = headerBack;
         fadeInHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         fadeOutSectionPanel.BackColor = back;
         transitionTimeChoicesPanel.BackColor = back;
         transitionTimeHeaderLabel.BackColor = back;
+        transitionTimeHeaderLabel.BarColor = headerBack;
         transitionTimeHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         exitSourceAtSectionPanel.BackColor = back;
         exitSourceAtChoicesPanel.BackColor = back;
         exitSourceAtHeaderLabel.BackColor = back;
+        exitSourceAtHeaderLabel.BarColor = headerBack;
         exitSourceAtHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         destinationSyncSectionPanel.BackColor = back;
         destinationSyncChoicesPanel.BackColor = back;
         destinationSyncHeaderLabel.BackColor = back;
+        destinationSyncHeaderLabel.BarColor = headerBack;
         destinationSyncHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         transitionTimeSeparator.BackColor =
             UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
@@ -1074,6 +1175,7 @@ public partial class Form1 : Form
             "playlist.fade-out-preset-changed",
             new
             {
+                fadeOut = PlaylistUiNames.ToFadeUiName(fadeSeconds, isFadeIn: false),
                 fadeOutSeconds = fadeSeconds,
                 appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
             });
@@ -1092,6 +1194,7 @@ public partial class Form1 : Form
             "playlist.fade-in-preset-changed",
             new
             {
+                fadeIn = PlaylistUiNames.ToFadeUiName(fadeInSeconds, isFadeIn: true),
                 fadeInSeconds,
                 appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
             });
@@ -1114,7 +1217,7 @@ public partial class Form1 : Form
             "playlist.exit-source-mode-changed",
             new
             {
-                mode = mode.ToString(),
+                mode = mode.ToUiName(),
                 appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
             });
     }
@@ -1136,7 +1239,7 @@ public partial class Form1 : Form
             "playlist.destination-sync-mode-changed",
             new
             {
-                mode = mode.ToString(),
+                mode = mode.ToUiName(),
                 appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
             });
     }
@@ -1185,10 +1288,77 @@ public partial class Form1 : Form
             textWidth + chromeWidth,
             minimumWidth,
             maximumWidth);
+
+        // 下部のマーカーオプション（全カラム）が収まる幅を保証する。
+        var transitionWidth = GetTransitionColumnWidth();
+        desiredWidth = Math.Max(
+            desiredWidth,
+            markerOptionsPanel.RequiredWidth - transitionWidth);
         if (playlistSelectorPanel.Width != desiredWidth)
         {
             playlistSelectorPanel.Width = desiredWidth;
         }
+
+        // 遷移設定カラム＋ Playlist カラムで右側全体の幅を決める。
+        var desiredRightWidth = transitionWidth + desiredWidth;
+        if (rightSidePanel.Width != desiredRightWidth)
+        {
+            rightSidePanel.Width = desiredRightWidth;
+        }
+    }
+
+    /// <summary>
+    /// 遷移設定（Fade In などの 2 列）カラムの必要幅。
+    /// セクションパネルは AutoScale で拡縮されるため実測から算出する。
+    /// </summary>
+    private int GetTransitionColumnWidth()
+    {
+        return transitionTimeSeparator.Width
+            + transitionSettingsPanel.Padding.Horizontal
+            + fadeInSectionPanel.Width + fadeInSectionPanel.Margin.Horizontal
+            + fadeOutSectionPanel.Width + fadeOutSectionPanel.Margin.Horizontal;
+    }
+
+    /// <summary>
+    /// マーカーオプション領域の上端を Exit Source At セクションの下端に合わせる。
+    /// （Playlist と遷移設定の高さがそこまでになる）
+    /// </summary>
+    private void UpdateMarkerOptionsPanelHeight()
+    {
+        var topHeight = fadeInSectionPanel.Height + exitSourceAtSectionPanel.Height;
+        var desiredHeight = Math.Max(0, rightSidePanel.ClientSize.Height - topHeight);
+        if (markerOptionsPanel.Height != desiredHeight)
+        {
+            markerOptionsPanel.Height = desiredHeight;
+        }
+    }
+
+    /// <summary>マーカーオプションの変更を保存し、波形ビューと現在のセッションへ反映する。</summary>
+    private void ApplyMarkerSettings()
+    {
+        waveformView.MarkerGridOverride = _markerSettings.GridOverride;
+        _markerSettings.Save();
+        if (_previewSession is { } session)
+        {
+            session.SetCommentRule(_markerSettings.ToCommentRule());
+            waveformView.SetMarkers(session.EffectiveMarkers);
+        }
+
+        WritePlaybackDiagnostic(
+            "marker.settings-changed",
+            new
+            {
+                markerGrid = _markerSettings.GridOverride.ToUiName(),
+                digits = _markerSettings.CommentDigits,
+                zeroPad = _markerSettings.CommentZeroPad,
+                prefixEnabled = _markerSettings.CommentPrefixEnabled,
+                prefix = _markerSettings.CommentPrefix,
+                suffixEnabled = _markerSettings.CommentSuffixEnabled,
+                suffix = _markerSettings.CommentSuffix,
+                separatorEnabled = _markerSettings.CommentJoinerEnabled,
+                separator = _markerSettings.CommentJoiner,
+                resetPerPart = _markerSettings.CommentResetPerPart,
+            });
     }
 
     private void PopulatePlaylistChoices(IReadOnlyList<WaveformOutputPart> parts)
@@ -1491,8 +1661,8 @@ public partial class Form1 : Form
             new
             {
                 target = target.Number,
-                exitSourceMode = exitSourceMode.ToString(),
-                destinationSyncMode = destinationSyncMode.ToString(),
+                exitSourceMode = exitSourceMode.ToUiName(),
+                destinationSyncMode = destinationSyncMode.ToUiName(),
                 currentSample,
                 currentPartStart,
                 currentPartEnd,
@@ -1629,8 +1799,8 @@ public partial class Form1 : Form
                     {
                         target = target.Number,
                         target.FileName,
-                        exitSourceMode = exitSourceMode.ToString(),
-                        destinationSyncMode = destinationSyncMode.ToString(),
+                        exitSourceMode = exitSourceMode.ToUiName(),
+                        destinationSyncMode = destinationSyncMode.ToUiName(),
                         currentPartStart,
                         currentPartEnd,
                         schedule.SyncBoundarySample,
@@ -1656,8 +1826,8 @@ public partial class Form1 : Form
             new
             {
                 target = target.Number,
-                exitSourceMode = exitSourceMode.ToString(),
-                destinationSyncMode = destinationSyncMode.ToString(),
+                exitSourceMode = exitSourceMode.ToUiName(),
+                destinationSyncMode = destinationSyncMode.ToUiName(),
                 schedule.Generation,
                 schedule.TriggerSample,
                 schedule.SyncBoundarySample,
@@ -1839,6 +2009,21 @@ public partial class Form1 : Form
         _pendingPlaylistTargetSample = targetSample;
         _pendingPlaylistTargetEntrySample = targetEntrySample;
         _pendingPlaylistAudioStarted = false;
+        // 遷移待ち中も旧タイムラインの -L 折り返しを維持するため、待ち開始時点のループを固定する。
+        // （Provider が先に遷移先ループへアームしても、UI の旧位置計算が壊れないようにする）
+        if (_audioPlayer.TryGetActiveLoopProgress(out var loopStart, out var loopEnd))
+        {
+            _pendingSourceLoopStart = loopStart;
+            _pendingSourceLoopEnd = loopEnd;
+        }
+        else
+        {
+            _pendingSourceLoopStart = null;
+            _pendingSourceLoopEnd = null;
+        }
+
+        // 表示中の折り返し済み位置へ壁時計アンカーを合わせ、待ち開始直後の位置ジャンプを防ぐ。
+        AnchorPlayhead(_smoothProgress);
         waveformView.SetAnacrusisPlayhead(null);
         _pendingPlaylistBlinkLevel = GetPlaylistBeatBlinkLevel();
         ApplyPlaylistSelectorColors();
@@ -1925,6 +2110,8 @@ public partial class Form1 : Form
         _pendingPlaylistTargetSample = 0;
         _pendingPlaylistTargetEntrySample = 0;
         _pendingPlaylistAudioStarted = false;
+        _pendingSourceLoopStart = null;
+        _pendingSourceLoopEnd = null;
         _requestedPlaylistPartNumber = null;
         _pendingPlaylistBlinkLevel = 0d;
         _playlistBlinkTimer.Stop();
@@ -2389,6 +2576,7 @@ public partial class Form1 : Form
         }
 
         _previewSession = new WaveformPreviewSession(preview);
+        _previewSession.SetCommentRule(_markerSettings.ToCommentRule());
         waveformView.SetPreview(
             preview.Peaks,
             preview.SourcePath,
@@ -3075,8 +3263,8 @@ public partial class Form1 : Form
                     }
                 }
 
-                // Provider は先読みで先に遷移し得るため、UIが境界へ到達するまでは
-                // 遷移先のループ状態を旧タイムライン表示へ適用しない。
+                // Provider は先読みで先に遷移し得るため、待ち中は待ち開始時のソース側ループでだけ折り返す。
+                // 遷移先ループを旧タイムライン表示へ適用しない。
                 if (_pendingPlaylistTransitionGeneration == 0)
                 {
                     // 未アームのまま -L に入ったら、そこで初めてループを有効化
@@ -3087,10 +3275,18 @@ public partial class Form1 : Form
                     }
 
                     progress = WrapProgressForLoop(progress);
-                    if (progress + 1e-12 < _smoothProgress)
-                    {
-                        waveformView.ClearPlayheadTrail();
-                    }
+                }
+                else
+                {
+                    progress = WrapProgressForLoopRange(
+                        progress,
+                        _pendingSourceLoopStart,
+                        _pendingSourceLoopEnd);
+                }
+
+                if (progress + 1e-12 < _smoothProgress)
+                {
+                    waveformView.ClearPlayheadTrail();
                 }
 
                 _smoothProgress = Math.Clamp(progress, 0d, 1d);
@@ -3156,6 +3352,16 @@ public partial class Form1 : Form
             return progress;
         }
 
+        return WrapProgressForLoopRange(progress, start, end);
+    }
+
+    private double WrapProgressForLoopRange(double progress, double? startNullable, double? endNullable)
+    {
+        if (startNullable is not double start || endNullable is not double end)
+        {
+            return progress;
+        }
+
         var span = end - start;
         if (span <= 1e-12)
         {
@@ -3175,8 +3381,10 @@ public partial class Form1 : Form
             wrapped = start;
         }
 
-        // 長時間再生での累積誤差を抑えるため、1 周以上回ったらアンカーを更新
-        if (progress - _anchorProgress >= span)
+        // 折り返したら壁時計アンカーも同期する。
+        // （シーク直後など残りが短い場合、旧「1周分」条件だとアンカーが古いまま残り、
+        //  遷移待ちで折り返しを止めた瞬間に位置が跳ねる）
+        if (Math.Abs(wrapped - progress) > 1e-9)
         {
             _anchorProgress = wrapped;
             _anchorTickMs = Environment.TickCount64;
@@ -3234,9 +3442,12 @@ public partial class Form1 : Form
                 requestedPart = _requestedPlaylistPartNumber,
                 automaticPlaylist = _automaticPlaylistPlayback,
                 transitionFadeInSeconds = _playlistFadeInSeconds,
+                transitionFadeIn = PlaylistUiNames.ToFadeUiName(_playlistFadeInSeconds, isFadeIn: true),
                 transitionFadeSeconds = _playlistFadeSeconds,
-                exitSourceMode = _playlistExitSourceMode.ToString(),
-                destinationSyncMode = _playlistDestinationSyncMode.ToString(),
+                transitionFadeOut = PlaylistUiNames.ToFadeUiName(_playlistFadeSeconds, isFadeIn: false),
+                exitSourceMode = _playlistExitSourceMode.ToUiName(),
+                destinationSyncMode = _playlistDestinationSyncMode.ToUiName(),
+                markerGrid = _markerSettings.GridOverride.ToUiName(),
                 manualPart = _manualPlaylistPartNumber,
                 pendingGeneration = _pendingPlaylistTransitionGeneration,
                 pendingTriggerSample = _pendingPlaylistBoundarySample,
@@ -3366,15 +3577,27 @@ public partial class Form1 : Form
                 if ((ModifierKeys & Keys.Control) == Keys.Control)
                 {
                     waveformView.ZoomAmpByWheel(wheelDelta);
+                    transportBar.PulseCommandFeedback(
+                        wheelDelta > 0
+                            ? TransportCommand.AmpZoomIn
+                            : TransportCommand.AmpZoomOut);
                 }
                 else if ((ModifierKeys & Keys.Shift) == Keys.Shift)
                 {
                     waveformView.PanTimeByWheel(wheelDelta);
+                    transportBar.PulseCommandFeedback(
+                        wheelDelta > 0
+                            ? TransportCommand.PreviousPage
+                            : TransportCommand.NextPage);
                 }
                 else
                 {
                     var client = waveformView.PointToClient(screenPoint);
                     waveformView.ZoomTimeByWheel(wheelDelta, client.X);
+                    transportBar.PulseCommandFeedback(
+                        wheelDelta > 0
+                            ? TransportCommand.TimeZoomIn
+                            : TransportCommand.TimeZoomOut);
                 }
 
                 m.Result = IntPtr.Zero;

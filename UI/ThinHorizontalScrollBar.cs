@@ -7,7 +7,7 @@ internal sealed class ThinHorizontalScrollBar : Control
 {
     private const int HorizontalInset = 3;
     private const int MinimumThumbWidth = 24;
-    private const int ThumbHeight = 5;
+    private const int ThumbHeight = 8;
 
     private double _viewStart;
     private double _viewSpan = 1d;
@@ -23,7 +23,7 @@ internal sealed class ThinHorizontalScrollBar : Control
             | ControlStyles.ResizeRedraw
             | ControlStyles.UserPaint,
             true);
-        Height = 10;
+        Height = 15;
         TabStop = false;
         Cursor = Cursors.Default;
     }

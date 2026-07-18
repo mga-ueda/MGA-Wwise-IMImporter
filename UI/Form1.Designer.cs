@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.UI;
+﻿namespace MgaWwiseIMImporter.UI;
 
 partial class Form1
 {
@@ -18,7 +18,7 @@ partial class Form1
     private FlowLayoutPanel transitionSettingsPanel;
     private Panel transitionTimeSeparator;
     private Panel fadeInSectionPanel;
-    private Label fadeInHeaderLabel;
+    private SectionHeaderLabel fadeInHeaderLabel;
     private FlowLayoutPanel fadeInChoicesPanel;
     private FlatOptionRadioButton fadeInNoneRadio;
     private FlatOptionRadioButton fadeInOneSecondRadio;
@@ -26,7 +26,7 @@ partial class Form1
     private FlatOptionRadioButton fadeInSixSecondsRadio;
     private FlatOptionRadioButton fadeInNineSecondsRadio;
     private Panel fadeOutSectionPanel;
-    private Label transitionTimeHeaderLabel;
+    private SectionHeaderLabel transitionTimeHeaderLabel;
     private FlowLayoutPanel transitionTimeChoicesPanel;
     private FlatOptionRadioButton transitionTimeHalfSecondRadio;
     private FlatOptionRadioButton transitionTimeOneSecondRadio;
@@ -34,7 +34,7 @@ partial class Form1
     private FlatOptionRadioButton transitionTimeSixSecondsRadio;
     private FlatOptionRadioButton transitionTimeNineSecondsRadio;
     private Panel exitSourceAtSectionPanel;
-    private Label exitSourceAtHeaderLabel;
+    private SectionHeaderLabel exitSourceAtHeaderLabel;
     private FlowLayoutPanel exitSourceAtChoicesPanel;
     private FlatOptionRadioButton exitSourceImmediateRadio;
     private FlatOptionRadioButton exitSourceNextBarRadio;
@@ -42,13 +42,15 @@ partial class Form1
     private FlatOptionRadioButton exitSourceNextCueRadio;
     private FlatOptionRadioButton exitSourceExitCueRadio;
     private Panel destinationSyncSectionPanel;
-    private Label destinationSyncHeaderLabel;
+    private SectionHeaderLabel destinationSyncHeaderLabel;
     private FlowLayoutPanel destinationSyncChoicesPanel;
     private FlatOptionRadioButton destinationSyncEntryCueRadio;
     private FlatOptionRadioButton destinationSyncSameTimeRadio;
+    private Panel rightSidePanel;
+    private MarkerOptionsPanel markerOptionsPanel;
     private Panel playlistSelectorPanel;
     private Panel playlistSeparator;
-    private Label playlistHeaderLabel;
+    private SectionHeaderLabel playlistHeaderLabel;
     private Panel playlistScrollPanel;
     private TableLayoutPanel playlistListLayout;
     private ToolTip playlistToolTip;
@@ -96,7 +98,7 @@ partial class Form1
         transitionSettingsPanel = new FlowLayoutPanel();
         transitionTimeSeparator = new Panel();
         fadeInSectionPanel = new Panel();
-        fadeInHeaderLabel = new Label();
+        fadeInHeaderLabel = new SectionHeaderLabel();
         fadeInChoicesPanel = new FlowLayoutPanel();
         fadeInNoneRadio = new FlatOptionRadioButton();
         fadeInOneSecondRadio = new FlatOptionRadioButton();
@@ -104,7 +106,7 @@ partial class Form1
         fadeInSixSecondsRadio = new FlatOptionRadioButton();
         fadeInNineSecondsRadio = new FlatOptionRadioButton();
         fadeOutSectionPanel = new Panel();
-        transitionTimeHeaderLabel = new Label();
+        transitionTimeHeaderLabel = new SectionHeaderLabel();
         transitionTimeChoicesPanel = new FlowLayoutPanel();
         transitionTimeHalfSecondRadio = new FlatOptionRadioButton();
         transitionTimeOneSecondRadio = new FlatOptionRadioButton();
@@ -112,7 +114,7 @@ partial class Form1
         transitionTimeSixSecondsRadio = new FlatOptionRadioButton();
         transitionTimeNineSecondsRadio = new FlatOptionRadioButton();
         exitSourceAtSectionPanel = new Panel();
-        exitSourceAtHeaderLabel = new Label();
+        exitSourceAtHeaderLabel = new SectionHeaderLabel();
         exitSourceAtChoicesPanel = new FlowLayoutPanel();
         exitSourceImmediateRadio = new FlatOptionRadioButton();
         exitSourceNextBarRadio = new FlatOptionRadioButton();
@@ -120,13 +122,15 @@ partial class Form1
         exitSourceNextCueRadio = new FlatOptionRadioButton();
         exitSourceExitCueRadio = new FlatOptionRadioButton();
         destinationSyncSectionPanel = new Panel();
-        destinationSyncHeaderLabel = new Label();
+        destinationSyncHeaderLabel = new SectionHeaderLabel();
         destinationSyncChoicesPanel = new FlowLayoutPanel();
         destinationSyncEntryCueRadio = new FlatOptionRadioButton();
         destinationSyncSameTimeRadio = new FlatOptionRadioButton();
+        rightSidePanel = new Panel();
+        markerOptionsPanel = new MarkerOptionsPanel();
         playlistSelectorPanel = new Panel();
         playlistSeparator = new Panel();
-        playlistHeaderLabel = new Label();
+        playlistHeaderLabel = new SectionHeaderLabel();
         playlistScrollPanel = new Panel();
         playlistListLayout = new TableLayoutPanel();
         playlistToolTip = new ToolTip(components);
@@ -154,6 +158,7 @@ partial class Form1
         exitSourceAtChoicesPanel.SuspendLayout();
         destinationSyncSectionPanel.SuspendLayout();
         destinationSyncChoicesPanel.SuspendLayout();
+        rightSidePanel.SuspendLayout();
         playlistSelectorPanel.SuspendLayout();
         playlistScrollPanel.SuspendLayout();
         actionBar.SuspendLayout();
@@ -186,7 +191,7 @@ partial class Form1
         // waveformHorizontalScrollBar
         //
         waveformHorizontalScrollBar.Dock = DockStyle.Bottom;
-        waveformHorizontalScrollBar.Height = 10;
+        waveformHorizontalScrollBar.Height = 15;
         waveformHorizontalScrollBar.Name = "waveformHorizontalScrollBar";
         waveformHorizontalScrollBar.TabIndex = 2;
         //
@@ -204,7 +209,7 @@ partial class Form1
         editorTextBox.BorderStyle = BorderStyle.None;
         editorTextBox.DetectUrls = false;
         editorTextBox.Dock = DockStyle.Fill;
-        editorTextBox.Font = new Font(AppFonts.LogFamilyName, 10F);
+        editorTextBox.Font = AppFonts.CreateLogFont(10F);
         editorTextBox.ForeColor = UiColors.LogDefault;
         editorTextBox.HideSelection = false;
         editorTextBox.Name = "editorTextBox";
@@ -272,13 +277,32 @@ partial class Form1
         logAreaPanel.Name = "logAreaPanel";
         logAreaPanel.TabIndex = 0;
         logAreaPanel.Controls.Add(logEditorPanel);
-        logAreaPanel.Controls.Add(transitionTimePanel);
-        logAreaPanel.Controls.Add(playlistSelectorPanel);
+        logAreaPanel.Controls.Add(rightSidePanel);
+        //
+        // rightSidePanel??????Playlist????????????????
+        //
+        rightSidePanel.Dock = DockStyle.Right;
+        rightSidePanel.Name = "rightSidePanel";
+        rightSidePanel.Size = new Size(457, 100);
+        rightSidePanel.TabIndex = 1;
+        rightSidePanel.Controls.Add(transitionTimePanel);
+        rightSidePanel.Controls.Add(playlistSelectorPanel);
+        rightSidePanel.Controls.Add(markerOptionsPanel);
+        //
+        // markerOptionsPanel
+        //
+        markerOptionsPanel.AllowDrop = true;
+        markerOptionsPanel.Dock = DockStyle.Bottom;
+        markerOptionsPanel.Name = "markerOptionsPanel";
+        markerOptionsPanel.Size = new Size(457, 156);
+        markerOptionsPanel.TabIndex = 2;
+        markerOptionsPanel.DragEnter += EditorTextBox_DragEnter;
+        markerOptionsPanel.DragDrop += EditorTextBox_DragDrop;
         //
         // transitionTimePanel
         //
         transitionTimePanel.AllowDrop = true;
-        transitionTimePanel.Dock = DockStyle.Right;
+        transitionTimePanel.Dock = DockStyle.Fill;
         transitionTimePanel.Name = "transitionTimePanel";
         transitionTimePanel.Size = new Size(217, 100);
         transitionTimePanel.TabIndex = 1;
@@ -313,7 +337,7 @@ partial class Form1
         //
         fadeInSectionPanel.Margin = new Padding(0);
         fadeInSectionPanel.Name = "fadeInSectionPanel";
-        fadeInSectionPanel.Size = new Size(108, 153);
+        fadeInSectionPanel.Size = new Size(108, 190);
         fadeInSectionPanel.TabIndex = 0;
         fadeInSectionPanel.Controls.Add(fadeInChoicesPanel);
         fadeInSectionPanel.Controls.Add(fadeInHeaderLabel);
@@ -337,7 +361,7 @@ partial class Form1
         fadeInChoicesPanel.Margin = new Padding(0);
         fadeInChoicesPanel.Name = "fadeInChoicesPanel";
         fadeInChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        fadeInChoicesPanel.Size = new Size(108, 127);
+        fadeInChoicesPanel.Size = new Size(108, 164);
         fadeInChoicesPanel.TabIndex = 1;
         fadeInChoicesPanel.WrapContents = false;
         fadeInChoicesPanel.Controls.Add(fadeInNoneRadio);
@@ -348,10 +372,11 @@ partial class Form1
         //
         // fadeInNoneRadio
         //
-        fadeInNoneRadio.AutoSize = true;
+        fadeInNoneRadio.AutoSize = false;
+        fadeInNoneRadio.Height = 30;
         fadeInNoneRadio.Checked = true;
         fadeInNoneRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        fadeInNoneRadio.Margin = new Padding(3, 3, 3, 2);
+        fadeInNoneRadio.Margin = new Padding(3, 1, 3, 1);
         fadeInNoneRadio.Name = "fadeInNoneRadio";
         fadeInNoneRadio.TabIndex = 0;
         fadeInNoneRadio.Tag = 0D;
@@ -360,9 +385,10 @@ partial class Form1
         //
         // fadeInOneSecondRadio
         //
-        fadeInOneSecondRadio.AutoSize = true;
+        fadeInOneSecondRadio.AutoSize = false;
+        fadeInOneSecondRadio.Height = 30;
         fadeInOneSecondRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        fadeInOneSecondRadio.Margin = new Padding(3, 3, 3, 2);
+        fadeInOneSecondRadio.Margin = new Padding(3, 1, 3, 1);
         fadeInOneSecondRadio.Name = "fadeInOneSecondRadio";
         fadeInOneSecondRadio.TabIndex = 1;
         fadeInOneSecondRadio.Tag = 1D;
@@ -371,9 +397,10 @@ partial class Form1
         //
         // fadeInThreeSecondsRadio
         //
-        fadeInThreeSecondsRadio.AutoSize = true;
+        fadeInThreeSecondsRadio.AutoSize = false;
+        fadeInThreeSecondsRadio.Height = 30;
         fadeInThreeSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        fadeInThreeSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        fadeInThreeSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         fadeInThreeSecondsRadio.Name = "fadeInThreeSecondsRadio";
         fadeInThreeSecondsRadio.TabIndex = 2;
         fadeInThreeSecondsRadio.Tag = 3D;
@@ -382,9 +409,10 @@ partial class Form1
         //
         // fadeInSixSecondsRadio
         //
-        fadeInSixSecondsRadio.AutoSize = true;
+        fadeInSixSecondsRadio.AutoSize = false;
+        fadeInSixSecondsRadio.Height = 30;
         fadeInSixSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        fadeInSixSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        fadeInSixSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         fadeInSixSecondsRadio.Name = "fadeInSixSecondsRadio";
         fadeInSixSecondsRadio.TabIndex = 3;
         fadeInSixSecondsRadio.Tag = 6D;
@@ -393,9 +421,10 @@ partial class Form1
         //
         // fadeInNineSecondsRadio
         //
-        fadeInNineSecondsRadio.AutoSize = true;
+        fadeInNineSecondsRadio.AutoSize = false;
+        fadeInNineSecondsRadio.Height = 30;
         fadeInNineSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        fadeInNineSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        fadeInNineSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         fadeInNineSecondsRadio.Name = "fadeInNineSecondsRadio";
         fadeInNineSecondsRadio.TabIndex = 4;
         fadeInNineSecondsRadio.Tag = 9D;
@@ -406,7 +435,7 @@ partial class Form1
         //
         fadeOutSectionPanel.Margin = new Padding(0);
         fadeOutSectionPanel.Name = "fadeOutSectionPanel";
-        fadeOutSectionPanel.Size = new Size(108, 153);
+        fadeOutSectionPanel.Size = new Size(108, 190);
         fadeOutSectionPanel.TabIndex = 1;
         fadeOutSectionPanel.Controls.Add(transitionTimeChoicesPanel);
         fadeOutSectionPanel.Controls.Add(transitionTimeHeaderLabel);
@@ -430,7 +459,7 @@ partial class Form1
         transitionTimeChoicesPanel.Margin = new Padding(0);
         transitionTimeChoicesPanel.Name = "transitionTimeChoicesPanel";
         transitionTimeChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        transitionTimeChoicesPanel.Size = new Size(108, 127);
+        transitionTimeChoicesPanel.Size = new Size(108, 164);
         transitionTimeChoicesPanel.TabIndex = 1;
         transitionTimeChoicesPanel.WrapContents = false;
         transitionTimeChoicesPanel.Controls.Add(transitionTimeHalfSecondRadio);
@@ -441,10 +470,11 @@ partial class Form1
         //
         // transitionTimeHalfSecondRadio
         //
-        transitionTimeHalfSecondRadio.AutoSize = true;
+        transitionTimeHalfSecondRadio.AutoSize = false;
+        transitionTimeHalfSecondRadio.Height = 30;
         transitionTimeHalfSecondRadio.Checked = true;
         transitionTimeHalfSecondRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        transitionTimeHalfSecondRadio.Margin = new Padding(3, 3, 3, 2);
+        transitionTimeHalfSecondRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeHalfSecondRadio.Name = "transitionTimeHalfSecondRadio";
         transitionTimeHalfSecondRadio.TabIndex = 0;
         transitionTimeHalfSecondRadio.Tag = 0.5D;
@@ -453,9 +483,10 @@ partial class Form1
         //
         // transitionTimeOneSecondRadio
         //
-        transitionTimeOneSecondRadio.AutoSize = true;
+        transitionTimeOneSecondRadio.AutoSize = false;
+        transitionTimeOneSecondRadio.Height = 30;
         transitionTimeOneSecondRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        transitionTimeOneSecondRadio.Margin = new Padding(3, 3, 3, 2);
+        transitionTimeOneSecondRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeOneSecondRadio.Name = "transitionTimeOneSecondRadio";
         transitionTimeOneSecondRadio.TabIndex = 1;
         transitionTimeOneSecondRadio.Tag = 1D;
@@ -464,9 +495,10 @@ partial class Form1
         //
         // transitionTimeThreeSecondsRadio
         //
-        transitionTimeThreeSecondsRadio.AutoSize = true;
+        transitionTimeThreeSecondsRadio.AutoSize = false;
+        transitionTimeThreeSecondsRadio.Height = 30;
         transitionTimeThreeSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        transitionTimeThreeSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        transitionTimeThreeSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeThreeSecondsRadio.Name = "transitionTimeThreeSecondsRadio";
         transitionTimeThreeSecondsRadio.TabIndex = 2;
         transitionTimeThreeSecondsRadio.Tag = 3D;
@@ -475,9 +507,10 @@ partial class Form1
         //
         // transitionTimeSixSecondsRadio
         //
-        transitionTimeSixSecondsRadio.AutoSize = true;
+        transitionTimeSixSecondsRadio.AutoSize = false;
+        transitionTimeSixSecondsRadio.Height = 30;
         transitionTimeSixSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        transitionTimeSixSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        transitionTimeSixSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeSixSecondsRadio.Name = "transitionTimeSixSecondsRadio";
         transitionTimeSixSecondsRadio.TabIndex = 3;
         transitionTimeSixSecondsRadio.Tag = 6D;
@@ -486,9 +519,10 @@ partial class Form1
         //
         // transitionTimeNineSecondsRadio
         //
-        transitionTimeNineSecondsRadio.AutoSize = true;
+        transitionTimeNineSecondsRadio.AutoSize = false;
+        transitionTimeNineSecondsRadio.Height = 30;
         transitionTimeNineSecondsRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        transitionTimeNineSecondsRadio.Margin = new Padding(3, 3, 3, 2);
+        transitionTimeNineSecondsRadio.Margin = new Padding(3, 1, 3, 1);
         transitionTimeNineSecondsRadio.Name = "transitionTimeNineSecondsRadio";
         transitionTimeNineSecondsRadio.TabIndex = 4;
         transitionTimeNineSecondsRadio.Tag = 9D;
@@ -499,7 +533,7 @@ partial class Form1
         //
         exitSourceAtSectionPanel.Margin = new Padding(0);
         exitSourceAtSectionPanel.Name = "exitSourceAtSectionPanel";
-        exitSourceAtSectionPanel.Size = new Size(108, 155);
+        exitSourceAtSectionPanel.Size = new Size(108, 190);
         exitSourceAtSectionPanel.TabIndex = 2;
         exitSourceAtSectionPanel.Controls.Add(exitSourceAtChoicesPanel);
         exitSourceAtSectionPanel.Controls.Add(exitSourceAtHeaderLabel);
@@ -523,7 +557,7 @@ partial class Form1
         exitSourceAtChoicesPanel.Margin = new Padding(0);
         exitSourceAtChoicesPanel.Name = "exitSourceAtChoicesPanel";
         exitSourceAtChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        exitSourceAtChoicesPanel.Size = new Size(108, 129);
+        exitSourceAtChoicesPanel.Size = new Size(108, 164);
         exitSourceAtChoicesPanel.TabIndex = 3;
         exitSourceAtChoicesPanel.WrapContents = false;
         exitSourceAtChoicesPanel.Controls.Add(exitSourceImmediateRadio);
@@ -534,9 +568,10 @@ partial class Form1
         //
         // exitSourceImmediateRadio
         //
-        exitSourceImmediateRadio.AutoSize = true;
+        exitSourceImmediateRadio.AutoSize = false;
+        exitSourceImmediateRadio.Height = 30;
         exitSourceImmediateRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        exitSourceImmediateRadio.Margin = new Padding(3, 3, 3, 2);
+        exitSourceImmediateRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceImmediateRadio.Name = "exitSourceImmediateRadio";
         exitSourceImmediateRadio.TabIndex = 0;
         exitSourceImmediateRadio.Tag = PlaylistExitSourceMode.Immediate;
@@ -545,10 +580,11 @@ partial class Form1
         //
         // exitSourceNextBarRadio
         //
-        exitSourceNextBarRadio.AutoSize = true;
+        exitSourceNextBarRadio.AutoSize = false;
+        exitSourceNextBarRadio.Height = 30;
         exitSourceNextBarRadio.Checked = true;
         exitSourceNextBarRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        exitSourceNextBarRadio.Margin = new Padding(3, 3, 3, 2);
+        exitSourceNextBarRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceNextBarRadio.Name = "exitSourceNextBarRadio";
         exitSourceNextBarRadio.TabIndex = 1;
         exitSourceNextBarRadio.Tag = PlaylistExitSourceMode.NextBar;
@@ -557,9 +593,10 @@ partial class Form1
         //
         // exitSourceNextBeatRadio
         //
-        exitSourceNextBeatRadio.AutoSize = true;
+        exitSourceNextBeatRadio.AutoSize = false;
+        exitSourceNextBeatRadio.Height = 30;
         exitSourceNextBeatRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        exitSourceNextBeatRadio.Margin = new Padding(3, 3, 3, 2);
+        exitSourceNextBeatRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceNextBeatRadio.Name = "exitSourceNextBeatRadio";
         exitSourceNextBeatRadio.TabIndex = 2;
         exitSourceNextBeatRadio.Tag = PlaylistExitSourceMode.NextBeat;
@@ -568,9 +605,10 @@ partial class Form1
         //
         // exitSourceNextCueRadio
         //
-        exitSourceNextCueRadio.AutoSize = true;
+        exitSourceNextCueRadio.AutoSize = false;
+        exitSourceNextCueRadio.Height = 30;
         exitSourceNextCueRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        exitSourceNextCueRadio.Margin = new Padding(3, 3, 3, 2);
+        exitSourceNextCueRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceNextCueRadio.Name = "exitSourceNextCueRadio";
         exitSourceNextCueRadio.TabIndex = 3;
         exitSourceNextCueRadio.Tag = PlaylistExitSourceMode.NextCue;
@@ -579,9 +617,10 @@ partial class Form1
         //
         // exitSourceExitCueRadio
         //
-        exitSourceExitCueRadio.AutoSize = true;
+        exitSourceExitCueRadio.AutoSize = false;
+        exitSourceExitCueRadio.Height = 30;
         exitSourceExitCueRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        exitSourceExitCueRadio.Margin = new Padding(3, 3, 3, 2);
+        exitSourceExitCueRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceExitCueRadio.Name = "exitSourceExitCueRadio";
         exitSourceExitCueRadio.TabIndex = 4;
         exitSourceExitCueRadio.Tag = PlaylistExitSourceMode.ExitCue;
@@ -592,7 +631,7 @@ partial class Form1
         //
         destinationSyncSectionPanel.Margin = new Padding(0);
         destinationSyncSectionPanel.Name = "destinationSyncSectionPanel";
-        destinationSyncSectionPanel.Size = new Size(108, 80);
+        destinationSyncSectionPanel.Size = new Size(108, 94);
         destinationSyncSectionPanel.TabIndex = 3;
         destinationSyncSectionPanel.Controls.Add(destinationSyncChoicesPanel);
         destinationSyncSectionPanel.Controls.Add(destinationSyncHeaderLabel);
@@ -616,7 +655,7 @@ partial class Form1
         destinationSyncChoicesPanel.Margin = new Padding(0);
         destinationSyncChoicesPanel.Name = "destinationSyncChoicesPanel";
         destinationSyncChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        destinationSyncChoicesPanel.Size = new Size(108, 54);
+        destinationSyncChoicesPanel.Size = new Size(108, 68);
         destinationSyncChoicesPanel.TabIndex = 5;
         destinationSyncChoicesPanel.WrapContents = false;
         destinationSyncChoicesPanel.Controls.Add(destinationSyncEntryCueRadio);
@@ -624,10 +663,11 @@ partial class Form1
         //
         // destinationSyncEntryCueRadio
         //
-        destinationSyncEntryCueRadio.AutoSize = true;
+        destinationSyncEntryCueRadio.AutoSize = false;
+        destinationSyncEntryCueRadio.Height = 30;
         destinationSyncEntryCueRadio.Checked = true;
         destinationSyncEntryCueRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        destinationSyncEntryCueRadio.Margin = new Padding(3, 3, 3, 2);
+        destinationSyncEntryCueRadio.Margin = new Padding(3, 1, 3, 1);
         destinationSyncEntryCueRadio.Name = "destinationSyncEntryCueRadio";
         destinationSyncEntryCueRadio.TabIndex = 0;
         destinationSyncEntryCueRadio.Tag = PlaylistDestinationSyncMode.EntryCue;
@@ -636,9 +676,10 @@ partial class Form1
         //
         // destinationSyncSameTimeRadio
         //
-        destinationSyncSameTimeRadio.AutoSize = true;
+        destinationSyncSameTimeRadio.AutoSize = false;
+        destinationSyncSameTimeRadio.Height = 30;
         destinationSyncSameTimeRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        destinationSyncSameTimeRadio.Margin = new Padding(3, 3, 3, 2);
+        destinationSyncSameTimeRadio.Margin = new Padding(3, 1, 3, 1);
         destinationSyncSameTimeRadio.Name = "destinationSyncSameTimeRadio";
         destinationSyncSameTimeRadio.TabIndex = 1;
         destinationSyncSameTimeRadio.Tag = PlaylistDestinationSyncMode.SameTime;
@@ -706,7 +747,7 @@ partial class Form1
         playlistListLayout.DragEnter += EditorTextBox_DragEnter;
         playlistListLayout.DragDrop += EditorTextBox_DragDrop;
         //
-        // actionBar（ステータスバー直上のボタン領域）
+        // actionBar?????????????????
         //
         actionBar.Dock = DockStyle.Bottom;
         actionBar.Height = 44;
@@ -815,7 +856,7 @@ partial class Form1
         AutoScaleMode = AutoScaleMode.Font;
         BackColor = UiColors.WindowBack;
         ClientSize = new Size(960, 640);
-        // Dock 順: Fill → Bottom（内側→外側）→ Top（後から追加したものが外側）
+        // Dock ?: Fill ? Bottom???????? Top??????????????
         Controls.Add(logAreaPanel);
         Controls.Add(actionBar);
         Controls.Add(waapiStatusBar);
@@ -854,6 +895,7 @@ partial class Form1
         playlistScrollPanel.ResumeLayout(false);
         playlistScrollPanel.PerformLayout();
         playlistSelectorPanel.ResumeLayout(false);
+        rightSidePanel.ResumeLayout(false);
         logAreaPanel.ResumeLayout(false);
         ResumeLayout(false);
     }

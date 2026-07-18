@@ -1,4 +1,54 @@
+using System.Globalization;
+
 namespace MgaWwiseIMImporter.Wave;
+
+/// <summary>
+/// UI で追加したマーカーのコメント（連番）生成ルール。
+/// 接頭語・接尾語・連結文字は「無し」の場合に空文字で渡す。
+/// </summary>
+internal readonly record struct MarkerCommentRule(
+    int Digits,
+    bool ZeroPad,
+    string Prefix,
+    string Suffix,
+    string Joiner,
+    bool ResetPerPart)
+{
+    public static MarkerCommentRule Default { get; } = new(
+        Digits: 3,
+        ZeroPad: true,
+        Prefix: string.Empty,
+        Suffix: string.Empty,
+        Joiner: string.Empty,
+        ResetPerPart: false);
+
+    public string Format(int number)
+    {
+        var parts = new List<string>(3);
+        if (Prefix.Length > 0)
+        {
+            parts.Add(Prefix);
+        }
+
+        if (Digits > 0)
+        {
+            var numberText = number.ToString(CultureInfo.InvariantCulture);
+            if (ZeroPad)
+            {
+                numberText = numberText.PadLeft(Digits, '0');
+            }
+
+            parts.Add(numberText);
+        }
+
+        if (Suffix.Length > 0)
+        {
+            parts.Add(Suffix);
+        }
+
+        return string.Join(Joiner, parts);
+    }
+}
 
 /// <summary>
 /// 読み込み元の不変プレビューと、現在の読み込み中だけ有効な追加マーカーを管理する。
@@ -8,12 +58,28 @@ internal sealed class WaveformPreviewSession
     private readonly List<UserWaveformMarker> _userMarkers = [];
     private IReadOnlyList<WaveformMarkerMark> _effectiveMarkers;
     private IReadOnlyList<WaveformMarkerMark> _wwiseMarkers;
+    private MarkerCommentRule _commentRule = MarkerCommentRule.Default;
 
     public WaveformPreviewSession(WaveformPreviewData preview)
     {
         Preview = preview;
         _effectiveMarkers = preview.Markers;
         _wwiseMarkers = preview.Markers;
+    }
+
+    /// <summary>コメント生成ルールを差し替え、既存の追加マーカーへ再適用する。</summary>
+    public void SetCommentRule(MarkerCommentRule rule)
+    {
+        if (_commentRule == rule)
+        {
+            return;
+        }
+
+        _commentRule = rule;
+        if (_userMarkers.Count > 0)
+        {
+            RebuildMarkerSnapshots();
+        }
     }
 
     public WaveformPreviewData Preview { get; }
@@ -90,10 +156,32 @@ internal sealed class WaveformPreviewSession
         var orderedUserMarkers = _userMarkers
             .OrderBy(marker => marker.SampleOffset)
             .ToArray();
-        var userMarkerMarks = orderedUserMarkers
-            .Select((marker, index) =>
-                new WaveformMarkerMark(marker.SampleOffset, $"{index + 1:000}"))
-            .ToArray();
+        var userMarkerMarks = new WaveformMarkerMark[orderedUserMarkers.Length];
+        var globalNumber = 0;
+        var partNumber = 0;
+        var currentPartIndex = -1;
+        for (var i = 0; i < orderedUserMarkers.Length; i++)
+        {
+            var marker = orderedUserMarkers[i];
+            globalNumber++;
+            var number = globalNumber;
+            if (_commentRule.ResetPerPart)
+            {
+                var partIndex = FindOutputPartIndex(marker.SampleOffset);
+                if (partIndex != currentPartIndex)
+                {
+                    currentPartIndex = partIndex;
+                    partNumber = 0;
+                }
+
+                partNumber++;
+                number = partNumber;
+            }
+
+            userMarkerMarks[i] = new WaveformMarkerMark(
+                marker.SampleOffset,
+                _commentRule.Format(number));
+        }
 
         _effectiveMarkers = Preview.Markers
             .Concat(userMarkerMarks)
@@ -101,6 +189,21 @@ internal sealed class WaveformPreviewSession
             .ToArray();
 
         _wwiseMarkers = _effectiveMarkers;
+    }
+
+    private int FindOutputPartIndex(long sampleOffset)
+    {
+        for (var i = 0; i < Preview.OutputParts.Count; i++)
+        {
+            var part = Preview.OutputParts[i];
+            if (sampleOffset >= part.StartSampleOffset
+                && sampleOffset < part.EndSampleOffset)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 }
 

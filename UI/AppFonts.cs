@@ -1,3 +1,4 @@
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 
 namespace MgaWwiseIMImporter.UI;
@@ -6,10 +7,11 @@ namespace MgaWwiseIMImporter.UI;
 internal static class AppFonts
 {
     private const uint FrPrivate = 0x10;
-    private const string BundledFamilyName = "UDEV Gothic";
     private static string? _registeredPath;
 
-    public static string LogFamilyName { get; private set; } = "MS Gothic";
+    // AddFontResourceEx(FR_PRIVATE) だけでは GDI+ の new Font(名前, ...) から
+    // フォントが見つからず既定フォントへ化けるため、GDI+ 用に別途保持する。
+    private static PrivateFontCollection? _privateFonts;
 
     public static void EnsureRegistered()
     {
@@ -25,8 +27,27 @@ internal static class AppFonts
         }
 
         _registeredPath = path;
-        LogFamilyName = BundledFamilyName;
+        try
+        {
+            var collection = new PrivateFontCollection();
+            collection.AddFontFile(path);
+            _privateFonts = collection;
+        }
+        catch (Exception)
+        {
+            _privateFonts = null;
+        }
+
         Application.ApplicationExit += (_, _) => Unregister();
+    }
+
+    /// <summary>ログ表示用の等幅フォントを生成する。同梱フォントが使えない場合は Consolas。</summary>
+    public static Font CreateLogFont(float sizePt)
+    {
+        var family = _privateFonts?.Families is { Length: > 0 } families ? families[0] : null;
+        return family is not null
+            ? new Font(family, sizePt, FontStyle.Regular, GraphicsUnit.Point)
+            : new Font("Consolas", sizePt, FontStyle.Regular, GraphicsUnit.Point);
     }
 
     private static void Unregister()

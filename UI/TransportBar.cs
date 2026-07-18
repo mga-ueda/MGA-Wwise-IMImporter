@@ -132,6 +132,19 @@ internal sealed class TransportBar : UserControl
         }
     }
 
+    /// <summary>
+    /// マウスホイール／スクロール操作に対応するボタンを点灯し、直ちにフェードアウトする。
+    /// 連続操作時は呼び出すたびに点灯レベルを戻す。
+    /// </summary>
+    public void PulseCommandFeedback(TransportCommand command)
+    {
+        if (_commandButtons.TryGetValue(command, out var button))
+        {
+            button.BeginShortcutFeedback();
+            button.EndShortcutFeedback();
+        }
+    }
+
     public void ApplyColors()
     {
         BackColor = UiColors.ForControlBack(UiColors.TransportBack);

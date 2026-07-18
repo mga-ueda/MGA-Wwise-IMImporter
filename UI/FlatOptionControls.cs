@@ -4,11 +4,16 @@ namespace MgaWwiseIMImporter.UI;
 
 internal sealed class FlatOptionRadioButton : RadioButton
 {
+    /// <summary>プレイリスト項目と同じ行高（AutoScale 後も固定）。</summary>
+    public const int RowHeight = 30;
+
     private bool _hovered;
 
     public FlatOptionRadioButton()
     {
-        AutoSize = true;
+        AutoSize = false;
+        Height = RowHeight;
+        Margin = new Padding(3, 1, 3, 1);
         FlatStyle = FlatStyle.Flat;
         SetStyle(
             ControlStyles.UserPaint
@@ -31,7 +36,15 @@ internal sealed class FlatOptionRadioButton : RadioButton
             Font,
             Size.Empty,
             TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-        return new Size(glyph + gap + text.Width + ScaleLogical(2), Math.Max(glyph, text.Height) + ScaleLogical(4));
+        return new Size(glyph + gap + text.Width + ScaleLogical(2), RowHeight);
+    }
+
+    protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+    {
+        base.ScaleControl(factor, specified);
+        // ランタイム生成のプレイリスト行と行間を揃えるため、縦方向の AutoScale を打ち消す。
+        Height = RowHeight;
+        Margin = new Padding(3, 1, 3, 1);
     }
 
     protected override void OnMouseEnter(EventArgs e)

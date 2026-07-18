@@ -116,6 +116,9 @@ internal sealed class WaveformView : Control
     private bool _fadeOutTrailActive;
     private bool _fadeOutPlayheadIsExit;
     private bool _isDraggingSeek;
+    private int _seekDragStartX;
+    private bool _seekMovedDuringDrag;
+    private double _lastMouseSeekProgress = double.NaN;
     private MarkerEditMode? _markerEditMode;
     private int _markerStrokeLastX;
     private float? _mouseGuideX;
@@ -280,6 +283,8 @@ internal sealed class WaveformView : Control
         ResetAmpZoom(refresh: false);
         ClearExportHighlight();
         _isDraggingSeek = false;
+        _seekMovedDuringDrag = false;
+        _lastMouseSeekProgress = double.NaN;
         _markerEditMode = null;
         _mouseGuideX = null;
         ClearPlayhead();
@@ -1235,8 +1240,17 @@ internal sealed class WaveformView : Control
     /// <summary>時間軸の表示位置または倍率が変更された。</summary>
     public event EventHandler? TimeViewChanged;
 
+    /// <summary>波形上のマウス操作に対応するトランスポート表示を要求する。</summary>
+    public event EventHandler<TransportCommand>? TransportFeedbackRequested;
+
     /// <summary>Marker レーンで追加マーカーの描画／消去が要求された。</summary>
     public event EventHandler<MarkerEditRequestedEventArgs>? MarkerEditRequested;
+
+    /// <summary>
+    /// ドラッグ付与時のスナップ単位。描画されるグリッド線には影響しない。
+    /// </summary>
+    public MarkerGridOverrideMode MarkerGridOverride { get; set; } =
+        MarkerGridOverrideMode.Default;
 
     /// <summary>マウス直下の Music Playlist 番号。範囲外では null。</summary>
     public event EventHandler<int?>? PlaylistHoverChanged;
@@ -1510,7 +1524,12 @@ internal sealed class WaveformView : Control
         }
 
         _isDraggingSeek = true;
+        _seekDragStartX = e.X;
+        _seekMovedDuringDrag = false;
         Capture = true;
+        // シングルクリックは MouseDown のみでシークする。
+        // MouseUp でもう一度 Seek すると再生中に一瞬鳴ってからやり直すことがある。
+        _lastMouseSeekProgress = progress;
         SeekRequested?.Invoke(this, progress);
     }
 
@@ -1530,8 +1549,18 @@ internal sealed class WaveformView : Control
         // 2回目の MouseDown で始まったシークドラッグを打ち切り、
         // ズーム後の MouseUp が別の絶対位置へシークしないようにする
         _isDraggingSeek = false;
+        _seekMovedDuringDrag = false;
         Capture = false;
+        var previousZoom = _timeZoom;
         ZoomTimeToPlaylistUnderMouse(e.X);
+        if (_timeZoom > previousZoom + 1e-9)
+        {
+            TransportFeedbackRequested?.Invoke(this, TransportCommand.TimeZoomIn);
+        }
+        else if (_timeZoom < previousZoom - 1e-9)
+        {
+            TransportFeedbackRequested?.Invoke(this, TransportCommand.TimeZoomOut);
+        }
         UpdateTimelineToolTip(e.Location);
     }
 
@@ -1553,6 +1582,21 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        // クリックとドラッグを分ける（微小なマウスブレは無視）
+        if (!_seekMovedDuringDrag
+            && Math.Abs(e.X - _seekDragStartX) < 3)
+        {
+            return;
+        }
+
+        _seekMovedDuringDrag = true;
+        if (!double.IsNaN(_lastMouseSeekProgress)
+            && Math.Abs(progress - _lastMouseSeekProgress) < 1e-9)
+        {
+            return;
+        }
+
+        _lastMouseSeekProgress = progress;
         SeekRequested?.Invoke(this, progress);
     }
 
@@ -1573,10 +1617,17 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        var moved = _seekMovedDuringDrag;
         _isDraggingSeek = false;
+        _seekMovedDuringDrag = false;
         Capture = false;
-        if (TryGetProgressFromX(e.X, out var progress))
+        // ドラッグ終了位置だけ確定。クリックのみの場合は MouseDown 済みなので再シークしない。
+        if (moved
+            && TryGetProgressFromX(e.X, out var progress)
+            && (double.IsNaN(_lastMouseSeekProgress)
+                || Math.Abs(progress - _lastMouseSeekProgress) >= 1e-9))
         {
+            _lastMouseSeekProgress = progress;
             SeekRequested?.Invoke(this, progress);
         }
     }
@@ -1734,7 +1785,15 @@ internal sealed class WaveformView : Control
             points.Add(new MarkerGridPoint(sampleOffset, AbsoluteToX(absolute, labels)));
         }
 
-        if (CalculateVisibleBarCount(barStarts, frameCount) < 8d - 1e-9)
+        // Override 指定時は表示グリッド（ズーム状態）を無視して単位を固定する。
+        // 縦線の描画には影響しない（スナップ候補のみ変更）。
+        var includeBeats = MarkerGridOverride switch
+        {
+            MarkerGridOverrideMode.Bar => false,
+            MarkerGridOverrideMode.Beat => true,
+            _ => CalculateVisibleBarCount(barStarts, frameCount) < 8d - 1e-9,
+        };
+        if (includeBeats)
         {
             for (var i = 0; i < barStarts.Length; i++)
             {
@@ -1754,6 +1813,14 @@ internal sealed class WaveformView : Control
                         bar.SampleOffset
                         + (next.SampleOffset - bar.SampleOffset) * beat / (double)bar.Numerator);
                 }
+            }
+        }
+        else if (MarkerGridOverride == MarkerGridOverrideMode.Bar)
+        {
+            // 常に小節単位: 表示上の間引きに関わらず全小節頭を候補にする。
+            foreach (var bar in barStarts)
+            {
+                AddPoint(bar.SampleOffset);
             }
         }
         else
@@ -3376,36 +3443,6 @@ internal sealed class WaveformView : Control
     }
 
     /// <summary>
-    /// ラベルの理想 X を、描画範囲内に収まるよう補正する（右はみ出しは左寄せ）。
-    /// </summary>
-    private static float ClampLabelX(float preferredX, float textWidth, float leftBound, float rightBound)
-    {
-        var maxWidth = rightBound - leftBound;
-        if (maxWidth <= 0f)
-        {
-            return leftBound;
-        }
-
-        if (textWidth >= maxWidth)
-        {
-            return leftBound;
-        }
-
-        var x = preferredX;
-        if (x + textWidth > rightBound)
-        {
-            x = rightBound - textWidth;
-        }
-
-        if (x < leftBound)
-        {
-            x = leftBound;
-        }
-
-        return x;
-    }
-
-    /// <summary>
     /// 書き出し中パートの枠をパルス発光させる（進行中の見た目用）。
     /// </summary>
     private void DrawExportPartGlow(Graphics g, Rectangle timelineBounds)
@@ -3844,11 +3881,12 @@ internal sealed class WaveformView : Control
             g.FillPolygon(triangleBrush, triangle);
         }
 
-        // コメントは右から着地優先（後のマーカーを隠しにくい）。重なり時は左へ寄せて必ず描く。
-        var nextOccupiedLeft = (float)labels.Right;
-        for (var i = _markers.Count - 1; i >= 0; i--)
+        // コメントは左から配置。好みの位置に収まらない／前の文字と重なる場合は描かない
+        // （ズームで間隔が広がれば表示される）。
+        const float commentGapPx = 2f;
+        var lastOccupiedRight = (float)labels.Left;
+        foreach (var marker in _markers.OrderBy(m => m.SampleOffset))
         {
-            var marker = _markers[i];
             if (string.IsNullOrEmpty(marker.Comment))
             {
                 continue;
@@ -3862,17 +3900,17 @@ internal sealed class WaveformView : Control
 
             var x = AbsoluteToX(abs, labels);
             var size = g.MeasureString(marker.Comment, Font);
-            var preferredX = x + triHalfW + 2f;
-            var rightLimit = Math.Min(labels.Right, nextOccupiedLeft - 2f);
-            if (rightLimit <= labels.Left)
+            var textX = x + triHalfW + commentGapPx;
+            var textRight = textX + size.Width;
+            if (textX < lastOccupiedRight + commentGapPx
+                || textRight > labels.Right + 1e-3f)
             {
-                rightLimit = labels.Right;
+                continue;
             }
 
-            var textX = ClampLabelX(preferredX, size.Width, labels.Left, rightLimit);
             var textY = markerRowTop + Math.Max(0f, (rowHeight - size.Height) * 0.5f);
             g.DrawString(marker.Comment, Font, textBrush, textX, textY);
-            nextOccupiedLeft = textX;
+            lastOccupiedRight = textRight;
         }
     }
 

@@ -85,6 +85,7 @@ internal static class UiColors
     public static Color PlaylistBack { get; set; } = Color.FromArgb(30, 30, 30);
     public static Color PlaylistDefaultFore { get; set; } = Color.FromArgb(150, 150, 150);
     public static Color PlaylistOptionFore { get; set; } = Color.FromArgb(235, 235, 235);
+    public static Color SectionHeaderBack { get; set; } = Color.FromArgb(45, 45, 48);
     public static Color PlaylistHoverFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color PlaylistActiveFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color PlaylistButtonBorder { get; set; } = Color.FromArgb(58, 58, 58);
@@ -93,6 +94,7 @@ internal static class UiColors
     public static Color PlaylistHoverBorder { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color PlaylistTransitionBorder { get; set; } = Color.FromArgb(0, 245, 255);
     public static Color PlaylistManualBorder { get; set; } = Color.FromArgb(255, 255, 0);
+    public static Color MarkerCommentErrorFore { get; set; } = Color.FromArgb(255, 110, 110);
 
     // --- 下部アクションバー ---
     public static Color ActionBarBack { get; set; } = Color.FromArgb(26, 27, 38);
@@ -207,6 +209,7 @@ internal static class UiColors
         new("PlaylistBack", "Settings／Playlist・背景", () => PlaylistBack, c => PlaylistBack = c),
         new("PlaylistDefaultFore", "Settings／Playlist・見出し／通常文字", () => PlaylistDefaultFore, c => PlaylistDefaultFore = c),
         new("PlaylistOptionFore", "Settings・選択肢文字", () => PlaylistOptionFore, c => PlaylistOptionFore = c),
+        new("SectionHeaderBack", "セクション見出し・背景", () => SectionHeaderBack, c => SectionHeaderBack = c),
         new("PlaylistHoverFore", "Playlist・波形ホバー文字", () => PlaylistHoverFore, c => PlaylistHoverFore = c),
         new("PlaylistActiveFore", "Playlist・再生中文字", () => PlaylistActiveFore, c => PlaylistActiveFore = c),
         new("PlaylistButtonBorder", "Playlist・ボタン枠", () => PlaylistButtonBorder, c => PlaylistButtonBorder = c),
@@ -215,6 +218,7 @@ internal static class UiColors
         new("PlaylistHoverBorder", "Playlist・波形ホバー枠", () => PlaylistHoverBorder, c => PlaylistHoverBorder = c),
         new("PlaylistTransitionBorder", "Playlist・自動再生中／遷移待機枠", () => PlaylistTransitionBorder, c => PlaylistTransitionBorder = c),
         new("PlaylistManualBorder", "Playlist・手動再生中枠", () => PlaylistManualBorder, c => PlaylistManualBorder = c),
+        new("MarkerCommentErrorFore", "Marker Comment・エラー文字", () => MarkerCommentErrorFore, c => MarkerCommentErrorFore = c),
 
         new("ActionBarBack", "Action Bar・背景", () => ActionBarBack, c => ActionBarBack = c),
         new("ActionOptionFore", "Action Bar・オプション文字", () => ActionOptionFore, c => ActionOptionFore = c),
@@ -317,6 +321,13 @@ internal static class UiColors
             "LogPlaylistScrollTrack",
             "LogPlaylistScrollThumb",
             "LogPlaylistScrollThumbHover",
+            "FadeInSectionBack",
+            "FadeOutSectionBack",
+            "ExitSourceAtSectionBack",
+            "DestinationSyncSectionBack",
+            "MusicPlaylistSectionBack",
+            "MarkerGridSectionBack",
+            "MarkerCommentSectionBack",
         ];
 
         var changed = false;
