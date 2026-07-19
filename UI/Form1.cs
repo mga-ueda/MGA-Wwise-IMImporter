@@ -5094,6 +5094,18 @@ public partial class Form1 : Form
     {
         const int wmMouseWheel = 0x020A;
         const int wmEraseBkgnd = 0x0014;
+        const int wmSysCommand = 0x0112;
+        const int scKeyMenu = 0xF100;
+
+        // Alt 単独でシステムメニューモードに入るとフォーカスが外れ、
+        // 波形ショートカットや操作系の挙動が崩れるため握りつぶす。
+        // LParam==0 が Alt 単独。Alt+Space（システムメニュー）は通す。
+        if (m.Msg == wmSysCommand
+            && ((int)(m.WParam.ToInt64() & 0xFFF0)) == scKeyMenu
+            && m.LParam == IntPtr.Zero)
+        {
+            return;
+        }
 
         if (m.Msg == wmMouseWheel && !IsDisposed && waveformView is { IsDisposed: false })
         {
