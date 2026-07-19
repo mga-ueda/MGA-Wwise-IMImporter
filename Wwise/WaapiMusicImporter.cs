@@ -6,7 +6,7 @@ namespace MgaWwiseIMImporter.Wwise;
 /// <see cref="WwiseMusicPlan"/> を WAAPI（ak.wwise.core.object.set）で Wwise へ流し込む。
 /// <para>
 /// 1. 各 Music Segment 用にリージョン範囲だけを切り出した WAV を用意する。
-/// 2. 複数パート時は State Group／State を作成し、Music Switch Container に割当。
+/// 2. 複数パート時は State Group／State を作成または更新し、Music Switch Container に割当。
 /// 3. object.set で Playlist／Segment／Track（＋切り出し WAV）と Cue を作成。
 /// </para>
 /// </summary>
@@ -22,7 +22,7 @@ internal static class WaapiMusicImporter
         IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
-        bool overwriteExistingStateGroup = false,
+        bool updateExistingStateGroup = false,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -48,12 +48,11 @@ internal static class WaapiMusicImporter
         {
             stateGroupPath = importSettings.ResolveStateGroupPath(plan.ContainerName);
             Log($"StateGrp : {stateGroupPath}");
-            if (overwriteExistingStateGroup)
+            if (updateExistingStateGroup)
             {
-                progress?.Report("StateGrp : 既存を削除中...");
-                await WaapiObjectUtil.DeleteAsync(waapiSettings, stateGroupPath, cancellationToken)
-                    .ConfigureAwait(false);
-                Log("StateGrp : 既存を削除して新規作成");
+                // BuildSetArgs の onNameConflict=merge により、State Group 自体を維持したまま
+                // State 一覧を現在の Playlist 構成へ同期する。
+                Log("StateGrp : 既存オブジェクトを変更");
             }
             else
             {
@@ -76,7 +75,7 @@ internal static class WaapiMusicImporter
         var timeout = TimeSpan.FromMilliseconds(Math.Max(waapiSettings.TimeoutMs, 30000));
         using var client = new WaapiHttpClient(waapiSettings.Url, timeout);
 
-        // 構造の一括作成（複数パート時は State Group も同じ呼び出しで作成）
+        // 構造の一括作成／更新（複数パート時は State Group も同じ呼び出しで処理）
         var setArgs = BuildSetArgs(
             plan,
             parentPath,

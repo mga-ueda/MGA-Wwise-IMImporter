@@ -4391,7 +4391,7 @@ public partial class Form1 : Form
             return;
         }
 
-        var overwriteStateGroup = false;
+        var updateExistingStateGroup = false;
         if (plan.IsMultiPart)
         {
             var stateGroupPath = importSettings.ResolveStateGroupPath(plan.ContainerName);
@@ -4419,31 +4419,8 @@ public partial class Form1 : Form
                 return;
             }
 
-            if (exists)
-            {
-                var conflict = OwnerCenteredMessageBox.Show(
-                    this,
-                    $"State Group が既に存在します。\n\n"
-                    + $"{stateGroupPath}\n\n"
-                    + "上書き（削除して新規作成）してインポートを続けますか？\n"
-                    + "「いいえ」でインポート全体を中断します。",
-                    "State Group の衝突",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning,
-                    MessageBoxDefaultButton.Button2);
-
-                if (conflict != DialogResult.Yes || exportGeneration != _exportGeneration)
-                {
-                    ReportProgress("Import cancelled.");
-                    AppendReport(
-                        $"=== Wwise Import ==={Environment.NewLine}"
-                        + $"Message : 既存 State Group のためインポートを中断しました。{Environment.NewLine}"
-                        + $"StateGrp : {stateGroupPath}{Environment.NewLine}{Environment.NewLine}");
-                    return;
-                }
-
-                overwriteStateGroup = true;
-            }
+            // 既存 State Group は削除せず、object.set の merge で同一オブジェクトを更新する。
+            updateExistingStateGroup = exists;
         }
 
         if (exportGeneration != _exportGeneration)
@@ -4464,7 +4441,7 @@ public partial class Form1 : Form
                 snapshot.Parts,
                 preview.WavInfo.SampleRate,
                 preview.WavInfo.BlockAlign,
-                overwriteStateGroup,
+                updateExistingStateGroup,
                 progress));
             if (!IsDisposed)
             {
