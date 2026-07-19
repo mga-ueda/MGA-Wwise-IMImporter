@@ -18,11 +18,6 @@ internal sealed class WwiseImportSettings
     public int PrefetchLengthMs { get; init; } = 500;
 
     /// <summary>
-    /// エクスポート WAV のコピー先ディレクトリ。空ならコピーせず、書き出し場所から直接インポートする。
-    /// </summary>
-    public string WaveCopyDir { get; init; } = string.Empty;
-
-    /// <summary>
     /// 複数パート時に作る State Group の親パス。
     /// 既定は <c>\States\Default Work Unit</c>。
     /// </summary>
@@ -54,9 +49,6 @@ internal sealed class WwiseImportSettings
                 && int.TryParse(prefetch, NumberStyles.Integer, CultureInfo.InvariantCulture, out var prefetchMs)
                 ? Math.Clamp(prefetchMs, 0, 10000)
                 : 500,
-            WaveCopyDir = values.TryGetValue("WaveCopyDir", out var dir)
-                ? dir.Trim().Trim('"')
-                : string.Empty,
             StateGroupParentPath = values.TryGetValue("StateGroupParentPath", out var sgParent)
                 && !string.IsNullOrWhiteSpace(sgParent)
                 ? sgParent.Trim().Trim('"')
@@ -69,8 +61,10 @@ internal sealed class WwiseImportSettings
         var values = IniFile.ReadSection(Section);
         var changed = false;
 
-        // 旧・XML フェード用キーは除去
-        if (values.Remove("SourceFadeOutTimeSec") | values.Remove("SourceFadeOutOffsetSec"))
+        // 旧・XML フェード用キー／WaveCopyDir は除去
+        if (values.Remove("SourceFadeOutTimeSec")
+            | values.Remove("SourceFadeOutOffsetSec")
+            | values.Remove("WaveCopyDir"))
         {
             changed = true;
         }
@@ -87,12 +81,6 @@ internal sealed class WwiseImportSettings
             changed = true;
         }
 
-        if (!values.ContainsKey("WaveCopyDir"))
-        {
-            values["WaveCopyDir"] = string.Empty;
-            changed = true;
-        }
-
         if (!values.ContainsKey("StateGroupParentPath"))
         {
             values["StateGroupParentPath"] = DefaultStateGroupParentPath;
@@ -105,7 +93,6 @@ internal sealed class WwiseImportSettings
             {
                 ["LookAheadMs"] = values["LookAheadMs"],
                 ["PrefetchLengthMs"] = values["PrefetchLengthMs"],
-                ["WaveCopyDir"] = values["WaveCopyDir"],
                 ["StateGroupParentPath"] = values["StateGroupParentPath"],
             });
         }

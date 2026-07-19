@@ -5,10 +5,9 @@ namespace MgaWwiseIMImporter.Wwise;
 /// <summary>
 /// <see cref="WwiseMusicPlan"/> を WAAPI（ak.wwise.core.object.set）で Wwise へ流し込む。
 /// <para>
-/// 1. WaveCopyDir があればエクスポート WAV をコピー。
-/// 2. 各 Music Segment 用にリージョン範囲だけを切り出した WAV を用意する。
-/// 3. 複数パート時は State Group／State を作成し、Music Switch Container に割当。
-/// 4. object.set で Playlist／Segment／Track（＋切り出し WAV）と Cue を作成。
+/// 1. 各 Music Segment 用にリージョン範囲だけを切り出した WAV を用意する。
+/// 2. 複数パート時は State Group／State を作成し、Music Switch Container に割当。
+/// 3. object.set で Playlist／Segment／Track（＋切り出し WAV）と Cue を作成。
 /// </para>
 /// </summary>
 internal static class WaapiMusicImporter
@@ -18,6 +17,9 @@ internal static class WaapiMusicImporter
         WwiseImportSettings importSettings,
         WwiseMusicPlan plan,
         string parentPath,
+        string sourceWavPath,
+        string outputDirectory,
+        IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
         bool overwriteExistingStateGroup = false,
@@ -51,17 +53,21 @@ internal static class WaapiMusicImporter
             }
         }
 
-        // 1. パート WAV のコピー先を決める
-        var partWavs = ResolvePartWavPaths(plan, importSettings, sb);
-
-        // 2. セグメント単位に切り出し（タイムライン先頭へ載せるため）
-        var segmentWavs = SliceSegmentWavs(plan, partWavs, importSettings, sampleRate, blockAlign, sb);
+        // 中間パート WAV は作らず、元 WAV から最終セグメント WAV を直接切り出す。
+        var segmentWavs = SliceSegmentWavs(
+            plan,
+            sourceWavPath,
+            outputDirectory,
+            outputParts,
+            sampleRate,
+            blockAlign,
+            sb);
 
         // タイムアウトは import を含むので長めに取る
         var timeout = TimeSpan.FromMilliseconds(Math.Max(waapiSettings.TimeoutMs, 30000));
         using var client = new WaapiHttpClient(waapiSettings.Url, timeout);
 
-        // 3. 構造の一括作成（複数パート時は State Group も同じ呼び出しで作成）
+        // 構造の一括作成（複数パート時は State Group も同じ呼び出しで作成）
         var setArgs = BuildSetArgs(
             plan,
             parentPath,
@@ -132,68 +138,25 @@ internal static class WaapiMusicImporter
     }
 
     /// <summary>
-    /// パート WAV（エクスポート結果）の参照パスを決める。WaveCopyDir があればそこへコピー。
-    /// キーは元の SourceWavPath。
-    /// </summary>
-    private static Dictionary<string, string> ResolvePartWavPaths(
-        WwiseMusicPlan plan,
-        WwiseImportSettings settings,
-        StringBuilder log)
-    {
-        var sources = plan.Playlists
-            .SelectMany(p => p.Segments)
-            .SelectMany(s => s.Tracks)
-            .Select(t => t.SourceWavPath)
-            .Concat(plan.Playlists.Select(p => p.SourceWavPath))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var copyDir = settings.WaveCopyDir;
-        if (copyDir.Length == 0)
-        {
-            log.AppendLine("Copy    : （パート WAV のコピーなし）");
-            foreach (var source in sources)
-            {
-                map[source] = source;
-            }
-
-            return map;
-        }
-
-        Directory.CreateDirectory(copyDir);
-        log.AppendLine($"Copy    : {copyDir}");
-        foreach (var source in sources)
-        {
-            var dest = Path.Combine(copyDir, Path.GetFileName(source));
-            File.Copy(source, dest, overwrite: true);
-            map[source] = dest;
-        }
-
-        return map;
-    }
-
-    /// <summary>
-    /// 各トラックの可聴範囲だけを切り出して個別 WAV にする。
+    /// 元 WAV から各トラックの可聴範囲だけを直接切り出す。
     /// 返り値は TrackSliceKey → 切り出し WAV パス。
     /// </summary>
     private static Dictionary<string, string> SliceSegmentWavs(
         WwiseMusicPlan plan,
-        IReadOnlyDictionary<string, string> partWavs,
-        WwiseImportSettings settings,
+        string sourceWavPath,
+        string outputDirectory,
+        IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
         StringBuilder log)
     {
-        var sliceDir = settings.WaveCopyDir.Length > 0
-            ? Path.Combine(settings.WaveCopyDir, "_segments")
-            : Path.Combine(
-                Path.GetDirectoryName(plan.Playlists[0].SourceWavPath) ?? Path.GetTempPath(),
-                ".mga_wwise_segments",
-                plan.ContainerName);
+        Directory.CreateDirectory(outputDirectory);
+        log.AppendLine($"Output  : {outputDirectory}");
 
-        Directory.CreateDirectory(sliceDir);
-        log.AppendLine($"Slices  : {sliceDir}");
+        var partStarts = outputParts.ToDictionary(
+            part => Path.GetFullPath(Path.Combine(outputDirectory, part.FileName)),
+            part => part.StartSampleOffset,
+            StringComparer.OrdinalIgnoreCase);
 
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -208,14 +171,17 @@ internal static class WaapiMusicImporter
 
                 foreach (var track in segment.Tracks)
                 {
-                    if (!partWavs.TryGetValue(track.SourceWavPath, out var partPath))
+                    var partPath = Path.GetFullPath(track.SourceWavPath);
+                    if (!partStarts.TryGetValue(partPath, out var partStartSample))
                     {
                         throw new InvalidOperationException(
-                            $"パート WAV が見つかりません: {track.SourceWavPath}");
+                            $"出力パートを特定できません: {track.SourceWavPath}");
                     }
 
-                    var startSample = MsToSample(track.ClipStartMs, sampleRate);
-                    var endSample = MsToSample(track.ClipEndMs, sampleRate);
+                    var startSample = checked(
+                        partStartSample + MsToSample(track.ClipStartMs, sampleRate));
+                    var endSample = checked(
+                        partStartSample + MsToSample(track.ClipEndMs, sampleRate));
                     if (endSample <= startSample)
                     {
                         throw new InvalidOperationException(
@@ -228,20 +194,60 @@ internal static class WaapiMusicImporter
                     var fileName = UniqueSliceFileName(
                         $"{track.Name}.wav",
                         usedFileNames);
-                    var dest = Path.Combine(sliceDir, fileName);
-                    WavCueWriter.WriteSegment(
-                        partPath,
+                    var dest = Path.Combine(outputDirectory, fileName);
+                    WriteSegmentSafely(
+                        sourceWavPath,
                         dest,
                         startSample,
                         endSample,
-                        blockAlign,
-                        cues: []);
+                        blockAlign);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
                 }
             }
         }
 
         return map;
+    }
+
+    private static void WriteSegmentSafely(
+        string sourcePath,
+        string destinationPath,
+        long startSample,
+        long endSample,
+        ushort blockAlign)
+    {
+        if (!string.Equals(
+                Path.GetFullPath(sourcePath),
+                Path.GetFullPath(destinationPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            WavSegmentWriter.WriteSegment(
+                sourcePath,
+                destinationPath,
+                startSample,
+                endSample,
+                blockAlign);
+            return;
+        }
+
+        var temporaryPath = destinationPath + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            WavSegmentWriter.WriteSegment(
+                sourcePath,
+                temporaryPath,
+                startSample,
+                endSample,
+                blockAlign);
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
 
     private static string TrackSliceKey(string segmentName, string trackName) =>

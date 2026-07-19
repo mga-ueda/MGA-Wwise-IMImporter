@@ -9,6 +9,10 @@ internal sealed class WaapiProbeResult
     public string ProcessPath { get; init; } = string.Empty;
     public string Project { get; init; } = string.Empty;
     public string ProjectName { get; init; } = string.Empty;
+
+    /// <summary>接続中 Wwise プロジェクトの .wproj フルパス（取得できない場合は空）。</summary>
+    public string ProjectFilePath { get; init; } = string.Empty;
+
     public string SelectedPath { get; init; } = string.Empty;
     public string SelectedName { get; init; } = string.Empty;
     public string SelectedType { get; init; } = string.Empty;

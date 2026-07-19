@@ -15,6 +15,7 @@ internal sealed class WaapiStatusBar : Panel
     private bool _badgeFilled;
     private Rectangle _badgeFillBounds;
     private Rectangle _badgeTextBounds;
+    private bool _selectionMissing;
 
     public WaapiStatusBar()
     {
@@ -70,12 +71,12 @@ internal sealed class WaapiStatusBar : Panel
         if (_badgeText == "CONNECT")
         {
             SetBadgeConnected();
-            _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
+            ApplyDetailForeColor(connected: true);
         }
         else if (_badgeText == "DISCONNECT")
         {
             SetBadgeDisconnected();
-            _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
+            ApplyDetailForeColor(connected: false);
         }
         else
         {
@@ -89,7 +90,7 @@ internal sealed class WaapiStatusBar : Panel
     private void SetBadgeConnected()
     {
         _badgeText = "CONNECT";
-        _badgeBack = UiColors.StatusBarSuccessFore;
+        _badgeBack = UiColors.StatusBarConnectedBadgeBack;
         _badgeFore = Color.White;
         _badgeFilled = true;
     }
@@ -97,7 +98,7 @@ internal sealed class WaapiStatusBar : Panel
     private void SetBadgeDisconnected()
     {
         _badgeText = "DISCONNECT";
-        _badgeBack = UiColors.StatusBarErrorFore;
+        _badgeBack = UiColors.StatusBarDisconnectedBadgeBack;
         _badgeFore = Color.White;
         _badgeFilled = true;
     }
@@ -109,8 +110,23 @@ internal sealed class WaapiStatusBar : Panel
         _badgeFilled = false;
     }
 
+    private void ApplyDetailForeColor(bool connected)
+    {
+        if (!connected)
+        {
+            _detailLabel.ForeColor = UiColors.StatusBarErrorDetailFore;
+            return;
+        }
+
+        // 接続中でもターゲット未選択はエラー色で目立たせる
+        _detailLabel.ForeColor = _selectionMissing
+            ? UiColors.StatusBarErrorDetailFore
+            : UiColors.StatusBarDetailFore;
+    }
+
     public void SetPending()
     {
+        _selectionMissing = false;
         _badgeText = "…";
         SetBadgeNeutral();
         _detailLabel.Text = "確認中…";
@@ -120,6 +136,7 @@ internal sealed class WaapiStatusBar : Panel
 
     public void SetSkipped()
     {
+        _selectionMissing = false;
         _badgeText = "—";
         SetBadgeNeutral();
         _detailLabel.Text = "起動時チェックオフ";
@@ -131,13 +148,15 @@ internal sealed class WaapiStatusBar : Panel
     {
         if (result.Ok)
         {
+            _selectionMissing = !result.HasSelection;
             SetBadgeConnected();
-            _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
+            ApplyDetailForeColor(connected: true);
         }
         else
         {
+            _selectionMissing = false;
             SetBadgeDisconnected();
-            _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
+            ApplyDetailForeColor(connected: false);
         }
 
         _detailLabel.Text = result.FormatStatusDetail();
@@ -147,8 +166,9 @@ internal sealed class WaapiStatusBar : Panel
     /// <summary>接続維持中に選択パスだけ差し替える。</summary>
     public void UpdateSelection(string wwiseVersion, string projectName, string selectedPath)
     {
+        _selectionMissing = string.IsNullOrEmpty(selectedPath);
         SetBadgeConnected();
-        _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
+        ApplyDetailForeColor(connected: true);
 
         var parts = new List<string>();
         if (wwiseVersion.Length > 0)

@@ -103,6 +103,7 @@ public partial class Form1 : Form
     private string _projectOutputDirectory = string.Empty;
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
+    private string _lastLoggedPreflightKey = string.Empty;
     private int _waapiPollFailCount;
     private bool _waapiPollBusy;
     private const int WaapiPollFailThreshold = 3;
@@ -422,6 +423,8 @@ public partial class Form1 : Form
         {
             _waapiSelectionTimer.Start();
         }
+
+        UpdateExportButtonState();
     }
 
     /// <summary>
@@ -479,6 +482,7 @@ public partial class Form1 : Form
                 ProcessPath = _waapiLastResult.ProcessPath,
                 Project = _waapiLastResult.Project,
                 ProjectName = _waapiLastResult.ProjectName,
+                ProjectFilePath = _waapiLastResult.ProjectFilePath,
                 SelectedPath = path,
                 SelectedName = name,
                 SelectedType = type,
@@ -497,6 +501,8 @@ public partial class Form1 : Form
                         ? $"Target  : {path}{Environment.NewLine}"
                         : $"Target  : （未選択）{Environment.NewLine}");
             }
+
+            UpdateExportButtonState();
         }
         catch
         {
@@ -1614,38 +1620,36 @@ public partial class Form1 : Form
         ReleaseFocusToWaveform();
     }
 
-    private bool HasValidExportDirectory()
+    private bool HasEnabledExportParts()
     {
-        var directory = _projectOutputDirectory.Trim();
-        return directory.Length > 0 && Directory.Exists(directory);
+        return _loadedPreview is { OutputParts.Count: > 0 } preview
+            && preview.OutputParts.Any(part =>
+                !_disabledPlaylistPartNumbers.Contains(part.Number));
     }
 
-    private string? TryGetExportDirectoryOrWarn()
+    private ExportPreflightResult EvaluateExportPreflight() =>
+        ExportPreflight.Evaluate(
+            _projectOutputDirectory,
+            _waapiLastResult,
+            HasEnabledExportParts());
+
+    /// <summary>
+    /// 事前検証の結果が変わったときだけログへ出す（ポーリングで連打しない）。
+    /// </summary>
+    private void LogExportPreflightIfChanged(ExportPreflightResult preflight)
     {
-        var directory = _projectOutputDirectory.Trim();
-        if (directory.Length == 0)
+        var key = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
+            + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
+        if (string.Equals(key, _lastLoggedPreflightKey, StringComparison.Ordinal))
         {
-            MessageBox.Show(
-                this,
-                "書き出し先フォルダを選択してください。",
-                "EXPORT",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-            return null;
+            return;
         }
 
-        if (!Directory.Exists(directory))
+        _lastLoggedPreflightKey = key;
+        if (!preflight.CanExport)
         {
-            MessageBox.Show(
-                this,
-                $"書き出し先フォルダが見つかりません:{Environment.NewLine}{directory}",
-                "EXPORT",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            return null;
+            AppendReport(preflight.FormatLogMessage());
         }
-
-        return directory;
     }
 
     private void PositionLogButtons()
@@ -3689,13 +3693,16 @@ public partial class Form1 : Form
 
     private void UpdateExportButtonState()
     {
-        var hasEnabledParts = _loadedPreview is { OutputParts.Count: > 0 } preview
-            && preview.OutputParts.Any(part =>
-                !_disabledPlaylistPartNumbers.Contains(part.Number));
+        var preflight = EvaluateExportPreflight();
         exportButton.Enabled = !_exportBusy
             && !_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
-            && hasEnabledParts
-            && HasValidExportDirectory();
+            && preflight.CanExport;
+
+        // 読み込み済みのときだけ事前検証の変化をログ（起動直後の空状態は黙る）
+        if (_loadedPreview is not null)
+        {
+            LogExportPreflightIfChanged(preflight);
+        }
     }
 
     private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
@@ -4261,13 +4268,20 @@ public partial class Form1 : Form
             return;
         }
 
-        var directory = HasValidExportDirectory()
-            ? _projectOutputDirectory.Trim()
-            : "（未選択）";
+        var preflight = EvaluateExportPreflight();
+        var directory = preflight.CanExport
+            ? preflight.OutputDirectory
+            : (_projectOutputDirectory.Trim().Length > 0
+                ? _projectOutputDirectory.Trim()
+                : "（未選択）");
         AppendReport(
             $"=== Export ==={Environment.NewLine}"
-            + $"Message : 出力パート {preview.OutputParts.Count} 件。［EXPORT］で分割 WAV を書き出せます。{Environment.NewLine}"
+            + (preflight.CanExport
+                ? $"Message : 出力パート {preview.OutputParts.Count} 件。［EXPORT］で分割 WAV を書き出し、Wwise へ登録できます。{Environment.NewLine}"
+                : $"Message : 出力パート {preview.OutputParts.Count} 件。書き出し条件未達: {preflight.Reason}{Environment.NewLine}")
             + $"保存先  : {directory}{Environment.NewLine}{Environment.NewLine}");
+        _lastLoggedPreflightKey = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
+            + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
     }
 
     private async void ExportButton_Click(object? sender, EventArgs e)
@@ -4277,19 +4291,56 @@ public partial class Form1 : Form
             return;
         }
 
-        var outputDirectory = TryGetExportDirectoryOrWarn();
-        if (outputDirectory is null)
+        // クリック時点で接続・プロジェクト・選択・書き出し先を再検証（失敗時は WAV を書き始めない）
+        ExportPreflightResult preflight;
+        try
         {
+            var result = await WaapiStartupProbe.RunAsync(_waapiSettings);
+            if (!IsDisposed)
+            {
+                ApplyWaapiProbeResult(result, logReport: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendReport(
+                $"=== Export Preflight ==={Environment.NewLine}"
+                + $"Status  : NG{Environment.NewLine}"
+                + $"Message : Wwise 状態の取得に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            UpdateExportButtonState();
             ReleaseFocusToWaveform();
             return;
         }
 
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        preflight = EvaluateExportPreflight();
+        UpdateExportButtonState();
+        if (!preflight.CanExport)
+        {
+            AppendReport(preflight.FormatLogMessage());
+            _lastLoggedPreflightKey = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
+                + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
+            MessageBox.Show(
+                this,
+                preflight.Reason,
+                "EXPORT",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            ReleaseFocusToWaveform();
+            return;
+        }
+
+        var outputDirectory = preflight.OutputDirectory;
+        var targetPath = preflight.TargetPath;
+
         var exportGeneration = _exportGeneration;
-        var exportMarkers = (_previewSession?.EffectiveMarkers ?? preview.Markers).ToArray();
         var wwiseMarkers = (_previewSession?.WwiseMarkers ?? preview.Markers).ToArray();
-        var exportSnapshot = BuildPlaylistExportSnapshot(preview, exportMarkers);
         var wwiseSnapshot = BuildPlaylistExportSnapshot(preview, wwiseMarkers);
-        if (exportSnapshot.Parts.Count == 0)
+        if (wwiseSnapshot.Parts.Count == 0)
         {
             return;
         }
@@ -4301,14 +4352,12 @@ public partial class Form1 : Form
 
         try
         {
-            await RunExportAsync(preview, exportSnapshot, exportGeneration, outputDirectory);
-
-            if (IsDisposed || exportGeneration != _exportGeneration)
-            {
-                return;
-            }
-
-            await RunWwiseImportAsync(preview, wwiseSnapshot, exportGeneration, outputDirectory);
+            await RunWwiseImportAsync(
+                preview,
+                wwiseSnapshot,
+                exportGeneration,
+                outputDirectory,
+                targetPath);
         }
         finally
         {
@@ -4323,49 +4372,15 @@ public partial class Form1 : Form
 
     /// <summary>
     /// エクスポート済み WAV を Wwise の選択位置へ Music 構造として流し込む。
-    /// 接続不可・未選択・キャンセル時はログを残してスキップする。
+    /// キャンセル時はログを残してスキップする。作成先は EXPORT 開始時に固定したパスを使う。
     /// </summary>
     private async Task RunWwiseImportAsync(
         WaveformPreviewData preview,
         PlaylistExportSnapshot snapshot,
         int exportGeneration,
-        string outputDirectory)
+        string outputDirectory,
+        string targetPath)
     {
-        // 書き出しに失敗したパートがあるときは中断（有効パートの全ファイル存在を確認）
-        var directory = outputDirectory;
-        var missing = snapshot.Parts
-            .Select(p => Path.Combine(directory, p.FileName))
-            .Where(p => !File.Exists(p))
-            .ToList();
-        if (missing.Count > 0)
-        {
-            AppendReport(
-                $"=== Wwise Import ==={Environment.NewLine}"
-                + $"Message : 書き出しファイルが見つからないためスキップしました: {Path.GetFileName(missing[0])}{Environment.NewLine}{Environment.NewLine}");
-            return;
-        }
-
-        // 作成先 = Wwise 上の現在選択（インポート直前に再取得）
-        string targetPath;
-        try
-        {
-            var (path, _, _) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings);
-            targetPath = path;
-        }
-        catch (Exception ex)
-        {
-            AppendReport(
-                $"=== Wwise Import ==={Environment.NewLine}"
-                + $"Status  : NG{Environment.NewLine}"
-                + $"Message : Wwise へ接続できないためスキップしました。{ex.Message}{Environment.NewLine}{Environment.NewLine}");
-            return;
-        }
-
-        if (IsDisposed || exportGeneration != _exportGeneration)
-        {
-            return;
-        }
-
         if (targetPath.Length == 0)
         {
             AppendReport(
@@ -4397,10 +4412,6 @@ public partial class Form1 : Form
                 + $"Message : インポート計画の作成に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
             return;
         }
-
-        var mode = plan.IsMultiPart
-            ? $"Music Switch Container「{plan.ContainerName}」+ Playlist × {plan.Playlists.Count}"
-            : $"Music Playlist Container「{plan.ContainerName}」";
 
         var overwriteStateGroup = false;
         if (plan.IsMultiPart)
@@ -4451,41 +4462,8 @@ public partial class Form1 : Form
             }
         }
 
-        var confirmLines =
-            $"Wwise へインポートします。\n\n"
-            + $"作成先: {targetPath}\n"
-            + $"構成: {mode}\n"
-            + $"Music Segment: {plan.TotalSegmentCount} 個\n";
-        if (plan.IsMultiPart)
+        if (exportGeneration != _exportGeneration)
         {
-            confirmLines +=
-                $"State Group: {importSettings.ResolveStateGroupPath(plan.ContainerName)}\n"
-                + $"  States: {string.Join(", ", plan.Playlists.Select(p => p.Name))}\n";
-            if (overwriteStateGroup)
-            {
-                confirmLines += "  （既存 State Group は上書き）\n";
-            }
-            else
-            {
-                confirmLines += "  （State Group を新規作成）\n";
-            }
-        }
-
-        confirmLines += "\n実行しますか？";
-
-        var confirm = MessageBox.Show(
-            this,
-            confirmLines,
-            "Wwise インポート",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Question,
-            MessageBoxDefaultButton.Button1);
-
-        if (confirm != DialogResult.Yes || exportGeneration != _exportGeneration)
-        {
-            AppendReport(
-                $"=== Wwise Import ==={Environment.NewLine}"
-                + $"Message : インポートをスキップしました。{Environment.NewLine}{Environment.NewLine}");
             return;
         }
 
@@ -4496,6 +4474,9 @@ public partial class Form1 : Form
                 importSettings,
                 plan,
                 targetPath,
+                preview.SourcePath,
+                outputDirectory,
+                snapshot.Parts,
                 preview.WavInfo.SampleRate,
                 preview.WavInfo.BlockAlign,
                 overwriteStateGroup));
@@ -4513,124 +4494,6 @@ public partial class Form1 : Form
                     + $"Status  : NG{Environment.NewLine}"
                     + $"Message : {ex.Message}{Environment.NewLine}{Environment.NewLine}");
             }
-        }
-    }
-
-    private async Task RunExportAsync(
-        WaveformPreviewData preview,
-        PlaylistExportSnapshot snapshot,
-        int exportGeneration,
-        string outputDirectory)
-    {
-        try
-        {
-            await Task.Run(() => WaveformExporter.Export(
-                preview.SourcePath,
-                preview.WavInfo,
-                snapshot.Parts,
-                preview.Regions,
-                preview.Bars,
-                snapshot.Markers,
-                outputDirectory,
-                onPartBegin: part =>
-                {
-                    // 書き出し開始の瞬間に発光を点ける（見えてから I/O へ）
-                    NotifyExportPartGlow(part.Number, exportGeneration, holdMs: 120);
-                },
-                onPartEnd: part =>
-                {
-                    // 書き出し完了の瞬間にもう一度発光を見せてから消す
-                    NotifyExportPartGlow(part.Number, exportGeneration, holdMs: 160);
-                    NotifyExportPartGlow(null, exportGeneration, holdMs: 40);
-                },
-                onLog: text => NotifyExportLog(text, exportGeneration)));
-        }
-        catch (Exception ex)
-        {
-            if (IsDisposed || exportGeneration != _exportGeneration)
-            {
-                return;
-            }
-
-            AppendReport(
-                $"=== エラー ==={Environment.NewLine}"
-                + $"Message : 書き出しに失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
-        }
-
-        if (IsDisposed || exportGeneration != _exportGeneration)
-        {
-            return;
-        }
-
-        waveformView.ClearExportHighlight();
-    }
-
-    /// <summary>
-    /// 書き出しパートの枠発光を UI スレッドへ同期反映する。
-    /// holdMs &gt; 0 のときは描画が見えるよう短く待ってから返す（バックグラウンド側から呼ぶ想定）。
-    /// </summary>
-    private void NotifyExportPartGlow(int? partNumber, int exportGeneration, int holdMs = 0)
-    {
-        if (exportGeneration != _exportGeneration || IsDisposed)
-        {
-            return;
-        }
-
-        try
-        {
-            Invoke(() =>
-            {
-                if (exportGeneration != _exportGeneration || IsDisposed)
-                {
-                    return;
-                }
-
-                waveformView.SetExportHighlight(partNumber);
-                waveformView.Update();
-            });
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-        catch (InvalidOperationException)
-        {
-            return;
-        }
-
-        if (holdMs > 0)
-        {
-            Thread.Sleep(holdMs);
-        }
-    }
-
-    /// <summary>書き出しログをパート単位で UI へ逐次反映する。</summary>
-    private void NotifyExportLog(string text, int exportGeneration)
-    {
-        if (string.IsNullOrEmpty(text) || exportGeneration != _exportGeneration || IsDisposed)
-        {
-            return;
-        }
-
-        try
-        {
-            Invoke(() =>
-            {
-                if (exportGeneration != _exportGeneration || IsDisposed)
-                {
-                    return;
-                }
-
-                AppendReport(text);
-            });
-        }
-        catch (ObjectDisposedException)
-        {
-            // クローズ直後は無視
-        }
-        catch (InvalidOperationException)
-        {
-            // ハンドル破棄直後など
         }
     }
 

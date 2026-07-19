@@ -3,23 +3,19 @@ using System.Text;
 namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
-/// WAV セグメントへ cue / LIST adtl（リージョン）を書き出す。
+/// ソース WAV の指定サンプル範囲だけを切り出して書き出す（メタデータ埋め込みなし）。
 /// </summary>
-internal static class WavCueWriter
+internal static class WavSegmentWriter
 {
-    // 日本語 Windows などでは系統 ANSI（ここでは CP932）で書くエディタが多い。
-    private static Encoding TextEncoding => Encoding.GetEncoding(932);
-
     /// <summary>
-    /// ソース WAV の指定サンプル範囲を切り出し、cue／リージョンを付与して書き出す。
+    /// ソース WAV の指定サンプル範囲を切り出して書き出す。
     /// </summary>
     public static void WriteSegment(
         string sourcePath,
         string destinationPath,
         long startSample,
         long endSample,
-        ushort blockAlign,
-        IReadOnlyList<WavCueItem> cues)
+        ushort blockAlign)
     {
         if (blockAlign == 0)
         {
@@ -94,13 +90,8 @@ internal static class WavCueWriter
         }
 
         var segmentByteLength = checked((int)(endByte - startByte));
-        var cueChunk = cues.Count > 0 ? BuildCueChunkBytes(cues) : null;
-        var adtlChunk = cues.Count > 0 ? BuildAdtlListChunkBytes(cues) : null;
-
         var contentSize = 4
             + 8 + fmtData.Length + (fmtData.Length & 1)
-            + (cueChunk is null ? 0 : 8 + cueChunk.Length + (cueChunk.Length & 1))
-            + (adtlChunk is null ? 0 : 8 + adtlChunk.Length + (adtlChunk.Length & 1))
             + 8 + segmentByteLength + (segmentByteLength & 1);
 
         using var dest = File.Create(destinationPath);
@@ -111,15 +102,6 @@ internal static class WavCueWriter
         writer.Write(Encoding.ASCII.GetBytes("WAVE"));
 
         WriteChunk(writer, "fmt ", fmtData);
-        if (cueChunk is not null)
-        {
-            WriteChunk(writer, "cue ", cueChunk);
-        }
-
-        if (adtlChunk is not null)
-        {
-            WriteChunk(writer, "LIST", adtlChunk);
-        }
 
         writer.Write(Encoding.ASCII.GetBytes("data"));
         writer.Write(segmentByteLength);
@@ -157,93 +139,6 @@ internal static class WavCueWriter
 
             destination.Write(buffer, 0, read);
             remaining -= read;
-        }
-    }
-
-    private static byte[] BuildCueChunkBytes(IReadOnlyList<WavCueItem> cues)
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true))
-        {
-            writer.Write(cues.Count);
-            foreach (var cue in cues)
-            {
-                writer.Write(cue.Id);
-                writer.Write(checked((uint)cue.SampleOffset));
-                writer.Write(Encoding.ASCII.GetBytes("data"));
-                writer.Write(0);
-                writer.Write(0);
-                writer.Write(checked((uint)cue.SampleOffset));
-            }
-        }
-
-        return stream.ToArray();
-    }
-
-    private static byte[] BuildAdtlListChunkBytes(IReadOnlyList<WavCueItem> cues)
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true))
-        {
-            writer.Write(Encoding.ASCII.GetBytes("adtl"));
-
-            foreach (var cue in cues)
-            {
-                WriteAdtlTextChunk(writer, "labl", cue.Id, cue.Comment);
-                if (cue.IsRegion)
-                {
-                    WriteLtxtChunk(writer, cue.Id, cue.SampleLength, cue.Comment);
-                }
-                else
-                {
-                    WriteAdtlTextChunk(writer, "note", cue.Id, cue.Comment);
-                }
-            }
-        }
-
-        return stream.ToArray();
-    }
-
-    private static void WriteAdtlTextChunk(BinaryWriter writer, string chunkId, uint cueId, string text)
-    {
-        var textBytes = TextEncoding.GetBytes(text ?? string.Empty);
-        var payloadLength = 4 + textBytes.Length + 1;
-        writer.Write(Encoding.ASCII.GetBytes(chunkId));
-        writer.Write(payloadLength);
-        writer.Write(cueId);
-        writer.Write(textBytes);
-        writer.Write((byte)0);
-        WritePadIfOdd(writer, payloadLength);
-    }
-
-    private static void WriteLtxtChunk(
-        BinaryWriter writer,
-        uint cueId,
-        long sampleLength,
-        string text)
-    {
-        // dwName + dwSampleLength + dwPurpose + country/language/dialect/codepage + text
-        var textBytes = TextEncoding.GetBytes(text ?? string.Empty);
-        var payloadLength = 20 + textBytes.Length + 1;
-        writer.Write(Encoding.ASCII.GetBytes("ltxt"));
-        writer.Write(payloadLength);
-        writer.Write(cueId);
-        writer.Write(checked((uint)sampleLength));
-        writer.Write(Encoding.ASCII.GetBytes("rgn "));
-        writer.Write((ushort)0);
-        writer.Write((ushort)0);
-        writer.Write((ushort)0);
-        writer.Write((ushort)0);
-        writer.Write(textBytes);
-        writer.Write((byte)0);
-        WritePadIfOdd(writer, payloadLength);
-    }
-
-    private static void WritePadIfOdd(BinaryWriter writer, int payloadLength)
-    {
-        if ((payloadLength & 1) == 1)
-        {
-            writer.Write((byte)0);
         }
     }
 

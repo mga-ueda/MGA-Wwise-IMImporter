@@ -193,8 +193,12 @@ internal static class UiColors
     public static Color StatusBarBorder => ChromeBorder;
     public static Color StatusBarTitleFore => MutedFore;
     public static Color StatusBarDetailFore => PrimaryFore;
-    public static Color StatusBarSuccessFore { get; set; } = Color.FromArgb(0, 107, 215);
-    public static Color StatusBarErrorFore { get; set; } = Color.FromArgb(190, 50, 50);
+    /// <summary>接続バッジ（CONNECT）の背景。</summary>
+    public static Color StatusBarConnectedBadgeBack { get; set; } = Color.FromArgb(0, 107, 215);
+    /// <summary>切断バッジ（DISCONNECT）の背景。</summary>
+    public static Color StatusBarDisconnectedBadgeBack { get; set; } = Color.FromArgb(190, 50, 50);
+    /// <summary>切断時詳細・ターゲット未選択など、ステータス詳細のエラー文字。</summary>
+    public static Color StatusBarErrorDetailFore { get; set; } = Color.FromArgb(255, 110, 110);
 
     // --- ダイアログ／色設定パネル ---
     public static Color DialogBodyBack { get; set; } = Color.FromArgb(40, 40, 42);
@@ -284,8 +288,9 @@ internal static class UiColors
         new("SpectrumBar", "スペアナ・バー", () => SpectrumBar, c => SpectrumBar = c),
 
         new("StatusBarBack", "WAAPI Status・背景", () => StatusBarBack, c => StatusBarBack = c),
-        new("StatusBarSuccessFore", "WAAPI Status・成功文字", () => StatusBarSuccessFore, c => StatusBarSuccessFore = c),
-        new("StatusBarErrorFore", "WAAPI Status・エラー文字", () => StatusBarErrorFore, c => StatusBarErrorFore = c),
+        new("StatusBarConnectedBadgeBack", "WAAPI Status・接続バッジ背景", () => StatusBarConnectedBadgeBack, c => StatusBarConnectedBadgeBack = c),
+        new("StatusBarDisconnectedBadgeBack", "WAAPI Status・切断バッジ背景", () => StatusBarDisconnectedBadgeBack, c => StatusBarDisconnectedBadgeBack = c),
+        new("StatusBarErrorDetailFore", "WAAPI Status・エラー詳細文字", () => StatusBarErrorDetailFore, c => StatusBarErrorDetailFore = c),
 
         new("DialogBodyBack", "Go To Measure・背景", () => DialogBodyBack, c => DialogBodyBack = c),
         new("DialogInputBack", "Go To Measure・入力背景", () => DialogInputBack, c => DialogInputBack = c),
@@ -401,6 +406,33 @@ internal static class UiColors
             }
         }
 
+        // 旧 StatusBar*Fore はバッジ背景用途だったため新キーへ移す
+        (string Key, string[] Aliases)[] statusBarMigrations =
+        [
+            ("StatusBarConnectedBadgeBack", ["StatusBarSuccessFore"]),
+            ("StatusBarDisconnectedBadgeBack", ["StatusBarErrorFore"]),
+        ];
+        foreach (var (key, aliases) in statusBarMigrations)
+        {
+            if (!values.ContainsKey(key))
+            {
+                var source = aliases.FirstOrDefault(values.ContainsKey);
+                if (source is not null)
+                {
+                    values[key] = values[source];
+                    changed = true;
+                }
+            }
+
+            foreach (var alias in aliases)
+            {
+                if (values.Remove(alias))
+                {
+                    changed = true;
+                }
+            }
+        }
+
         string[] obsolete =
         [
             "RegionWaveFillDarkenPercent",
@@ -437,6 +469,8 @@ internal static class UiColors
             "DeleteButtonBack",
             "DeleteButtonHoverBack",
             "DeleteButtonPressedBack",
+            "StatusBarSuccessFore",
+            "StatusBarErrorFore",
         ];
 
         foreach (var key in obsolete)

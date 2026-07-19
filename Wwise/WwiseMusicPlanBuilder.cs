@@ -601,7 +601,7 @@ internal static class WwiseMusicPlanBuilder
     }
 
     /// <summary>
-    /// リージョン開始位置のテンポ・拍子を小節マークから引く（Exporter のコメント生成と同じ規則）。
+    /// リージョン開始位置のテンポ・拍子を小節マークから引く。
     /// </summary>
     private static (double Bpm, int Upper, int Lower) LookUpTempoSignature(
         long regionStartAbsSample,

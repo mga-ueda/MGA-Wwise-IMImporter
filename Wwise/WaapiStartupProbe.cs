@@ -24,6 +24,7 @@ internal static class WaapiStartupProbe
 
             var projectText = string.Empty;
             var projectName = string.Empty;
+            var projectFilePath = string.Empty;
             try
             {
                 var project = await client.CallAsync("ak.wwise.core.getProjectInfo", cancellationToken: cancellationToken)
@@ -33,6 +34,8 @@ internal static class WaapiStartupProbe
                 {
                     projectName = name;
                 }
+
+                projectFilePath = ReadProjectFilePath(project);
             }
             catch
             {
@@ -51,6 +54,7 @@ internal static class WaapiStartupProbe
                 ProcessPath = processPath,
                 Project = projectText,
                 ProjectName = projectName,
+                ProjectFilePath = projectFilePath,
                 SelectedPath = selectedPath,
                 SelectedName = selectedName,
                 SelectedType = selectedType,
@@ -132,17 +136,23 @@ internal static class WaapiStartupProbe
     private static string FormatProject(JsonElement project)
     {
         var name = TryGetString(project, "name", out var n) ? n : "(unnamed)";
-        if (TryGetString(project, "path", out var path) && path.Length > 0)
+        var path = ReadProjectFilePath(project);
+        return path.Length > 0 ? $"{name} ({path})" : name;
+    }
+
+    private static string ReadProjectFilePath(JsonElement project)
+    {
+        if (TryGetString(project, "path", out var path))
         {
-            return $"{name} ({path})";
+            return path;
         }
 
-        if (TryGetString(project, "filePath", out var filePath) && filePath.Length > 0)
+        if (TryGetString(project, "filePath", out var filePath))
         {
-            return $"{name} ({filePath})";
+            return filePath;
         }
 
-        return name;
+        return string.Empty;
     }
 
     private static bool TryGetString(JsonElement element, string propertyName, out string value)
