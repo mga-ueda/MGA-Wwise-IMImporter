@@ -100,6 +100,15 @@ internal sealed class WaveformPreviewSession
     public IReadOnlyList<WaveformMarkerMark> WwiseMarkers => _wwiseMarkers;
 
     /// <summary>
+    /// アプリ追加マーカーのサンプル位置（投影は含まない実体のみ）。
+    /// </summary>
+    public IReadOnlyList<long> GetUserMarkerSampleOffsets() =>
+        _userMarkers
+            .Select(marker => marker.SampleOffset)
+            .OrderBy(sampleOffset => sampleOffset)
+            .ToArray();
+
+    /// <summary>
     /// 無効パート番号を反映する。無効範囲へのマーカー追加／削除とグループ投影を抑止する。
     /// マーカー実体は保持し、再有効化後に復帰する。
     /// </summary>

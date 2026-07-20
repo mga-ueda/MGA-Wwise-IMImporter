@@ -229,6 +229,96 @@ internal sealed class ProjectSettingsStore
         WriteProfile(name, profile);
     }
 
+    public void SaveLastWaveSession(string name, LastWaveSessionState state)
+    {
+        var trimmed = name.Trim();
+        if (!_profiles.ContainsKey(trimmed))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = LastWaveSessionState.SidecarPath(trimmed);
+            File.WriteAllText(path, state.ToJson());
+        }
+        catch
+        {
+            // オートセーブ失敗は作業を止めない。
+        }
+    }
+
+    public bool TryReadLastWaveSession(string name, out LastWaveSessionState? state)
+    {
+        state = null;
+        var trimmed = name.Trim();
+        if (!_profiles.ContainsKey(trimmed))
+        {
+            return false;
+        }
+
+        var path = LastWaveSessionState.SidecarPath(trimmed);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            return LastWaveSessionState.TryParse(json, out state);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static void DeleteLastWaveSessionFile(string projectName)
+    {
+        try
+        {
+            var path = LastWaveSessionState.SidecarPath(projectName);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // 削除失敗は無視する。
+        }
+    }
+
+    private static void RenameLastWaveSessionFile(string oldName, string newName)
+    {
+        try
+        {
+            var oldPath = LastWaveSessionState.SidecarPath(oldName);
+            var newPath = LastWaveSessionState.SidecarPath(newName);
+            if (!File.Exists(oldPath))
+            {
+                return;
+            }
+
+            if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (File.Exists(newPath))
+            {
+                File.Delete(newPath);
+            }
+
+            File.Move(oldPath, newPath);
+        }
+        catch
+        {
+            // 改名失敗は無視する。
+        }
+    }
+
     /// <summary>
     /// 現在の UI 状態を保存する。newName が異なれば改名（旧名セクションは削除）。
     /// creatingNew のときは新規追加。
@@ -290,6 +380,7 @@ internal sealed class ProjectSettingsStore
 
             _profiles.Remove(trimmedCurrent);
             IniFile.RemoveSection(ToSectionName(trimmedCurrent));
+            RenameLastWaveSessionFile(trimmedCurrent, trimmedNew);
         }
 
         _profiles[trimmedNew] = profile.Clone();
@@ -310,6 +401,7 @@ internal sealed class ProjectSettingsStore
         _names.RemoveAll(n => string.Equals(n, trimmed, StringComparison.OrdinalIgnoreCase));
         _profiles.Remove(trimmed);
         IniFile.RemoveSection(ToSectionName(trimmed));
+        DeleteLastWaveSessionFile(trimmed);
 
         if (_names.Count == 0)
         {

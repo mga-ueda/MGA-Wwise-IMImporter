@@ -158,13 +158,13 @@ public partial class Form1 : Form
     private double _playlistTransitionGlowLevel;
     private double? _pendingWaveformScrollStart;
 
-    /// <summary>パート番号 → グループ ID（セッション内のみ）。</summary>
+    /// <summary>パート番号 → グループ ID（Last Wave セッションへ永続化）。</summary>
     private readonly Dictionary<int, int> _playlistPartGroupIds = new();
 
     /// <summary>グループ ID → 色パレット index（作成順）。</summary>
     private readonly Dictionary<int, int> _playlistGroupColorIndexes = new();
 
-    /// <summary>書き出し対象外のパート番号（セッション内のみ）。</summary>
+    /// <summary>書き出し対象外のパート番号（Last Wave セッションへ永続化）。</summary>
     private readonly HashSet<int> _disabledPlaylistPartNumbers = [];
 
     private int _nextPlaylistGroupId = 1;
@@ -2659,6 +2659,7 @@ public partial class Form1 : Form
 
         ApplyPlaylistGroupMarkerSharing();
         ApplyPlaylistGroupColorsOnly();
+        PersistLastWaveSessionIfPossible();
     }
 
     private void ApplyPlaylistDisablePaintAtCursor()
@@ -2699,6 +2700,7 @@ public partial class Form1 : Form
         }
 
         ApplyPlaylistDisableUi();
+        PersistLastWaveSessionIfPossible();
     }
 
     private void CancelPlaybackForDisabledPart(int partNumber)
@@ -4333,6 +4335,8 @@ public partial class Form1 : Form
 
         UpdateTransportPosition();
         PopulatePlaylistChoices(preview.OutputParts);
+        TryRestoreLastWaveSession(preview);
+        PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
             "source.loaded",
             new
@@ -4371,6 +4375,166 @@ public partial class Form1 : Form
             + $"保存先  : {directory}{Environment.NewLine}{Environment.NewLine}");
         _lastLoggedPreflightKey = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
             + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
+    }
+
+    /// <summary>
+    /// サイドカーに保存したグループ／無効化／アプリ追加マーカーを部分復元する。
+    /// </summary>
+    private void TryRestoreLastWaveSession(WaveformPreviewData preview)
+    {
+        if (_creatingNewProject || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        if (!_projectStore.TryReadLastWaveSession(_loadedProjectName, out var state) || state is null)
+        {
+            return;
+        }
+
+        var wavePath = LastWaveSessionState.NormalizePath(preview.SourcePath);
+        if (!string.Equals(state.WavePath, wavePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!state.TryGetPartGroupIds(out var savedGroups)
+            || !state.TryGetGroupColorIndexes(out var savedColors))
+        {
+            AppendReport(
+                $"=== Session ==={Environment.NewLine}"
+                + $"Message : 前回セッションの読み込みに失敗しました（形式不正）。{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        var hasAny =
+            state.Parts.Count > 0
+            || savedGroups.Count > 0
+            || state.DisabledPartNumbers.Count > 0
+            || state.UserMarkerSampleOffsets.Count > 0;
+        if (!hasAny)
+        {
+            return;
+        }
+
+        var loadedByNumber = preview.OutputParts.ToDictionary(part => part.Number);
+        var matchingNumbers = new HashSet<int>();
+        foreach (var signature in state.Parts)
+        {
+            if (loadedByNumber.TryGetValue(signature.Number, out var part)
+                && signature.Matches(part))
+            {
+                matchingNumbers.Add(signature.Number);
+            }
+        }
+
+        if (state.Parts.Count > 0 && matchingNumbers.Count == 0)
+        {
+            AppendReport(
+                $"=== Session ==={Environment.NewLine}"
+                + $"Message : 前回セッションはパート構成が一致しないため復元しませんでした。{Environment.NewLine}{Environment.NewLine}");
+            return;
+        }
+
+        var disabledRequested = state.DisabledPartNumbers.Count;
+        var disabledApplied = 0;
+        foreach (var partNumber in state.DisabledPartNumbers)
+        {
+            if (!matchingNumbers.Contains(partNumber))
+            {
+                continue;
+            }
+
+            if (_disabledPlaylistPartNumbers.Add(partNumber))
+            {
+                disabledApplied++;
+            }
+        }
+
+        var groupRequested = savedGroups.Count;
+        var groupApplied = 0;
+        foreach (var (partNumber, groupId) in savedGroups)
+        {
+            if (!matchingNumbers.Contains(partNumber)
+                || _disabledPlaylistPartNumbers.Contains(partNumber))
+            {
+                continue;
+            }
+
+            _playlistPartGroupIds[partNumber] = groupId;
+            groupApplied++;
+        }
+
+        foreach (var groupId in _playlistPartGroupIds.Values.Distinct())
+        {
+            if (savedColors.TryGetValue(groupId, out var colorIndex))
+            {
+                _playlistGroupColorIndexes[groupId] = colorIndex;
+            }
+            else if (!_playlistGroupColorIndexes.ContainsKey(groupId))
+            {
+                _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
+            }
+        }
+
+        var maxGroupId = _playlistPartGroupIds.Count == 0
+            ? 0
+            : _playlistPartGroupIds.Values.Max();
+        _nextPlaylistGroupId = Math.Max(Math.Max(1, state.NextGroupId), maxGroupId + 1);
+
+        var maxColorIndex = _playlistGroupColorIndexes.Count == 0
+            ? -1
+            : _playlistGroupColorIndexes.Values.Max();
+        _nextPlaylistGroupColorIndex = Math.Max(
+            Math.Max(0, state.NextColorIndex),
+            maxColorIndex + 1);
+
+        var markerRequested = state.UserMarkerSampleOffsets.Count;
+        var markerApplied = 0;
+        if (_previewSession is { } session && markerRequested > 0)
+        {
+            session.AddMarkers(state.UserMarkerSampleOffsets);
+            var present = session.GetUserMarkerSampleOffsets().ToHashSet();
+            markerApplied = state.UserMarkerSampleOffsets.Count(sample => present.Contains(sample));
+        }
+
+        ApplyPlaylistDisableUi();
+        ApplyPlaylistGroupColorsOnly();
+
+        AppendReport(
+            $"=== Session ==={Environment.NewLine}"
+            + $"Message : 前回セッションを部分復元: グループ {groupApplied}/{groupRequested}、"
+            + $"無効 {disabledApplied}/{disabledRequested}、"
+            + $"マーカー {markerApplied}/{markerRequested}{Environment.NewLine}{Environment.NewLine}");
+    }
+
+    /// <summary>
+    /// 現在のグループ／無効化／アプリ追加マーカーをサイドカーへオートセーブする。
+    /// </summary>
+    private void PersistLastWaveSessionIfPossible()
+    {
+        if (_creatingNewProject || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        if (_loadedPreview is not { } preview
+            || _previewSession is not { } session
+            || string.IsNullOrWhiteSpace(_lastWavePath))
+        {
+            return;
+        }
+
+        var state = LastWaveSessionState.Capture(
+            _lastWavePath,
+            preview.OutputParts,
+            _playlistPartGroupIds,
+            _playlistGroupColorIndexes,
+            _nextPlaylistGroupId,
+            _nextPlaylistGroupColorIndex,
+            session.GetUserMarkerSampleOffsets(),
+            _disabledPlaylistPartNumbers);
+        _projectStore.SaveLastWaveSession(_loadedProjectName, state);
     }
 
     private async void ExportButton_Click(object? sender, EventArgs e)
@@ -4755,6 +4919,7 @@ public partial class Form1 : Form
         }
 
         waveformView.SetMarkers(session.EffectiveMarkers);
+        PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
             e.Mode == MarkerEditMode.Add ? "marker.added" : "marker.removed",
             new
