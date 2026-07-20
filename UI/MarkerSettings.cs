@@ -19,7 +19,7 @@ internal enum MarkerGridOverrideMode
 }
 
 /// <summary>
-/// マーカー付与オプション（exe 横の MgaWwiseIMImporter.ini [Markers]）。
+/// マーカー付与オプション（実行時は [Project.*] に保存。旧 [Markers] は移行用）。
 /// </summary>
 internal sealed class MarkerSettings
 {
@@ -169,6 +169,12 @@ internal sealed class MarkerSettings
             ["CommentJoiner"] = CommentJoiner,
             ["CommentResetPerPart"] = CommentResetPerPart ? "1" : "0",
         });
+    }
+
+    /// <summary>旧グローバル [Markers] を除去する（値は [Project.*] へ移行済み）。</summary>
+    public static void StripLegacySection()
+    {
+        IniFile.RemoveSection(Section);
     }
 
     private static bool ReadBool(

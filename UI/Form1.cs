@@ -258,6 +258,7 @@ public partial class Form1 : Form
         markerOptionsPanel.SettingsChanged += (_, _) =>
         {
             ApplyMarkerSettings();
+            PersistMarkersToProject();
             PersistStreamingToProject();
             ReleaseFocusToWaveform();
         };
@@ -564,6 +565,18 @@ public partial class Form1 : Form
             enabled,
             _keptTargetPath,
             _keptTargetProjectFilePath);
+    }
+
+    private void PersistMarkersToProject()
+    {
+        if (_suppressProjectUiEvents
+            || _creatingNewProject
+            || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        _projectStore.SaveMarkers(_loadedProjectName, _markerSettings);
     }
 
     private void PersistStreamingToProject()
@@ -2943,7 +2956,7 @@ public partial class Form1 : Form
             0);
     }
 
-    /// <summary>マーカーオプションの変更をメモリへ反映する（永続化はプロジェクト SAVE）。</summary>
+    /// <summary>マーカーオプションの変更をメモリへ反映する（永続化はプロジェクトへ自動保存）。</summary>
     private void ApplyMarkerSettings()
     {
         waveformView.MarkerGridOverride = _markerSettings.GridOverride;

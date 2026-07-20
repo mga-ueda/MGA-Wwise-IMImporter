@@ -311,6 +311,7 @@ internal static class UiColors
 
     public static void LoadFromIni()
     {
+#if DEBUG
         EnsureObsoleteKeysRemoved();
 
         var values = IniFile.ReadSection(IniSection);
@@ -336,11 +337,18 @@ internal static class UiColors
         {
             SaveToIni();
         }
+#else
+        // リリースでは色パネル無しのためコード既定のみ使い、旧 [Colors] は除去する。
+        IniFile.RemoveSection(IniSection);
+#endif
     }
 
-    /// <summary>共通色へ旧キーを移行し、廃止キーを INI から除去する。</summary>
+    /// <summary>共通色へ旧キーを移行し、廃止キーを INI から除去する（DEBUG のみ）。</summary>
     public static void EnsureObsoleteKeysRemoved()
     {
+#if !DEBUG
+        return;
+#else
         var values = IniFile.ReadSection(IniSection);
         (string Key, string[] Aliases)[] migrations =
         [
@@ -483,10 +491,12 @@ internal static class UiColors
         {
             IniFile.WriteSection(IniSection, values);
         }
+#endif
     }
 
     public static void SaveToIni()
     {
+#if DEBUG
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in Entries)
         {
@@ -499,6 +509,7 @@ internal static class UiColors
         }
 
         IniFile.WriteSection(IniSection, values);
+#endif
     }
 
     /// <summary>エントリのコード既定アルファ（無ければ 255）。</summary>

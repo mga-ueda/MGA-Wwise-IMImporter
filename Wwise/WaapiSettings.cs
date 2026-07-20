@@ -4,88 +4,45 @@ using MgaWwiseIMImporter.UI;
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
-/// WAAPI 接続設定（exe 横の MgaWwiseIMImporter.ini [Waapi]）。
+/// WAAPI 接続設定（アプリ内固定。INI には書かない）。
 /// </summary>
 internal sealed class WaapiSettings
 {
     public const string Section = "Waapi";
 
-    /// <summary>起動時に接続確認するか。既定はオン。</summary>
+    /// <summary>HTTP WAAPI の URL。</summary>
+    public const string DefaultUrl = "http://127.0.0.1:8090/waapi";
+
+    /// <summary>接続・RPC のタイムアウト（ミリ秒）。</summary>
+    public const int DefaultTimeoutMs = 3000;
+
+    /// <summary>起動時に接続確認するか。</summary>
     public bool ProbeOnStartup { get; init; } = true;
 
-    /// <summary>HTTP WAAPI の URL。既定は localhost:8090。</summary>
+    /// <summary>HTTP WAAPI の URL。</summary>
     public string Url { get; init; } = DefaultUrl;
 
     /// <summary>接続・RPC のタイムアウト（ミリ秒）。</summary>
-    public int TimeoutMs { get; init; } = 3000;
+    public int TimeoutMs { get; init; } = DefaultTimeoutMs;
 
-    public const string DefaultUrl = "http://127.0.0.1:8090/waapi";
+    public static WaapiSettings CreateDefault() => new();
 
+    /// <summary>アプリ固定値を返す。旧 [Waapi] は除去する。</summary>
     public static WaapiSettings Load()
     {
-        EnsureDefaultsWritten();
-
-        var values = IniFile.ReadSection(Section);
-        return new WaapiSettings
-        {
-            ProbeOnStartup = values.TryGetValue("ProbeOnStartup", out var probe)
-                ? ParseBool(probe, defaultValue: true)
-                : true,
-            Url = values.TryGetValue("Url", out var url) && !string.IsNullOrWhiteSpace(url)
-                ? url.Trim()
-                : DefaultUrl,
-            TimeoutMs = values.TryGetValue("TimeoutMs", out var timeout)
-                && int.TryParse(timeout, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms)
-                && ms > 0
-                ? ms
-                : 3000,
-        };
+        StripLegacySection();
+        return CreateDefault();
     }
 
-    public static void EnsureDefaultsWritten()
+    /// <summary>旧 [Waapi] セクションを除去する。</summary>
+    public static void StripLegacySection()
     {
-        var values = IniFile.ReadSection(Section);
-        var changed = false;
-
-        // 旧 Keep Target キーはプロジェクト設定へ移したため除去する。
-        if (values.Remove("KeepTarget")
-            | values.Remove("KeptTargetPath")
-            | values.Remove("KeptTargetProjectFilePath"))
-        {
-            changed = true;
-        }
-
-        if (!values.ContainsKey("ProbeOnStartup"))
-        {
-            values["ProbeOnStartup"] = "1";
-            changed = true;
-        }
-
-        if (!values.ContainsKey("Url"))
-        {
-            values["Url"] = DefaultUrl;
-            changed = true;
-        }
-
-        if (!values.ContainsKey("TimeoutMs"))
-        {
-            values["TimeoutMs"] = "3000";
-            changed = true;
-        }
-
-        if (changed)
-        {
-            IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ProbeOnStartup"] = values["ProbeOnStartup"],
-                ["Url"] = values["Url"],
-                ["TimeoutMs"] = values["TimeoutMs"],
-            });
-        }
+        IniFile.RemoveSection(Section);
     }
 
     /// <summary>
     /// 旧 [Waapi] Keep Target 設定を読み取り、呼び出し側でプロジェクトへ移行するために返す。
+    /// <see cref="Load"/> / <see cref="StripLegacySection"/> より前に呼ぶこと。
     /// </summary>
     public static bool TryReadLegacyKeepTarget(
         out bool keepTarget,

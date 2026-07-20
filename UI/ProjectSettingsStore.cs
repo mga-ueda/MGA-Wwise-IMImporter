@@ -178,6 +178,7 @@ internal sealed class ProjectSettingsStore
         {
             store.MigrateFromLegacyAndCreateDefault();
             store.WriteAll();
+            MarkerSettings.StripLegacySection();
             return store;
         }
 
@@ -195,6 +196,8 @@ internal sealed class ProjectSettingsStore
         {
             store.EnsureDefaultExists();
             store.WriteAll();
+            MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
+            MarkerSettings.StripLegacySection();
             return store;
         }
 
@@ -205,7 +208,8 @@ internal sealed class ProjectSettingsStore
             ? store._names.First(n => string.Equals(n, active, StringComparison.OrdinalIgnoreCase))
             : store._names[0];
 
-        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripStreamingKeys();
+        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
+        MarkerSettings.StripLegacySection();
         return store;
     }
 
@@ -303,6 +307,17 @@ internal sealed class ProjectSettingsStore
         profile.StreamEnabled = streamEnabled;
         profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
         profile.PrefetchLengthMs = Math.Clamp(prefetchLengthMs, 0, 9999);
+        WriteProfile(name, profile);
+    }
+
+    public void SaveMarkers(string name, MarkerSettings markers)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.CopyMarkerFrom(markers);
         WriteProfile(name, profile);
     }
 
@@ -521,16 +536,18 @@ internal sealed class ProjectSettingsStore
         profile.AlwaysOnTop = ReadBool(developerValues, "TopMost", defaultValue: false);
 
         // レガシー: [WwiseImport] LookAhead／Prefetch → プロジェクト設定
-        var streaming = MgaWwiseIMImporter.Wwise.WwiseImportSettings.Load();
-        profile.LookAheadMs = streaming.LookAheadMs;
-        profile.PrefetchLengthMs = streaming.PrefetchLengthMs;
+        MgaWwiseIMImporter.Wwise.WwiseImportSettings.ReadLegacyStreaming(
+            out var lookAheadMs,
+            out var prefetchLengthMs);
+        profile.LookAheadMs = lookAheadMs;
+        profile.PrefetchLengthMs = prefetchLengthMs;
 
         _names.Clear();
         _profiles.Clear();
         _names.Add(DefaultName);
         _profiles[DefaultName] = profile;
         ActiveName = DefaultName;
-        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripStreamingKeys();
+        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
     }
 
     private void EnsureDefaultExists()
@@ -732,15 +749,17 @@ internal sealed class ProjectSettingsStore
         // 旧 [WwiseImport] の値を、プロジェクト未設定時の初期値として引き継ぐ。
         if (!hasLookAhead || !hasPrefetch)
         {
-            var legacy = MgaWwiseIMImporter.Wwise.WwiseImportSettings.Load();
+            MgaWwiseIMImporter.Wwise.WwiseImportSettings.ReadLegacyStreaming(
+                out var legacyLookAhead,
+                out var legacyPrefetch);
             if (!hasLookAhead)
             {
-                profile.LookAheadMs = legacy.LookAheadMs;
+                profile.LookAheadMs = legacyLookAhead;
             }
 
             if (!hasPrefetch)
             {
-                profile.PrefetchLengthMs = legacy.PrefetchLengthMs;
+                profile.PrefetchLengthMs = legacyPrefetch;
             }
 
             migratedStreaming = true;
