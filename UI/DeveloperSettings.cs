@@ -27,28 +27,17 @@ internal sealed class DeveloperSettings
 
     /// <summary>
     /// 不足キーがあれば現状の既定値で書き足す（既存値は維持）。
-    /// 旧キー名があれば除去する。
     /// </summary>
     public static void EnsureDefaultsWritten()
     {
         var values = IniFile.ReadSection(Section);
-        var changed = false;
-
-        if (MigrateLegacyKeys(values))
+        if (values.ContainsKey("DetailedPlaybackLog"))
         {
-            changed = true;
+            return;
         }
 
-        if (!values.ContainsKey("DetailedPlaybackLog"))
-        {
-            values["DetailedPlaybackLog"] = "1";
-            changed = true;
-        }
-
-        if (changed)
-        {
-            WriteSection(values);
-        }
+        values["DetailedPlaybackLog"] = "1";
+        WriteSection(values);
     }
 
     /// <summary>[Developer] DetailedPlaybackLog だけ更新する（他キーは維持）。</summary>
@@ -68,32 +57,6 @@ internal sealed class DeveloperSettings
                 ? detailedLog
                 : "1",
         });
-    }
-
-    private static bool MigrateLegacyKeys(Dictionary<string, string> values)
-    {
-        // 旧キーは削除する（TopMost だけはプロジェクト形式の初回移行時に参照される）
-        string[] obsolete =
-        [
-            "ExternalEditorPath",
-            "OpenInExternalEditor",
-            "SoundForgePath",
-            "OpenInSoundForge",
-            "TopMost",
-            "AutoLoadWavePath",
-            "AutoLoadOnStartup",
-        ];
-
-        var changed = false;
-        foreach (var key in obsolete)
-        {
-            if (values.Remove(key))
-            {
-                changed = true;
-            }
-        }
-
-        return changed;
     }
 
     private static bool ParseBool(string text, bool defaultValue)

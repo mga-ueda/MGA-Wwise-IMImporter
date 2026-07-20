@@ -196,28 +196,21 @@ internal sealed class ProjectSettingsStore
         var index = IniFile.ReadSection(IndexSection);
         if (index.Count == 0 || !index.ContainsKey("Names"))
         {
-            store.MigrateFromLegacyAndCreateDefault();
+            store.EnsureDefaultExists();
             store.WriteAll();
-            MarkerSettings.StripLegacySection();
             return store;
         }
 
         foreach (var name in ParseNames(index.TryGetValue("Names", out var namesText) ? namesText : string.Empty))
         {
             store._names.Add(name);
-            store._profiles[name] = ReadProfile(name, out var migratedStreaming);
-            if (migratedStreaming)
-            {
-                WriteProfile(name, store._profiles[name]);
-            }
+            store._profiles[name] = ReadProfile(name);
         }
 
         if (store._names.Count == 0)
         {
             store.EnsureDefaultExists();
             store.WriteAll();
-            MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
-            MarkerSettings.StripLegacySection();
             return store;
         }
 
@@ -228,8 +221,6 @@ internal sealed class ProjectSettingsStore
             ? store._names.First(n => string.Equals(n, active, StringComparison.OrdinalIgnoreCase))
             : store._names[0];
 
-        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
-        MarkerSettings.StripLegacySection();
         return store;
     }
 
@@ -573,31 +564,6 @@ internal sealed class ProjectSettingsStore
         return $"Project {DateTime.Now:yyyyMMddHHmmss}";
     }
 
-    private void MigrateFromLegacyAndCreateDefault()
-    {
-        var profile = CreateAppDefaults();
-        var markers = MarkerSettings.Load();
-        profile.CopyMarkerFrom(markers);
-
-        // レガシー: [Developer] TopMost → AlwaysOnTop（キー除去前に読む）
-        var developerValues = IniFile.ReadSection(DeveloperSettings.Section);
-        profile.AlwaysOnTop = ReadBool(developerValues, "TopMost", defaultValue: false);
-
-        // レガシー: [WwiseImport] LookAhead／Prefetch → プロジェクト設定
-        MgaWwiseIMImporter.Wwise.WwiseImportSettings.ReadLegacyStreaming(
-            out var lookAheadMs,
-            out var prefetchLengthMs);
-        profile.LookAheadMs = lookAheadMs;
-        profile.PrefetchLengthMs = prefetchLengthMs;
-
-        _names.Clear();
-        _profiles.Clear();
-        _names.Add(DefaultName);
-        _profiles[DefaultName] = profile;
-        ActiveName = DefaultName;
-        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripLegacySection();
-    }
-
     private void EnsureDefaultExists()
     {
         _names.Clear();
@@ -670,9 +636,8 @@ internal sealed class ProjectSettingsStore
         });
     }
 
-    private static ProjectProfile ReadProfile(string name, out bool migratedStreaming)
+    private static ProjectProfile ReadProfile(string name)
     {
-        migratedStreaming = false;
         var values = IniFile.ReadSection(ToSectionName(name));
         var profile = CreateAppDefaults(name);
         if (values.TryGetValue("Name", out var storedName) && storedName.Trim().Length > 0)
@@ -714,9 +679,6 @@ internal sealed class ProjectSettingsStore
         }
 
         profile.CommentZeroPad = ReadBool(values, "CommentZeroPad", profile.CommentZeroPad);
-        profile.CommentPrefixEnabled = ReadBool(values, "CommentPrefixEnabled", profile.CommentPrefixEnabled);
-        profile.CommentSuffixEnabled = ReadBool(values, "CommentSuffixEnabled", profile.CommentSuffixEnabled);
-        profile.CommentJoinerEnabled = ReadBool(values, "CommentJoinerEnabled", profile.CommentJoinerEnabled);
         profile.CommentResetPerPart = ReadBool(values, "CommentResetPerPart", profile.CommentResetPerPart);
         profile.CompactFileNumbers = ReadBool(values, "CompactFileNumbers", profile.CompactFileNumbers);
         profile.AlwaysOnTop = ReadBool(values, "AlwaysOnTop", profile.AlwaysOnTop);
@@ -738,22 +700,6 @@ internal sealed class ProjectSettingsStore
         if (values.TryGetValue("CommentJoiner", out var joiner))
         {
             profile.CommentJoiner = joiner;
-        }
-
-        // 旧チェックボックス OFF の値は入力なしとして扱う。
-        if (!profile.CommentPrefixEnabled)
-        {
-            profile.CommentPrefix = string.Empty;
-        }
-
-        if (!profile.CommentSuffixEnabled)
-        {
-            profile.CommentSuffix = string.Empty;
-        }
-
-        if (!profile.CommentJoinerEnabled)
-        {
-            profile.CommentJoiner = string.Empty;
         }
 
         profile.CommentPrefixEnabled = profile.CommentPrefix.Length > 0;
@@ -783,39 +729,16 @@ internal sealed class ProjectSettingsStore
 
         profile.StreamEnabled = ReadBool(values, "StreamEnabled", defaultValue: true);
 
-        var hasLookAhead = false;
-        var hasPrefetch = false;
         if (values.TryGetValue("LookAheadMs", out var lookAheadText)
             && int.TryParse(lookAheadText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var lookAheadMs))
         {
             profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
-            hasLookAhead = true;
         }
 
         if (values.TryGetValue("PrefetchLengthMs", out var prefetchText)
             && int.TryParse(prefetchText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var prefetchMs))
         {
             profile.PrefetchLengthMs = Math.Clamp(prefetchMs, 0, 9999);
-            hasPrefetch = true;
-        }
-
-        // 旧 [WwiseImport] の値を、プロジェクト未設定時の初期値として引き継ぐ。
-        if (!hasLookAhead || !hasPrefetch)
-        {
-            MgaWwiseIMImporter.Wwise.WwiseImportSettings.ReadLegacyStreaming(
-                out var legacyLookAhead,
-                out var legacyPrefetch);
-            if (!hasLookAhead)
-            {
-                profile.LookAheadMs = legacyLookAhead;
-            }
-
-            if (!hasPrefetch)
-            {
-                profile.PrefetchLengthMs = legacyPrefetch;
-            }
-
-            migratedStreaming = true;
         }
 
         profile.LoudnessNormalizeEnabled = ReadBool(

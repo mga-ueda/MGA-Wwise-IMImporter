@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace MgaWwiseIMImporter.Wwise;
 
-/// <summary>WAAPI 上のオブジェクト存在確認・削除。</summary>
+/// <summary>WAAPI 上のオブジェクト存在確認。</summary>
 internal static class WaapiObjectUtil
 {
     public static async Task<bool> ExistsAsync(
@@ -39,22 +39,6 @@ internal static class WaapiObjectUtil
             // WAAPI は未存在パスに対し invalid_query / Object not found を返す
             return false;
         }
-    }
-
-    public static async Task DeleteAsync(
-        WaapiSettings settings,
-        string objectPath,
-        CancellationToken cancellationToken = default)
-    {
-        using var client = new WaapiHttpClient(
-            settings.Url,
-            TimeSpan.FromMilliseconds(Math.Max(settings.TimeoutMs, 10000)));
-
-        await client.CallAsync(
-                "ak.wwise.core.object.delete",
-                new Dictionary<string, object?> { ["object"] = objectPath },
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
     }
 
     private static bool IsObjectNotFound(string message) =>

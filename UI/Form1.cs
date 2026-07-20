@@ -321,7 +321,6 @@ public partial class Form1 : Form
         waapiStatusBar.KeepTargetChanged += WaapiStatusBar_KeepTargetChanged;
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
-        MigrateLegacyWaapiKeepTargetIntoActiveProject();
         _waapiSettings = WaapiSettings.Load();
         WireProjectBarEvents();
         ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
@@ -535,29 +534,6 @@ public partial class Form1 : Form
         }
 
         UpdateExportButtonState();
-    }
-
-    private void MigrateLegacyWaapiKeepTargetIntoActiveProject()
-    {
-        if (!WaapiSettings.TryReadLegacyKeepTarget(
-                out var keepTarget,
-                out var keptPath,
-                out var keptProject))
-        {
-            return;
-        }
-
-        var profile = _projectStore.GetActive();
-        if (profile.KeepTarget || profile.KeptTargetPath.Length > 0)
-        {
-            return;
-        }
-
-        _projectStore.SaveKeepTarget(
-            profile.Name,
-            keepTarget,
-            keptPath,
-            keptProject);
     }
 
     private void WaapiStatusBar_KeepTargetChanged(object? sender, EventArgs e)

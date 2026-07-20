@@ -67,7 +67,6 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private MarkerSettings? _settings;
     private bool _updating;
-    private bool _interactionLocked;
     private bool _streamEnabled = true;
     private int _lookAheadMs = StreamMsDefault;
     private int _prefetchLengthMs = StreamMsDefault;
@@ -608,51 +607,6 @@ internal sealed class MarkerOptionsPanel : UserControl
         UpdatePreview();
     }
 
-    /// <summary>
-    /// 書き出し中の操作ロック。TextBox は Enabled=false にせず ReadOnly＋色で無効化する。
-    /// </summary>
-    public void SetInteractionLocked(bool locked)
-    {
-        if (_interactionLocked == locked)
-        {
-            return;
-        }
-
-        _interactionLocked = locked;
-        foreach (var radio in new[] { _gridBarRadio, _gridBeatRadio, _gridDefaultRadio })
-        {
-            radio.Enabled = !locked;
-        }
-
-        foreach (var checkBox in new[]
-        {
-            _streamEnabledCheckBox,
-            _loudnessEnabledCheckBox,
-            _loudnessGroupBalanceCheckBox,
-            _zeroPadCheckBox,
-            _resetPerPartCheckBox,
-        })
-        {
-            checkBox.Enabled = !locked;
-        }
-
-        if (locked)
-        {
-            TextEditingChanged?.Invoke(this, false);
-            var disabledFore = UiColors.OptionGlyphDisabled;
-            foreach (var textBox in EnumerateEditableTextBoxes())
-            {
-                textBox.ReadOnly = true;
-                textBox.ForeColor = disabledFore;
-                textBox.Cursor = Cursors.Default;
-            }
-
-            return;
-        }
-
-        UpdateDependentStates();
-    }
-
     private void ToggleMoreOptions()
     {
         _moreOptionsExpanded = !_moreOptionsExpanded;
@@ -853,11 +807,6 @@ internal sealed class MarkerOptionsPanel : UserControl
     {
         // Enabled=false だと OS の無効色（暗い背景で黒）になるため、
         // ReadOnly＋色で見た目の無効状態を表す。
-        if (_interactionLocked)
-        {
-            return;
-        }
-
         _digitsTextBox.ReadOnly = false;
         _lookAheadTextBox.ReadOnly = !_streamEnabled;
         _prefetchTextBox.ReadOnly = !_streamEnabled;
@@ -967,7 +916,7 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private void OnStreamUiChanged()
     {
-        if (_updating || _interactionLocked)
+        if (_updating)
         {
             return;
         }
@@ -1005,7 +954,7 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private void OnLoudnessUiChanged()
     {
-        if (_updating || _interactionLocked)
+        if (_updating)
         {
             return;
         }

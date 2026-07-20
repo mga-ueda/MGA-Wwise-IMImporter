@@ -148,12 +148,6 @@ internal sealed class WaveAudioPlayer : IDisposable
         return plans.ToArray();
     }
 
-    /// <summary>互換: ループ本体だけが必要な場合。</summary>
-    public static LoopSampleRange[] BuildLoopRanges(IReadOnlyList<WaveformRegionMark> regions) =>
-        BuildLoopPlans(regions)
-            .Select(p => new LoopSampleRange(p.LoopStartSample, p.LoopEndSample))
-            .ToArray();
-
     public void SetLoopPlans(IReadOnlyList<LoopPlaybackPlan> plans)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -161,11 +155,6 @@ internal sealed class WaveAudioPlayer : IDisposable
         _activePlan = null;
         PushActivePlanToProvider();
     }
-
-    public void SetLoopRanges(IReadOnlyList<LoopSampleRange> ranges) =>
-        SetLoopPlans(ranges.Select(r => new LoopPlaybackPlan(r.StartSample, r.EndSample, null)).ToArray());
-
-    public void ClearLoopRanges() => SetLoopPlans([]);
 
     /// <summary>
     /// 現在位置がループ区間内ならその区間だけを有効化。外ならループ／Exit 解除。
@@ -185,14 +174,6 @@ internal sealed class WaveAudioPlayer : IDisposable
             _provider?.SetActivePlan(null);
             _provider?.StopExitLayer();
         }
-    }
-
-    public void ClearActiveLoop()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        _activePlan = null;
-        _provider?.SetActivePlan(null);
-        _provider?.StopExitLayer();
     }
 
     /// <summary>有効中のループ区間（進捗 0〜1）。未アームなら false。</summary>
@@ -1939,9 +1920,6 @@ internal readonly record struct LoopPlaybackPlan(
 {
     public bool HasExit => ExitEndSample is long end && end > LoopEndSample;
 }
-
-/// <summary>ループ区間（終端サンプルは排他）。</summary>
-internal readonly record struct LoopSampleRange(long StartSample, long EndSample);
 
 /// <summary>音声スレッドが確定した Playlist 遷移タイミング。</summary>
 internal readonly record struct PlaylistTransitionSchedule(
