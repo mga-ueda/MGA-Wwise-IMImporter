@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>Wwise へ作成する Interactive Music 構造の計画。</summary>
@@ -24,6 +26,9 @@ internal sealed class WwisePlaylistPlan
     /// レイヤーグループ時は先頭メンバーのパス。
     /// </summary>
     public required string SourceWavPath { get; init; }
+
+    /// <summary>Any → この Playlist ルールに載せる Exit Source At（遷移先の記憶値）。</summary>
+    public required PlaylistExitSourceMode ExitSourceAt { get; init; }
 
     public required IReadOnlyList<WwiseSegmentPlan> Segments { get; init; }
 }

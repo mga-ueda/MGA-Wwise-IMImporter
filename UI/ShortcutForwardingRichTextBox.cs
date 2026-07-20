@@ -5,7 +5,7 @@ namespace MgaWwiseIMImporter.UI;
 /// <summary>
 /// ProcessCmdKey を親フォームに先渡しする RichTextBox。
 /// 既定の RTF は Ctrl+Home/End などを自己消費するため、ショートカットがフォームまで届かない。
-/// 左にスクロールバー幅相当の余白を付け、右端のバーとバランスを取る。
+/// 左にスクロールバー幅の半分の余白を付け、右端のバーとバランスを取る。
 /// </summary>
 internal sealed class ShortcutForwardingRichTextBox : RichTextBox
 {
@@ -36,7 +36,7 @@ internal sealed class ShortcutForwardingRichTextBox : RichTextBox
         ApplyTextMargin();
     }
 
-    /// <summary>テキスト描画領域の左をスクロールバー幅ぶん空ける。</summary>
+    /// <summary>テキスト描画領域の左をスクロールバー幅の半分だけ空ける。</summary>
     private void ApplyTextMargin()
     {
         if (!IsHandleCreated || ClientSize.Width <= 0 || ClientSize.Height <= 0)
@@ -44,7 +44,7 @@ internal sealed class ShortcutForwardingRichTextBox : RichTextBox
             return;
         }
 
-        var margin = SystemInformation.VerticalScrollBarWidth;
+        var margin = Math.Max(1, SystemInformation.VerticalScrollBarWidth / 2);
         var rect = new NativeRect();
         _ = SendMessage(Handle, EmGetRect, IntPtr.Zero, ref rect);
 

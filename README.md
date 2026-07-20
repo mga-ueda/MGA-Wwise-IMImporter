@@ -33,9 +33,10 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | タイムラインをダブルクリック | 表示範囲と交差する Music Playlist がちょうど 1 つなら全体表示へ戻す。複数ある場合は、マウス直下の Playlist 範囲を表示幅の 90% にして中央表示。直下に Playlist がなければズームしないが、通常クリック相当のシークは発生 |
 | 波形ファイル名 | 左側情報欄の幅をファイル名が一行で収まるよう自動調整し、名前の右側に再生出力の縦型レベルメーターを表示。最小／最大色のグラデーションは色設定から変更可能 |
 | 波形ファイル名をダブルクリック | 表示位置に直接現れる入力欄で、拡張子なしの基底名を編集。Enter またはフォーカス移動で確定、Esc でキャンセル。変更は直ちに Playlist／Segment 表示へ反映され、書き出す WAV ファイル名と Wwise の Container／Playlist／Segment／Track 名にも使用 |
-| Fade In | Playlist左側のラジオボタンから遷移先のフェードイン時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。再生中のPlaylist遷移だけに適用し、停止中からの開始には適用しない。遷移先が `-A` なら先行再生開始からフェードインし、Entry Cue後も同じ包絡線を継続。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
-| Fade Out | Playlist左側のラジオボタンから遷移元のフェードアウト時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
-| Exit Source At | Fade Out下のラジオボタンから遷移元の退出位置を選択。`Immediate`＝即時、`Next Bar`＝次の小節、`Next Beat`＝次の拍、`Next Cue`＝現在Playlist内の次の単発マーカー、`Exit Cue`＝Playlist終端（末尾が `-E` ならその開始）。既定は `Next Bar`。変更は次の遷移予約から適用 |
+| Fade In | Playlist左側のラジオボタンから遷移先のフェードイン時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。Playlist をクリックしてから選択するとパート（グループ）単位で記憶。再生中のPlaylist遷移だけに適用し、停止中からの開始には適用しない。遷移先が `-A` なら先行再生開始からフェードインし、Entry Cue後も同じ包絡線を継続。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
+| Fade Out | Playlist左側のラジオボタンから遷移元のフェードアウト時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。Playlist をクリックしてから選択するとパート（グループ）単位で記憶。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
+| Stream | Marker Grid 左の列。`Stream` チェック（既定オン）と `LookAhead`／`Prefetch`（ms、0〜9999、既定 500）。`[Project.*] StreamEnabled`／`LookAheadMs`／`PrefetchLengthMs` に自動保存。Stream オフ時は LookAhead／Prefetch は無効で、Wwise へもストリーミングなしで作成 |
+| Exit Source At | Fade Out 右のラジオボタン。Playlist をクリックしてから選択すると、その Playlist（パート）ごとに Fade In／Fade Out／Group Fade／Exit Source At を記憶する。Fade In／Out 内は通常候補の下に `Group` 見出しでグループ用候補を区分。通常 Fade・Exit Source・Group Fade はいずれも同一グループ ID で共通同期。同一グループ内遷移は Group Fade のみ（通常 Fade は無効）。グループ外からの遷移は通常の Fade In/Out を使用。Last Wave サイドカーへオートセーブ／復元。Wwise へは Exit Source At のみ渡し、Group Fade は未使用 |
 | 遷移先同期（自動） | 同一グループ内の遷移は `Same Time`、異なるグループ間または未グループとの遷移は `Entry Cue` を自動選択する。`Same Time` は実際の退出時点における現在 Playlist 先頭からの経過時間を遷移先へ引き継ぐ。引継ぎ位置が遷移先の長さ以上なら予約しない |
 | Music Playlist 一覧 | ログ右側の `Music Playlist` 一覧から遷移先を選択。一覧幅はファイル名が改行されない必要幅へ自動可変（表示領域を超える場合だけ省略表示）。停止／一時停止中は対象の頭から即再生し、再生中は `Exit Source At` の位置で遷移。同一グループ内の `Same Time` では相対位置から直接開始し、それ以外の `Entry Cue` で遷移先冒頭が `-A` の場合は、その長さだけ先行して重ねる。Next Bar／Next Beatでは境界に `-A` 終端を揃え、Next Cue／Exit Cueまでの時間が足りない場合は `-A` を即開始して退出だけを指定 Cue に揃える。Immediateでは旧曲フェードと `-A` を同時に即開始する。先行再生中の位置と残像は緑色、フェードアウト中は白、`-E` 到達後は赤で表示する。通常時は枠なし、再生中は背景を塗り、遷移完了時は枠をフェード発光する。遷移待機中は予約先の枠がテンポ／拍子に同期して点滅する |
 | Esc | 通常画面では終了確認を表示。小節ジャンプではキャンセル、`色調整（開発者）` パネルでは閉じる |
@@ -44,9 +45,10 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | ログ右下アイコン | クリアアイコンでログ表示だけを消去、コピーアイコンで全ログをクリップボードへコピー、保存アイコンで UTF-8 の `.log`／`.txt` ファイルへ保存（各機能名はツールチップに表示） |
 | Debug Log | 操作バーのチェック。Playlist推移・再生エンジン診断を `[PlaybackDebug]` JSON Lines形式でログへ出力（既定オン） |
 | Compact File Numbers | 無効項目を除いた書き出し WAV・Playlist・Segment 名の番号を詰める（既定オン）。オフでは元の番号を維持し、欠番を残す |
-| Load Last Wave | `Always on Top` 左側のチェック。起動時に、選択中のプロジェクトで最後に正常に読み込んだ波形を再読み込み（`[Project.*] LoadLastWaveOnStartup` / `LastWavePath`） |
+| Load Last Wave | `Always on Top` 左側のチェック。起動時に、選択中のプロジェクトで最後に正常に読み込んだ波形を再読み込み（`[Project.*] LoadLastWaveOnStartup` / `LastWavePath`）。あわせてサイドカー JSON のグループ／無効化／追加マーカー／Fade In・Out（通常／Group）／Exit Source At（パート別）を復元 |
 | Always on Top | WAAPI ステータスバー直上の操作バーにあるチェック。ウィンドウを最前面に固定（`[Project.*] AlwaysOnTop`。既定オフ） |
-| RELOAD | 最後にドロップまたは自動読み込みした WAV／XML を元ファイルから再読み込みする。ログ・Playlist のグループ化・無効化・追加マーカーはリセット。再生は一時コピー経由のため、読み込み中も外部アプリは元 WAV を上書き可能 |
+| Keep Target | WAAPI ステータスバー右端のチェック。オンにした時点の作成先をアプリ側で固定し、その後 Wwise で選択を変えても表示・EXPORT 先は変わらない。接続中は Keep 先へ書き出す旨を警告色で表示。未接続時は赤字のエラー表示（チェックは外さない）。再接続できたら記憶パスを有効化。起動時／EXPORT 前は可能なら Wwise 上でも同パスを再選択（`[Project.*] KeepTarget` / `KeptTargetPath`。既定オフ） |
+| RELOAD | 最後にドロップまたは自動読み込みした WAV／XML を元ファイルから再読み込みする。ログ・Playlist のグループ化・無効化・Exit Source At 記憶・追加マーカーはリセット。再生は一時コピー経由のため、読み込み中も外部アプリは元 WAV を上書き可能 |
 | EXPORT | WAAPI ステータスバー直上の操作バーにある青ボタン。プロジェクト書き出し先へ分割 WAV を書き出し、続けて Wwise へ登録。Wwise 未接続／作成先未選択／書き出し先が未指定・不存在・Originals 外のときは無効 |
 | Ctrl+Shift+C | `色調整（開発者）` パネル（`[Colors]` INI） |
 
@@ -64,8 +66,8 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 - **Music Segment 名** … 波形下の Music Segment Name レーン（高さは Measure 行と同じ）に、リージョン束ね単位のセグメント名を通常ウェイトで表示。1 Playlist の出力 Segment が1件だけなら接尾辞を付けず、複数なら `…_a` / `…_b`（`-A`／`-E` の束ね含む）とする。Playlist より細かい。時間的に連続するセグメント同士の境だけ、波形背景色の 3 px 縦線を描く（`-R` などの隙間には描かない）
 - **Music Playlist 名** … その下の Music Playlist Name レーン（同高さ）に、エクスポートファイル名（拡張子除く）＋` (.wav)`（例: `元名_1 (.wav)`）を太字で表示。無効項目の仮名 `Excluded Region n` はこのレーンには表示しない。複数パート時は Wwise Playlist 名と一致するが、単一パート時に作る Wwise Playlist Container 名は元ファイル名
 - **名前レーンの文字** … Segment／Playlist とも各時間範囲の内側に収まるまで縮小。極端に狭い場合は最小 0.5 px とし、それでも収まらなければ横方向を縮めるため、拡大すると全文を確認できる
-- **Music Playlist 一覧（遷移シミュレーター）** … ログ右側に出力パート由来の Playlist 名を縦表示。件数が多い場合はスクロールし、長い名前は省略表示してホバーで全文を表示する。再生中の選択は Exit Source At（Immediate／Next Bar／Next Beat／Next Cue／Exit Cue）へクオンタイズし、同一グループ内は Same Time、それ以外は Entry Cue で遷移先位置を自動決定する。Same Timeはボタン押下時ではなく実際の退出時点の相対時間を使う。`-L` ループ中でも到達可能な境界では Playlist 遷移を優先し、Next Cueは現在周回のループ終端までに次の単発マーカーがなければ予約しない。遷移待ち中の再選択は最後に選んだ Playlist を採用する。波形側でシークすると自動状態と予約を解除し、現在位置の Playlist を手動再生色へ切り替える
-- **右側パネルの高さ** … Marker Grid／Marker Comment は全項目が収まる固定高。ウィンドウの高さを変更したときは Music Playlist 一覧が残り領域に合わせて伸縮する
+- **Music Playlist 一覧（遷移シミュレーター）** … ログ右側に出力パート由来の Playlist 名を縦表示。件数が多い場合はスクロールし、長い名前は省略表示してホバーで全文を表示する。項目クリックでその Playlist の Fade／Exit Source At をラジオへ反映。再生中の選択は遷移先 Playlist の Exit Source At（Immediate／Next Bar／Next Beat／Next Cue／Exit Cue）と Fade へクオンタイズし、同一グループ内は Same Time、それ以外は Entry Cue で遷移先位置を自動決定する。Same Timeはボタン押下時ではなく実際の退出時点の相対時間を使う。`-L` ループ中でも到達可能な境界では Playlist 遷移を優先し、Next Cueは現在周回のループ終端までに次の単発マーカーがなければ予約しない。遷移待ち中の再選択は最後に選んだ Playlist を採用する。波形側でシークすると自動状態と予約を解除し、現在位置の Playlist を手動再生色へ切り替える
+- **右側パネルの高さ** … Stream／Marker Grid／Marker Comment は全項目が収まる固定高。ウィンドウの高さを変更したときは Music Playlist 一覧が残り領域に合わせて伸縮する
 - **TimeReference** … iXML（`BWF_TIME_REFERENCE_*`）のみ。無い／0 のときは波形先頭＝PPQ 0 扱い
 - **読み込み演出** … ラベル → 波形ワイプ → 小節 → マーカー → Playlist／Segment 名の順で重ね表示
 
@@ -96,13 +98,13 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 
 - グループ化されていない出力パート 1 つ、またはグループ 1 つを Music Playlist Container 1 つとして扱う
 - 2 パート以上のグループは、1 つの Music Segment 内へ複数 Music Track を置く縦レイヤーとして生成する。Playlist／Segment 名はグループ化後の連番へ詰める
-- 最終 Playlist が 2 つ以上なら Music Switch Container（元ファイル名）の下に配置する。あわせて State Group（同名）を `[WwiseImport] StateGroupParentPath`（既定 `\States\Default Work Unit`）に作成し、各 Stateを同名 Playlist に割当。既存 State Group があるときは削除・再作成せず、同一オブジェクトの State 一覧を現在の Playlist 構成へ更新する。Switch の any→any トランジションは Exit Source at=Immediate、Source Fade-out ON（Time / Offset / Curve は WAAPI 非対応のため手設定）
+- 最終 Playlist が 2 つ以上なら Music Switch Container（元ファイル名）の下に配置する。あわせて State Group（同名）を `[WwiseImport] StateGroupParentPath`（既定 `\States\Default Work Unit`）に作成し、各 Stateを同名 Playlist に割当。既存 State Group があるときは削除・再作成せず、同一オブジェクトの State 一覧を現在の Playlist 構成へ更新する。Switch のトランジションは既定 Any → Any（名前 `Transition`）を先頭に明示維持し、続けて各 Playlist 向けの Any → Object ルールを載せる（Exit Source At は遷移先 Playlist の記憶値。グループ時は代表パート＝最小番号）。Source Fade-out ON（Time / Offset / Curve は WAAPI 非対応のため手設定）
 - リージョン 1 つ = Music Segment 1 つ。1 Playlist 内で Segment が1件だけなら名前の `_a` を省略し、複数なら `_a` `_b` … の連番。ただし:
   - `-A`（アウフタクト）は次のリージョンと同一セグメントにし、Entry Cue より前として扱う
   - `-E` は直前のリージョンと同一セグメントにし、Exit Cue より後として扱う（`-L` 直後への自動付与分も含む）
   - `-L` の付いたセグメントはプレイリスト上で無限ループ
 - 各セグメントにはリージョンのテンポ・拍子を設定（Override）。単発マーカーは Custom Cue として付与（WAV メタデータは参照しない）
-- トラックはストリーミング有効。Prefetch Length は全トラックに `[WwiseImport] PrefetchLengthMs`（既定 500）。各 Playlist の先頭セグメントは Zero latency オン＋Look-ahead 0、2 番目以降は Look-ahead を `[WwiseImport] LookAheadMs`（既定 500）に設定
+- トラックは `[Project.*] StreamEnabled`（既定オン）に従いストリーミングを設定。オン時は、各 Playlist の先頭セグメントかつ先頭トラックに Prefetch Length（`[Project.*] PrefetchLengthMs`、既定 500）と Zero latency オン＋Look-ahead 0 を設定。2 番目以降のセグメント／トラックは Look-ahead を `[Project.*] LookAheadMs`（既定 500）に設定。オフ時はストリーミング無効で作成し LookAhead／Prefetch／Zero latency は付けない
 - 元 WAV から各 Music Segment／Track の範囲を直接切り出し、書き出し先直下の最終 WAV を取り込む
 
 ---
@@ -182,6 +184,17 @@ DetailedPlaybackLog=1
 
 `LoadLastWaveOnStartup` は `Load Last Wave` のオン／オフ、`LastWavePath` は最後に正常に読み込んだ波形のフルパスです。どちらもプロジェクト単位で自動保存されます。
 
+| キー | 意味 | 既定 |
+|------|------|------|
+| `KeepTarget` | 作成先パスをアプリ側で固定し、EXPORT にもそのパスを使う（`1`/`0`。ステータスバー右の Keep Target）。再起動後も保持 | `0` |
+| `KeptTargetPath` | 記憶中の Wwise オブジェクトパス | （空） |
+| `KeptTargetProjectFilePath` | 記憶時のプロジェクトファイルパス（不一致なら再選択しない） | （空） |
+| `StreamEnabled` | Music Track のストリーミング有効（`1`/`0`。Stream 列のチェック） | `1` |
+| `LookAheadMs` | 2 番目以降のセグメントの Look-ahead time（ms、0〜9999。Stream オン時） | `500` |
+| `PrefetchLengthMs` | Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。Stream オン時） | `500` |
+
+旧 `[Waapi]` の Keep Target 同名キーは起動時にアクティブプロジェクトへ移行し、`[Waapi]` からは除去されます。旧 `[WwiseImport]` の `LookAheadMs`／`PrefetchLengthMs` も同様に各プロジェクトへ移行し、`[WwiseImport]` からは除去されます。
+
 #### `[Waapi]`
 
 起動時にエディタログへ WAAPI 接続結果を出します（HTTP。既定ポートは 8090）。
@@ -203,18 +216,14 @@ TimeoutMs=3000
 
 | キー | 意味 | 既定 |
 |------|------|------|
-| `LookAheadMs` | 2 番目以降のセグメントの Look-ahead time（ms、0〜10000） | `500` |
-| `PrefetchLengthMs` | 全 Music Track の Prefetch Length（ms、0〜10000） | `500` |
 | `StateGroupParentPath` | 複数パート時に作る State Group の親パス | `\States\Default Work Unit` |
 
 ```ini
 [WwiseImport]
-LookAheadMs=500
-PrefetchLengthMs=500
 StateGroupParentPath=\States\Default Work Unit
 ```
 
-旧キー `WaveCopyDir` は起動時に除去されます（書き出し先への直接出力に統一）。
+旧キー `WaveCopyDir`、`LookAheadMs`、`PrefetchLengthMs` は起動時に除去されます（LookAhead／Prefetch は `[Project.*]` へ移行）。
 
 #### `[Colors]`
 

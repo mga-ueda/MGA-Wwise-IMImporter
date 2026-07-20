@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
@@ -23,7 +25,9 @@ internal static class WwiseMusicPlanBuilder
         IReadOnlyList<WaveformMarkerMark> markers,
         IReadOnlyDictionary<int, int>? partGroupIds = null,
         IReadOnlyDictionary<int, string>? playlistNameOverrides = null,
-        string? outputDirectory = null)
+        string? outputDirectory = null,
+        IReadOnlyDictionary<int, PlaylistExitSourceMode>? partExitSourceModes = null,
+        PlaylistExitSourceMode defaultExitSourceAt = PlaylistExitSourceMode.NextBar)
     {
         if (sampleRate == 0)
         {
@@ -55,6 +59,10 @@ internal static class WwiseMusicPlanBuilder
                 units,
                 unitIndex,
                 playlistNameOverrides);
+            var exitSourceAt = ResolveUnitExitSourceAt(
+                unit.Parts,
+                partExitSourceModes,
+                defaultExitSourceAt);
             if (unit.Parts.Count == 1)
             {
                 playlists.Add(BuildSinglePartPlaylist(
@@ -65,7 +73,8 @@ internal static class WwiseMusicPlanBuilder
                     sampleRate,
                     regions,
                     bars,
-                    markers));
+                    markers,
+                    exitSourceAt));
             }
             else
             {
@@ -76,7 +85,8 @@ internal static class WwiseMusicPlanBuilder
                     sampleRate,
                     regions,
                     bars,
-                    markers));
+                    markers,
+                    exitSourceAt));
             }
         }
 
@@ -86,6 +96,26 @@ internal static class WwiseMusicPlanBuilder
             IsMultiPart = playlists.Count > 1,
             Playlists = playlists,
         };
+    }
+
+    private static PlaylistExitSourceMode ResolveUnitExitSourceAt(
+        IReadOnlyList<WaveformOutputPart> parts,
+        IReadOnlyDictionary<int, PlaylistExitSourceMode>? partExitSourceModes,
+        PlaylistExitSourceMode defaultExitSourceAt)
+    {
+        if (parts.Count == 0)
+        {
+            return defaultExitSourceAt;
+        }
+
+        var representativeNumber = parts.Min(part => part.Number);
+        if (partExitSourceModes is not null
+            && partExitSourceModes.TryGetValue(representativeNumber, out var mode))
+        {
+            return mode;
+        }
+
+        return defaultExitSourceAt;
     }
 
     /// <summary>
@@ -263,7 +293,8 @@ internal static class WwiseMusicPlanBuilder
         uint sampleRate,
         IReadOnlyList<WaveformRegionMark> regions,
         IReadOnlyList<WaveformBarMark> bars,
-        IReadOnlyList<WaveformMarkerMark> markers)
+        IReadOnlyList<WaveformMarkerMark> markers,
+        PlaylistExitSourceMode exitSourceAt)
     {
         var sourceWavPath = Path.Combine(directory, part.FileName);
         var partRegions = CollectPartRegions(part, regions);
@@ -285,6 +316,7 @@ internal static class WwiseMusicPlanBuilder
         {
             Name = playlistName,
             SourceWavPath = sourceWavPath,
+            ExitSourceAt = exitSourceAt,
             Segments = segments,
         };
     }
@@ -296,7 +328,8 @@ internal static class WwiseMusicPlanBuilder
         uint sampleRate,
         IReadOnlyList<WaveformRegionMark> regions,
         IReadOnlyList<WaveformBarMark> bars,
-        IReadOnlyList<WaveformMarkerMark> markers)
+        IReadOnlyList<WaveformMarkerMark> markers,
+        PlaylistExitSourceMode exitSourceAt)
     {
         var memberPlans = new List<(WaveformOutputPart Part, string WavPath, List<PartSegmentDraft> Segments)>();
         foreach (var part in parts)
@@ -403,6 +436,7 @@ internal static class WwiseMusicPlanBuilder
         {
             Name = playlistName,
             SourceWavPath = memberPlans[0].WavPath,
+            ExitSourceAt = exitSourceAt,
             Segments = segments,
         };
     }

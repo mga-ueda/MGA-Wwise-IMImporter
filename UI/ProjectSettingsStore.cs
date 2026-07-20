@@ -22,7 +22,7 @@ internal sealed class ProjectProfile
 
     public bool CommentZeroPad { get; set; } = true;
 
-    public bool CommentPrefixEnabled { get; set; } = true;
+    public bool CommentPrefixEnabled { get; set; }
 
     public string CommentPrefix { get; set; } = string.Empty;
 
@@ -32,7 +32,7 @@ internal sealed class ProjectProfile
 
     public bool CommentJoinerEnabled { get; set; }
 
-    public string CommentJoiner { get; set; } = "_";
+    public string CommentJoiner { get; set; } = string.Empty;
 
     public bool CommentResetPerPart { get; set; } = true;
 
@@ -45,6 +45,24 @@ internal sealed class ProjectProfile
     public string LastWavePath { get; set; } = string.Empty;
 
     public string OutputDirectory { get; set; } = string.Empty;
+
+    /// <summary>作成先パスをアプリ側で固定するか（ステータスバー Keep Target）。</summary>
+    public bool KeepTarget { get; set; }
+
+    /// <summary>Keep Target で固定する Wwise オブジェクトパス。</summary>
+    public string KeptTargetPath { get; set; } = string.Empty;
+
+    /// <summary>Keep 時の Wwise プロジェクトファイルパス。</summary>
+    public string KeptTargetProjectFilePath { get; set; } = string.Empty;
+
+    /// <summary>Music Track のストリーミング有効（既定オン）。</summary>
+    public bool StreamEnabled { get; set; } = true;
+
+    /// <summary>2 番目以降のセグメントの Look-ahead time（ms）。</summary>
+    public int LookAheadMs { get; set; } = 500;
+
+    /// <summary>Playlist 先頭セグメント先頭トラックの Prefetch Length（ms）。</summary>
+    public int PrefetchLengthMs { get; set; } = 500;
 
     public ProjectProfile Clone() => new()
     {
@@ -67,6 +85,12 @@ internal sealed class ProjectProfile
         LoadLastWaveOnStartup = LoadLastWaveOnStartup,
         LastWavePath = LastWavePath,
         OutputDirectory = OutputDirectory,
+        KeepTarget = KeepTarget,
+        KeptTargetPath = KeptTargetPath,
+        KeptTargetProjectFilePath = KeptTargetProjectFilePath,
+        StreamEnabled = StreamEnabled,
+        LookAheadMs = LookAheadMs,
+        PrefetchLengthMs = PrefetchLengthMs,
     };
 
     public void CopyMarkerInto(MarkerSettings markers)
@@ -77,26 +101,25 @@ internal sealed class ProjectProfile
             MarkerSettings.CommentDigitsMin,
             MarkerSettings.CommentDigitsMax);
         markers.CommentZeroPad = CommentZeroPad;
-        markers.CommentPrefixEnabled = CommentPrefixEnabled;
-        markers.CommentPrefix = CommentPrefix;
-        markers.CommentSuffixEnabled = CommentSuffixEnabled;
-        markers.CommentSuffix = CommentSuffix;
-        markers.CommentJoinerEnabled = CommentJoinerEnabled;
-        markers.CommentJoiner = CommentJoiner;
+        markers.CommentPrefix = CommentPrefixEnabled ? CommentPrefix : string.Empty;
+        markers.CommentSuffix = CommentSuffixEnabled ? CommentSuffix : string.Empty;
+        markers.CommentJoiner = CommentJoinerEnabled ? CommentJoiner : string.Empty;
         markers.CommentResetPerPart = CommentResetPerPart;
+        markers.SyncCommentOptionalEnabledFlags();
     }
 
     public void CopyMarkerFrom(MarkerSettings markers)
     {
+        markers.SyncCommentOptionalEnabledFlags();
         GridOverride = markers.GridOverride;
         CommentDigits = markers.CommentDigits;
         CommentZeroPad = markers.CommentZeroPad;
-        CommentPrefixEnabled = markers.CommentPrefixEnabled;
         CommentPrefix = markers.CommentPrefix;
-        CommentSuffixEnabled = markers.CommentSuffixEnabled;
         CommentSuffix = markers.CommentSuffix;
-        CommentJoinerEnabled = markers.CommentJoinerEnabled;
         CommentJoiner = markers.CommentJoiner;
+        CommentPrefixEnabled = markers.CommentPrefixEnabled;
+        CommentSuffixEnabled = markers.CommentSuffixEnabled;
+        CommentJoinerEnabled = markers.CommentJoinerEnabled;
         CommentResetPerPart = markers.CommentResetPerPart;
     }
 }
@@ -127,18 +150,24 @@ internal sealed class ProjectSettingsStore
         GridOverride = MarkerGridOverrideMode.Default,
         CommentDigits = 3,
         CommentZeroPad = true,
-        CommentPrefixEnabled = true,
+        CommentPrefixEnabled = false,
         CommentPrefix = string.Empty,
         CommentSuffixEnabled = false,
         CommentSuffix = string.Empty,
         CommentJoinerEnabled = false,
-        CommentJoiner = "_",
+        CommentJoiner = string.Empty,
         CommentResetPerPart = true,
         CompactFileNumbers = true,
         AlwaysOnTop = false,
         LoadLastWaveOnStartup = false,
         LastWavePath = string.Empty,
         OutputDirectory = string.Empty,
+        KeepTarget = false,
+        KeptTargetPath = string.Empty,
+        KeptTargetProjectFilePath = string.Empty,
+        StreamEnabled = true,
+        LookAheadMs = 500,
+        PrefetchLengthMs = 500,
     };
 
     public static ProjectSettingsStore Load()
@@ -155,7 +184,11 @@ internal sealed class ProjectSettingsStore
         foreach (var name in ParseNames(index.TryGetValue("Names", out var namesText) ? namesText : string.Empty))
         {
             store._names.Add(name);
-            store._profiles[name] = ReadProfile(name);
+            store._profiles[name] = ReadProfile(name, out var migratedStreaming);
+            if (migratedStreaming)
+            {
+                WriteProfile(name, store._profiles[name]);
+            }
         }
 
         if (store._names.Count == 0)
@@ -171,6 +204,8 @@ internal sealed class ProjectSettingsStore
         store.ActiveName = store._profiles.ContainsKey(active)
             ? store._names.First(n => string.Equals(n, active, StringComparison.OrdinalIgnoreCase))
             : store._names[0];
+
+        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripStreamingKeys();
         return store;
     }
 
@@ -226,6 +261,48 @@ internal sealed class ProjectSettingsStore
         }
 
         profile.LastWavePath = path;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveKeepTarget(
+        string name,
+        bool enabled,
+        string? keptTargetPath = null,
+        string? keptTargetProjectFilePath = null)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.KeepTarget = enabled;
+        if (keptTargetPath is not null)
+        {
+            profile.KeptTargetPath = keptTargetPath.Trim();
+        }
+
+        if (keptTargetProjectFilePath is not null)
+        {
+            profile.KeptTargetProjectFilePath = keptTargetProjectFilePath.Trim();
+        }
+
+        WriteProfile(name, profile);
+    }
+
+    public void SaveStreaming(
+        string name,
+        bool streamEnabled,
+        int lookAheadMs,
+        int prefetchLengthMs)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.StreamEnabled = streamEnabled;
+        profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
+        profile.PrefetchLengthMs = Math.Clamp(prefetchLengthMs, 0, 9999);
         WriteProfile(name, profile);
     }
 
@@ -443,11 +520,17 @@ internal sealed class ProjectSettingsStore
         var developerValues = IniFile.ReadSection(DeveloperSettings.Section);
         profile.AlwaysOnTop = ReadBool(developerValues, "TopMost", defaultValue: false);
 
+        // レガシー: [WwiseImport] LookAhead／Prefetch → プロジェクト設定
+        var streaming = MgaWwiseIMImporter.Wwise.WwiseImportSettings.Load();
+        profile.LookAheadMs = streaming.LookAheadMs;
+        profile.PrefetchLengthMs = streaming.PrefetchLengthMs;
+
         _names.Clear();
         _profiles.Clear();
         _names.Add(DefaultName);
         _profiles[DefaultName] = profile;
         ActiveName = DefaultName;
+        MgaWwiseIMImporter.Wwise.WwiseImportSettings.StripStreamingKeys();
     }
 
     private void EnsureDefaultExists()
@@ -506,11 +589,20 @@ internal sealed class ProjectSettingsStore
             ["LoadLastWaveOnStartup"] = profile.LoadLastWaveOnStartup ? "1" : "0",
             ["LastWavePath"] = profile.LastWavePath,
             ["OutputDirectory"] = profile.OutputDirectory,
+            ["KeepTarget"] = profile.KeepTarget ? "1" : "0",
+            ["KeptTargetPath"] = profile.KeptTargetPath,
+            ["KeptTargetProjectFilePath"] = profile.KeptTargetProjectFilePath,
+            ["StreamEnabled"] = profile.StreamEnabled ? "1" : "0",
+            ["LookAheadMs"] = Math.Clamp(profile.LookAheadMs, 0, 9999)
+                .ToString(CultureInfo.InvariantCulture),
+            ["PrefetchLengthMs"] = Math.Clamp(profile.PrefetchLengthMs, 0, 9999)
+                .ToString(CultureInfo.InvariantCulture),
         });
     }
 
-    private static ProjectProfile ReadProfile(string name)
+    private static ProjectProfile ReadProfile(string name, out bool migratedStreaming)
     {
+        migratedStreaming = false;
         var values = IniFile.ReadSection(ToSectionName(name));
         var profile = CreateAppDefaults(name);
         if (values.TryGetValue("Name", out var storedName) && storedName.Trim().Length > 0)
@@ -578,6 +670,26 @@ internal sealed class ProjectSettingsStore
             profile.CommentJoiner = joiner;
         }
 
+        // 旧チェックボックス OFF の値は入力なしとして扱う。
+        if (!profile.CommentPrefixEnabled)
+        {
+            profile.CommentPrefix = string.Empty;
+        }
+
+        if (!profile.CommentSuffixEnabled)
+        {
+            profile.CommentSuffix = string.Empty;
+        }
+
+        if (!profile.CommentJoinerEnabled)
+        {
+            profile.CommentJoiner = string.Empty;
+        }
+
+        profile.CommentPrefixEnabled = profile.CommentPrefix.Length > 0;
+        profile.CommentSuffixEnabled = profile.CommentSuffix.Length > 0;
+        profile.CommentJoinerEnabled = profile.CommentJoiner.Length > 0;
+
         if (values.TryGetValue("OutputDirectory", out var output))
         {
             profile.OutputDirectory = output;
@@ -586,6 +698,52 @@ internal sealed class ProjectSettingsStore
         if (values.TryGetValue("LastWavePath", out var lastWavePath))
         {
             profile.LastWavePath = lastWavePath;
+        }
+
+        profile.KeepTarget = ReadBool(values, "KeepTarget", profile.KeepTarget);
+        if (values.TryGetValue("KeptTargetPath", out var keptTargetPath))
+        {
+            profile.KeptTargetPath = keptTargetPath.Trim().Trim('"');
+        }
+
+        if (values.TryGetValue("KeptTargetProjectFilePath", out var keptTargetProject))
+        {
+            profile.KeptTargetProjectFilePath = keptTargetProject.Trim().Trim('"');
+        }
+
+        profile.StreamEnabled = ReadBool(values, "StreamEnabled", defaultValue: true);
+
+        var hasLookAhead = false;
+        var hasPrefetch = false;
+        if (values.TryGetValue("LookAheadMs", out var lookAheadText)
+            && int.TryParse(lookAheadText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var lookAheadMs))
+        {
+            profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
+            hasLookAhead = true;
+        }
+
+        if (values.TryGetValue("PrefetchLengthMs", out var prefetchText)
+            && int.TryParse(prefetchText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var prefetchMs))
+        {
+            profile.PrefetchLengthMs = Math.Clamp(prefetchMs, 0, 9999);
+            hasPrefetch = true;
+        }
+
+        // 旧 [WwiseImport] の値を、プロジェクト未設定時の初期値として引き継ぐ。
+        if (!hasLookAhead || !hasPrefetch)
+        {
+            var legacy = MgaWwiseIMImporter.Wwise.WwiseImportSettings.Load();
+            if (!hasLookAhead)
+            {
+                profile.LookAheadMs = legacy.LookAheadMs;
+            }
+
+            if (!hasPrefetch)
+            {
+                profile.PrefetchLengthMs = legacy.PrefetchLengthMs;
+            }
+
+            migratedStreaming = true;
         }
 
         return profile;

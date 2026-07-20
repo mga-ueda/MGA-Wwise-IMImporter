@@ -5,7 +5,7 @@ using MgaWwiseIMImporter.Wave;
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// プロジェクト単位の Last Wave 作業状態（グループ／無効化／アプリ追加マーカー）。
+/// プロジェクト単位の Last Wave 作業状態（グループ／無効化／トランジション設定／アプリ追加マーカー）。
 /// exe 横 JSON サイドカーへ保存する。
 /// </summary>
 internal sealed class LastWaveSessionState
@@ -27,6 +27,21 @@ internal sealed class LastWaveSessionState
     public List<long> UserMarkerSampleOffsets { get; set; } = [];
 
     public List<int> DisabledPartNumbers { get; set; } = [];
+
+    /// <summary>パート番号 → Exit Source At（列挙名）。</summary>
+    public Dictionary<string, string> PartExitSourceModes { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>パート番号 → Fade In 秒数。</summary>
+    public Dictionary<string, double> PartFadeInSeconds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>パート番号 → Fade Out 秒数。</summary>
+    public Dictionary<string, double> PartFadeOutSeconds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>パート番号 → 同一グループ内遷移用 Fade In 秒数。</summary>
+    public Dictionary<string, double> PartGroupFadeInSeconds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>パート番号 → 同一グループ内遷移用 Fade Out 秒数。</summary>
+    public Dictionary<string, double> PartGroupFadeOutSeconds { get; set; } = new(StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -71,7 +86,12 @@ internal sealed class LastWaveSessionState
         int nextGroupId,
         int nextColorIndex,
         IEnumerable<long> userMarkerSampleOffsets,
-        IEnumerable<int> disabledPartNumbers)
+        IEnumerable<int> disabledPartNumbers,
+        IReadOnlyDictionary<int, PlaylistExitSourceMode> partExitSourceModes,
+        IReadOnlyDictionary<int, double> partFadeInSeconds,
+        IReadOnlyDictionary<int, double> partFadeOutSeconds,
+        IReadOnlyDictionary<int, double> partGroupFadeInSeconds,
+        IReadOnlyDictionary<int, double> partGroupFadeOutSeconds)
     {
         return new LastWaveSessionState
         {
@@ -96,6 +116,26 @@ internal sealed class LastWaveSessionState
             NextColorIndex = Math.Max(0, nextColorIndex),
             UserMarkerSampleOffsets = userMarkerSampleOffsets.Distinct().OrderBy(x => x).ToList(),
             DisabledPartNumbers = disabledPartNumbers.Distinct().OrderBy(x => x).ToList(),
+            PartExitSourceModes = partExitSourceModes.ToDictionary(
+                pair => pair.Key.ToString(),
+                pair => pair.Value.ToString(),
+                StringComparer.Ordinal),
+            PartFadeInSeconds = partFadeInSeconds.ToDictionary(
+                pair => pair.Key.ToString(),
+                pair => pair.Value,
+                StringComparer.Ordinal),
+            PartFadeOutSeconds = partFadeOutSeconds.ToDictionary(
+                pair => pair.Key.ToString(),
+                pair => pair.Value,
+                StringComparer.Ordinal),
+            PartGroupFadeInSeconds = partGroupFadeInSeconds.ToDictionary(
+                pair => pair.Key.ToString(),
+                pair => pair.Value,
+                StringComparer.Ordinal),
+            PartGroupFadeOutSeconds = partGroupFadeOutSeconds.ToDictionary(
+                pair => pair.Key.ToString(),
+                pair => pair.Value,
+                StringComparer.Ordinal),
         };
     }
 
@@ -159,6 +199,71 @@ internal sealed class LastWaveSessionState
             }
 
             groupColorIndexes[groupId] = pair.Value;
+        }
+
+        return true;
+    }
+
+    public bool TryGetPartExitSourceModes(out Dictionary<int, PlaylistExitSourceMode> partExitSourceModes)
+    {
+        partExitSourceModes = new Dictionary<int, PlaylistExitSourceMode>();
+        if (PartExitSourceModes is null || PartExitSourceModes.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var pair in PartExitSourceModes)
+        {
+            if (!int.TryParse(pair.Key, out var partNumber)
+                || !Enum.TryParse<PlaylistExitSourceMode>(pair.Value, ignoreCase: true, out var mode))
+            {
+                return false;
+            }
+
+            partExitSourceModes[partNumber] = mode;
+        }
+
+        return true;
+    }
+
+    public bool TryGetPartFadeSeconds(
+        out Dictionary<int, double> partFadeInSeconds,
+        out Dictionary<int, double> partFadeOutSeconds,
+        out Dictionary<int, double> partGroupFadeInSeconds,
+        out Dictionary<int, double> partGroupFadeOutSeconds)
+    {
+        partFadeInSeconds = new Dictionary<int, double>();
+        partFadeOutSeconds = new Dictionary<int, double>();
+        partGroupFadeInSeconds = new Dictionary<int, double>();
+        partGroupFadeOutSeconds = new Dictionary<int, double>();
+        if (!TryParseFadeMap(PartFadeInSeconds, partFadeInSeconds)
+            || !TryParseFadeMap(PartFadeOutSeconds, partFadeOutSeconds)
+            || !TryParseFadeMap(PartGroupFadeInSeconds, partGroupFadeInSeconds)
+            || !TryParseFadeMap(PartGroupFadeOutSeconds, partGroupFadeOutSeconds))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseFadeMap(
+        Dictionary<string, double>? source,
+        Dictionary<int, double> destination)
+    {
+        if (source is null || source.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var pair in source)
+        {
+            if (!int.TryParse(pair.Key, out var partNumber))
+            {
+                return false;
+            }
+
+            destination[partNumber] = pair.Value;
         }
 
         return true;

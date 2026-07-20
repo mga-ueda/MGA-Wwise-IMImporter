@@ -264,8 +264,9 @@ internal sealed class ExportGlassOverlay : Form
             g.FillRectangle(back, ClientRectangle);
         }
 
-        DrawMessage(g);
         DrawLog(g);
+        // 中央メッセージはログより手前に描く。
+        DrawMessage(g);
     }
 
     protected override void Dispose(bool disposing)
@@ -320,8 +321,8 @@ internal sealed class ExportGlassOverlay : Form
         var y = (Height - baseSize.Height) / 2;
         var dotsText = " " + new string('.', _dotCount);
 
-        DrawTextWithShadow(g, _baseText, new Point(x, y), flags);
-        DrawTextWithShadow(g, dotsText, new Point(x + baseSize.Width, y), flags);
+        DrawTextWithOutline(g, _baseText, new Point(x, y), flags);
+        DrawTextWithOutline(g, dotsText, new Point(x + baseSize.Width, y), flags);
     }
 
     private void DrawLog(Graphics g)
@@ -331,7 +332,7 @@ internal sealed class ExportGlassOverlay : Form
             return;
         }
 
-        _logFont ??= AppFonts.CreateLogFont(9f);
+        _logFont ??= AppFonts.CreateLogFont(8f);
         const TextFormatFlags flags =
             TextFormatFlags.NoPadding
             | TextFormatFlags.NoPrefix
@@ -366,17 +367,51 @@ internal sealed class ExportGlassOverlay : Form
         }
     }
 
-    private void DrawTextWithShadow(Graphics g, string text, Point location, TextFormatFlags flags)
+    private void DrawTextWithOutline(Graphics g, string text, Point location, TextFormatFlags flags)
     {
-        TextRenderer.DrawText(
-            g,
-            text,
-            _messageFont,
-            new Point(location.X + 1, location.Y + 1),
-            Color.Black,
-            flags);
-        TextRenderer.DrawText(g, text, _messageFont, location, UiColors.PrimaryFore, flags);
+        var font = _messageFont!;
+
+        // 柔らかいドロップシャドウ（縁より下に描く）。
+        foreach (var (dx, dy, alpha) in SoftShadowLayers)
+        {
+            TextRenderer.DrawText(
+                g,
+                text,
+                font,
+                new Point(location.X + dx, location.Y + dy),
+                Color.FromArgb(alpha, 0, 0, 0),
+                flags);
+        }
+
+        // 周囲 8 方向に黒を描いて縁取りする。
+        foreach (var (dx, dy) in OutlineOffsets)
+        {
+            TextRenderer.DrawText(
+                g,
+                text,
+                font,
+                new Point(location.X + dx, location.Y + dy),
+                Color.Black,
+                flags);
+        }
+
+        TextRenderer.DrawText(g, text, font, location, UiColors.PrimaryFore, flags);
     }
+
+    private static readonly (int Dx, int Dy, int Alpha)[] SoftShadowLayers =
+    [
+        (2, 2, 40),
+        (3, 3, 55),
+        (4, 4, 40),
+        (5, 5, 25),
+    ];
+
+    private static readonly (int Dx, int Dy)[] OutlineOffsets =
+    [
+        (-1, -1), (0, -1), (1, -1),
+        (-1, 0), (1, 0),
+        (-1, 1), (0, 1), (1, 1),
+    ];
 
     /// <summary>
     /// 覆う範囲だけをキャプチャし、縮小→拡大の 2 段階でぼかした画像を作る。

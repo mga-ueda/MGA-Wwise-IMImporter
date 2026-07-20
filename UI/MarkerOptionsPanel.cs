@@ -1,7 +1,7 @@
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// マーカー付与オプション（Marker Grid／Marker Comment）を表示する下部パネル。
+/// マーカー付与オプション（Stream／Marker Grid／Marker Comment）を表示する下部パネル。
 /// 行高はプレイリスト項目（30px）に合わせ、DPI スケールの影響を受けないよう
 /// 子コントロールは固定ピクセルで配置する。
 /// </summary>
@@ -10,6 +10,9 @@ internal sealed class MarkerOptionsPanel : UserControl
     private const int HeaderHeight = 26;
     private const int RowPitch = 32;
     private const int RowHeight = 30;
+    private const int StreamMsMin = 0;
+    private const int StreamMsMax = 9999;
+    private const int StreamMsDefault = 500;
 
     private readonly Panel _leftSeparator = new() { Dock = DockStyle.Left, Width = 1, TabStop = false };
     private readonly DarkToolTip _toolTip = new()
@@ -19,6 +22,13 @@ internal sealed class MarkerOptionsPanel : UserControl
         ReshowDelay = 100,
         ShowAlways = true,
     };
+
+    private readonly SectionHeaderLabel _streamHeaderLabel;
+    private readonly FlatOptionCheckBox _streamEnabledCheckBox;
+    private readonly Label _lookAheadLabel;
+    private readonly TextBox _lookAheadTextBox;
+    private readonly Label _prefetchLabel;
+    private readonly TextBox _prefetchTextBox;
 
     private readonly SectionHeaderLabel _gridHeaderLabel;
     private readonly FlatOptionRadioButton _gridDefaultRadio;
@@ -32,19 +42,25 @@ internal sealed class MarkerOptionsPanel : UserControl
     private readonly FlatOptionCheckBox _resetPerPartCheckBox;
     private readonly Label _previewLabel;
 
-    private readonly FlatOptionCheckBox _prefixCheckBox;
+    private readonly Label _prefixLabel;
     private readonly TextBox _prefixTextBox;
-    private readonly FlatOptionCheckBox _suffixCheckBox;
+    private readonly Label _suffixLabel;
     private readonly TextBox _suffixTextBox;
-    private readonly FlatOptionCheckBox _joinerCheckBox;
+    private readonly Label _joinerLabel;
     private readonly TextBox _joinerTextBox;
 
     private MarkerSettings? _settings;
     private bool _updating;
     private bool _interactionLocked;
+    private bool _streamEnabled = true;
+    private int _lookAheadMs = StreamMsDefault;
+    private int _prefetchLengthMs = StreamMsDefault;
 
     /// <summary>設定値が UI 操作で変更された（保存・適用は購読側で行う）。</summary>
     public event EventHandler? SettingsChanged;
+
+    /// <summary>TextBox 編集の開始／終了（ショートカット抑止用）。</summary>
+    public event EventHandler<bool>? TextEditingChanged;
 
     public MarkerOptionsPanel()
     {
@@ -58,15 +74,76 @@ internal sealed class MarkerOptionsPanel : UserControl
         // Fade In / Fade Out 間と同じく、セクション同士を隙間なく並べる。
         var sectionGap = 0;
         var commentColumnGap = S(4);
-        var col1X = 1;
-        var col1W = S(92);
+        var streamPadL = S(12);
+        var streamGap = S(6);
+        var streamPadR = S(8);
+        // Label と同じ GDI 計測で幅を取る（Typographic だと短く見積もられ見切れる）。
+        var streamLabelW = Math.Max(
+            MeasureLabelWidth("LookAhead", baseFont),
+            MeasureLabelWidth("Prefetch", baseFont));
+        // 4 桁（〜9999）が収まる入力幅。
+        var streamMsBoxW = Math.Max(S(36), MeasureLabelWidth("9999", baseFont) + S(14));
+        var streamX = 1;
+        var streamW = streamPadL + streamLabelW + streamGap + streamMsBoxW + streamPadR;
+        var col1X = streamX + streamW + sectionGap;
+        var col1ContentW = Math.Max(
+            MeasureLabelWidth("Timeline", baseFont),
+            MeasureLabelWidth("Marker Grid", headerFont));
+        var col1W = S(12) + col1ContentW + S(8);
         var col2X = col1X + col1W + sectionGap;
         var col2W = S(114);
+        var col3PadL = S(12);
+        var col3Gap = S(6);
+        var col3PadR = S(8);
+        var col3LabelW = Math.Max(
+            MeasureLabelWidth("Prefix", baseFont),
+            Math.Max(
+                MeasureLabelWidth("Suffix", baseFont),
+                MeasureLabelWidth("Separator", baseFont)));
+        var col3EditorW = S(44);
         var col3X = col2X + col2W + commentColumnGap;
-        var col3W = S(136);
+        var col3W = col3PadL + col3LabelW + col3Gap + col3EditorW + col3PadR;
         // Fade In などの遷移セクションと同じ「ヘッダー（26px 相当）＋1px」で行を開始する。
         var contentTop = 1 + S(HeaderHeight) + 1;
         RequiredWidth = col3X + col3W + S(8);
+
+        _streamHeaderLabel = CreateHeader("Stream", headerFont, streamX, streamW);
+        _streamEnabledCheckBox = new FlatOptionCheckBox
+        {
+            AutoSize = false,
+            Checked = true,
+            Font = baseFont,
+            Location = new Point(streamX + streamPadL, contentTop),
+            Size = new Size(streamW - streamPadL - streamPadR, RowHeight),
+            Text = "Stream",
+        };
+        _streamEnabledCheckBox.CheckedChanged += (_, _) => OnStreamUiChanged();
+        _prefetchLabel = new Label
+        {
+            Font = baseFont,
+            Location = new Point(streamX + streamPadL, contentTop + RowPitch),
+            Size = new Size(streamLabelW, RowHeight),
+            Text = "Prefetch",
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        _prefetchTextBox = CreateStreamMsTextBox(
+            baseFont,
+            streamX + streamPadL + streamLabelW + streamGap,
+            contentTop + RowPitch,
+            streamMsBoxW);
+        _lookAheadLabel = new Label
+        {
+            Font = baseFont,
+            Location = new Point(streamX + streamPadL, contentTop + RowPitch * 2),
+            Size = new Size(streamLabelW, RowHeight),
+            Text = "LookAhead",
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        _lookAheadTextBox = CreateStreamMsTextBox(
+            baseFont,
+            streamX + streamPadL + streamLabelW + streamGap,
+            contentTop + RowPitch * 2,
+            streamMsBoxW);
 
         _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, col1X, col1W);
         _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, col1X, col1W, contentTop);
@@ -98,6 +175,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             CenterInRow(contentTop, _digitsTextBox.PreferredHeight));
         _digitsTextBox.KeyPress += DigitsTextBox_KeyPress;
         _digitsTextBox.TextChanged += (_, _) => OnUiChanged();
+        WireTextEditingFocus(_digitsTextBox);
 
         _zeroPadCheckBox = CreateCheckBox("Zero Pad", baseFont, col2X + S(12), contentTop + RowPitch, col2W - S(16));
         _resetPerPartCheckBox = CreateCheckBox("Reset Per Part", baseFont, col2X + S(12), contentTop + RowPitch * 2, col2W - S(12));
@@ -112,31 +190,25 @@ internal sealed class MarkerOptionsPanel : UserControl
             TextAlign = ContentAlignment.MiddleLeft,
         };
 
-        // 3つのエディタは、最長ラベル（Separator）の直後で左端を揃える。
-        var checkLeft = col3X + S(12);
-        var glyphAndGap = S(14) + S(7);
-        var editorGap = S(4);
-        var prefixTextW = MeasureLabelWidth("Prefix", baseFont);
-        var suffixTextW = MeasureLabelWidth("Suffix", baseFont);
-        var joinerTextW = MeasureLabelWidth("Separator", baseFont);
-        var editorX = checkLeft
-            + glyphAndGap
-            + Math.Max(prefixTextW, Math.Max(suffixTextW, joinerTextW))
-            + editorGap;
-
-        _prefixCheckBox = CreateCheckBox(
-            "Prefix", baseFont, checkLeft, contentTop, glyphAndGap + prefixTextW + S(2));
-        _prefixTextBox = CreateTextBox(baseFont, editorX, contentTop, S(44));
-        _suffixCheckBox = CreateCheckBox(
-            "Suffix", baseFont, checkLeft, contentTop + RowPitch, glyphAndGap + suffixTextW + S(2));
-        _suffixTextBox = CreateTextBox(baseFont, editorX, contentTop + RowPitch, S(44));
-        _joinerCheckBox = CreateCheckBox(
-            "Separator", baseFont, checkLeft, contentTop + RowPitch * 2, glyphAndGap + joinerTextW + S(2));
-        _joinerTextBox = CreateTextBox(baseFont, editorX, contentTop + RowPitch * 2, S(32));
+        // Prefix／Suffix／Separator はラベル＋入力欄。入力があれば有効。
+        var commentFieldX = col3X + col3PadL;
+        var commentEditorX = commentFieldX + col3LabelW + col3Gap;
+        _prefixLabel = CreateFieldLabel("Prefix", baseFont, commentFieldX, contentTop, col3LabelW);
+        _prefixTextBox = CreateTextBox(baseFont, commentEditorX, contentTop, col3EditorW);
+        _suffixLabel = CreateFieldLabel("Suffix", baseFont, commentFieldX, contentTop + RowPitch, col3LabelW);
+        _suffixTextBox = CreateTextBox(baseFont, commentEditorX, contentTop + RowPitch, col3EditorW);
+        _joinerLabel = CreateFieldLabel("Separator", baseFont, commentFieldX, contentTop + RowPitch * 2, col3LabelW);
+        _joinerTextBox = CreateTextBox(baseFont, commentEditorX, contentTop + RowPitch * 2, col3EditorW);
 
         RequiredHeight = contentTop + RowPitch * 3 + RowHeight + 2;
         Height = RequiredHeight;
 
+        Controls.Add(_streamHeaderLabel);
+        Controls.Add(_streamEnabledCheckBox);
+        Controls.Add(_prefetchLabel);
+        Controls.Add(_prefetchTextBox);
+        Controls.Add(_lookAheadLabel);
+        Controls.Add(_lookAheadTextBox);
         Controls.Add(_gridHeaderLabel);
         Controls.Add(_gridBarRadio);
         Controls.Add(_gridBeatRadio);
@@ -147,11 +219,11 @@ internal sealed class MarkerOptionsPanel : UserControl
         Controls.Add(_zeroPadCheckBox);
         Controls.Add(_resetPerPartCheckBox);
         Controls.Add(_previewLabel);
-        Controls.Add(_prefixCheckBox);
+        Controls.Add(_prefixLabel);
         Controls.Add(_prefixTextBox);
-        Controls.Add(_suffixCheckBox);
+        Controls.Add(_suffixLabel);
         Controls.Add(_suffixTextBox);
-        Controls.Add(_joinerCheckBox);
+        Controls.Add(_joinerLabel);
         Controls.Add(_joinerTextBox);
         Controls.Add(_leftSeparator);
 
@@ -166,6 +238,15 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     /// <summary>全項目が収まる固定高さ（DPI 反映済み）。</summary>
     public int RequiredHeight { get; }
+
+    /// <summary>Music Track のストリーミング有効。</summary>
+    public bool StreamEnabled => _streamEnabled;
+
+    /// <summary>Look-ahead time（ms）。</summary>
+    public int LookAheadMs => _lookAheadMs;
+
+    /// <summary>Prefetch Length（ms）。</summary>
+    public int PrefetchLengthMs => _prefetchLengthMs;
 
     /// <summary>DPI スケール（96dpi 基準）を適用する。</summary>
     private int S(int value) => (int)Math.Round(value * DeviceDpi / 96f);
@@ -196,11 +277,8 @@ internal sealed class MarkerOptionsPanel : UserControl
                     MarkerSettings.CommentDigitsMax).ToString();
             _zeroPadCheckBox.Checked = settings.CommentZeroPad;
             _resetPerPartCheckBox.Checked = settings.CommentResetPerPart;
-            _prefixCheckBox.Checked = settings.CommentPrefixEnabled;
             _prefixTextBox.Text = settings.CommentPrefix;
-            _suffixCheckBox.Checked = settings.CommentSuffixEnabled;
             _suffixTextBox.Text = settings.CommentSuffix;
-            _joinerCheckBox.Checked = settings.CommentJoinerEnabled;
             _joinerTextBox.Text = settings.CommentJoiner;
         }
         finally
@@ -210,6 +288,27 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         UpdateDependentStates();
         UpdatePreview();
+    }
+
+    /// <summary>Stream（有効／LookAhead／Prefetch）を UI へ反映する。</summary>
+    public void BindStreaming(bool streamEnabled, int lookAheadMs, int prefetchLengthMs)
+    {
+        _updating = true;
+        try
+        {
+            _streamEnabled = streamEnabled;
+            _streamEnabledCheckBox.Checked = streamEnabled;
+            _lookAheadMs = Math.Clamp(lookAheadMs, StreamMsMin, StreamMsMax);
+            _prefetchLengthMs = Math.Clamp(prefetchLengthMs, StreamMsMin, StreamMsMax);
+            _lookAheadTextBox.Text = _lookAheadMs.ToString();
+            _prefetchTextBox.Text = _prefetchLengthMs.ToString();
+        }
+        finally
+        {
+            _updating = false;
+        }
+
+        UpdateDependentStates();
     }
 
     public void ApplyColors()
@@ -222,6 +321,13 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         BackColor = back;
         _leftSeparator.BackColor = separator;
+        _streamHeaderLabel.BackColor = back;
+        _streamHeaderLabel.BarColor = headerBack;
+        _streamHeaderLabel.ForeColor = headerFore;
+        _lookAheadLabel.BackColor = back;
+        _lookAheadLabel.ForeColor = optionFore;
+        _prefetchLabel.BackColor = back;
+        _prefetchLabel.ForeColor = optionFore;
         _gridHeaderLabel.BackColor = back;
         _gridHeaderLabel.BarColor = headerBack;
         _gridHeaderLabel.ForeColor = headerFore;
@@ -230,6 +336,12 @@ internal sealed class MarkerOptionsPanel : UserControl
         _commentHeaderLabel.ForeColor = headerFore;
         _digitsLabel.BackColor = back;
         _digitsLabel.ForeColor = optionFore;
+        _prefixLabel.BackColor = back;
+        _prefixLabel.ForeColor = optionFore;
+        _suffixLabel.BackColor = back;
+        _suffixLabel.ForeColor = optionFore;
+        _joinerLabel.BackColor = back;
+        _joinerLabel.ForeColor = optionFore;
         _previewLabel.BackColor = back;
 
         foreach (var radio in new[] { _gridBarRadio, _gridBeatRadio, _gridDefaultRadio })
@@ -241,11 +353,9 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         foreach (var checkBox in new[]
         {
+            _streamEnabledCheckBox,
             _zeroPadCheckBox,
             _resetPerPartCheckBox,
-            _prefixCheckBox,
-            _suffixCheckBox,
-            _joinerCheckBox,
         })
         {
             checkBox.BackColor = back;
@@ -254,7 +364,15 @@ internal sealed class MarkerOptionsPanel : UserControl
         }
 
         var inputBack = UiColors.ForControlBack(UiColors.DialogInputBack);
-        foreach (var textBox in new[] { _digitsTextBox, _prefixTextBox, _suffixTextBox, _joinerTextBox })
+        foreach (var textBox in new[]
+        {
+            _lookAheadTextBox,
+            _prefetchTextBox,
+            _digitsTextBox,
+            _prefixTextBox,
+            _suffixTextBox,
+            _joinerTextBox,
+        })
         {
             textBox.BackColor = inputBack;
         }
@@ -281,11 +399,9 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         foreach (var checkBox in new[]
         {
+            _streamEnabledCheckBox,
             _zeroPadCheckBox,
             _resetPerPartCheckBox,
-            _prefixCheckBox,
-            _suffixCheckBox,
-            _joinerCheckBox,
         })
         {
             checkBox.Enabled = !locked;
@@ -293,8 +409,9 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         if (locked)
         {
+            TextEditingChanged?.Invoke(this, false);
             var disabledFore = UiColors.OptionGlyphDisabled;
-            foreach (var textBox in new[] { _digitsTextBox, _prefixTextBox, _suffixTextBox, _joinerTextBox })
+            foreach (var textBox in EnumerateEditableTextBoxes())
             {
                 textBox.ReadOnly = true;
                 textBox.ForeColor = disabledFore;
@@ -317,6 +434,25 @@ internal sealed class MarkerOptionsPanel : UserControl
         Text = text,
         TextAlign = ContentAlignment.MiddleLeft,
     };
+
+    private TextBox CreateStreamMsTextBox(Font font, int x, int rowY, int width)
+    {
+        var textBox = new TextBox
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = font,
+            Size = new Size(width, 25),
+            TextAlign = HorizontalAlignment.Center,
+            MaxLength = 4,
+            Text = StreamMsDefault.ToString(),
+        };
+        textBox.Location = new Point(x, CenterInRow(rowY, textBox.PreferredHeight));
+        textBox.KeyPress += StreamMsTextBox_KeyPress;
+        textBox.Leave += StreamMsTextBox_Leave;
+        textBox.TextChanged += (_, _) => OnStreamUiChanged();
+        WireTextEditingFocus(textBox);
+        return textBox;
+    }
 
     private FlatOptionRadioButton CreateGridRadio(
         string text,
@@ -343,15 +479,25 @@ internal sealed class MarkerOptionsPanel : UserControl
         return radio;
     }
 
-    /// <summary>ラベル文字の描画幅を返す（余白を含まない Typographic 計測）。</summary>
-    private int MeasureLabelWidth(string text, Font font)
+    /// <summary>ラベル文字の描画幅を返す（WinForms Label と同じ GDI 計測）。</summary>
+    private static int MeasureLabelWidth(string text, Font font)
     {
-        using var image = new Bitmap(1, 1);
-        using var g = Graphics.FromImage(image);
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        var size = g.MeasureString(text, font, int.MaxValue, StringFormat.GenericTypographic);
-        return Math.Max(1, (int)Math.Ceiling(size.Width));
+        var size = TextRenderer.MeasureText(
+            text,
+            font,
+            Size.Empty,
+            TextFormatFlags.NoPrefix);
+        return Math.Max(1, size.Width);
     }
+
+    private Label CreateFieldLabel(string text, Font font, int x, int y, int width) => new()
+    {
+        Font = font,
+        Location = new Point(x, y),
+        Size = new Size(width, RowHeight),
+        Text = text,
+        TextAlign = ContentAlignment.MiddleLeft,
+    };
 
     private FlatOptionCheckBox CreateCheckBox(string text, Font font, int x, int y, int width)
     {
@@ -378,7 +524,52 @@ internal sealed class MarkerOptionsPanel : UserControl
         };
         textBox.Location = new Point(x, CenterInRow(rowY, textBox.PreferredHeight));
         textBox.TextChanged += (_, _) => OnUiChanged();
+        WireTextEditingFocus(textBox);
         return textBox;
+    }
+
+    private void WireTextEditingFocus(TextBox textBox)
+    {
+        textBox.Enter += (_, _) => TextEditingChanged?.Invoke(this, true);
+        textBox.Leave += (_, _) =>
+        {
+            // 同パネル内の別 TextBox へ移る場合は抑止を維持する。
+            BeginInvoke(() =>
+            {
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    return;
+                }
+
+                if (!HasFocusedTextBox())
+                {
+                    TextEditingChanged?.Invoke(this, false);
+                }
+            });
+        };
+    }
+
+    private bool HasFocusedTextBox()
+    {
+        foreach (var textBox in EnumerateEditableTextBoxes())
+        {
+            if (textBox.Focused)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private IEnumerable<TextBox> EnumerateEditableTextBoxes()
+    {
+        yield return _lookAheadTextBox;
+        yield return _prefetchTextBox;
+        yield return _digitsTextBox;
+        yield return _prefixTextBox;
+        yield return _suffixTextBox;
+        yield return _joinerTextBox;
     }
 
     private void OnUiChanged()
@@ -399,12 +590,10 @@ internal sealed class MarkerOptionsPanel : UserControl
         }
         _settings.CommentZeroPad = _zeroPadCheckBox.Checked;
         _settings.CommentResetPerPart = _resetPerPartCheckBox.Checked;
-        _settings.CommentPrefixEnabled = _prefixCheckBox.Checked;
         _settings.CommentPrefix = _prefixTextBox.Text;
-        _settings.CommentSuffixEnabled = _suffixCheckBox.Checked;
         _settings.CommentSuffix = _suffixTextBox.Text;
-        _settings.CommentJoinerEnabled = _joinerCheckBox.Checked;
         _settings.CommentJoiner = _joinerTextBox.Text;
+        _settings.SyncCommentOptionalEnabledFlags();
 
         UpdateDependentStates();
         UpdatePreview();
@@ -421,9 +610,11 @@ internal sealed class MarkerOptionsPanel : UserControl
         }
 
         _digitsTextBox.ReadOnly = false;
-        _prefixTextBox.ReadOnly = !_prefixCheckBox.Checked;
-        _suffixTextBox.ReadOnly = !_suffixCheckBox.Checked;
-        _joinerTextBox.ReadOnly = !_joinerCheckBox.Checked;
+        _lookAheadTextBox.ReadOnly = !_streamEnabled;
+        _prefetchTextBox.ReadOnly = !_streamEnabled;
+        _prefixTextBox.ReadOnly = false;
+        _suffixTextBox.ReadOnly = false;
+        _joinerTextBox.ReadOnly = false;
         ApplyDependentColors();
     }
 
@@ -434,10 +625,17 @@ internal sealed class MarkerOptionsPanel : UserControl
         var inputBack = UiColors.ForControlBack(UiColors.DialogInputBack);
 
         _digitsLabel.ForeColor = optionFore;
+        _lookAheadLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
+        _prefetchLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
+        _prefixLabel.ForeColor = optionFore;
+        _suffixLabel.ForeColor = optionFore;
+        _joinerLabel.ForeColor = optionFore;
+        ApplyInputAppearance(_lookAheadTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_prefetchTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(_digitsTextBox, enabled: true, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_prefixTextBox, enabled: _prefixCheckBox.Checked, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_suffixTextBox, enabled: _suffixCheckBox.Checked, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_joinerTextBox, enabled: _joinerCheckBox.Checked, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_prefixTextBox, enabled: true, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_suffixTextBox, enabled: true, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_joinerTextBox, enabled: true, optionFore, disabledFore, inputBack);
     }
 
     private static void ApplyInputAppearance(
@@ -450,6 +648,83 @@ internal sealed class MarkerOptionsPanel : UserControl
         textBox.BackColor = inputBack;
         textBox.ForeColor = enabled ? optionFore : disabledFore;
         textBox.Cursor = enabled ? Cursors.IBeam : Cursors.Default;
+    }
+
+    private void StreamMsTextBox_KeyPress(object? sender, KeyPressEventArgs e)
+    {
+        if (!char.IsControl(e.KeyChar)
+            && (e.KeyChar < '0' || e.KeyChar > '9'))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void StreamMsTextBox_Leave(object? sender, EventArgs e)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        if (sender == _lookAheadTextBox)
+        {
+            _lookAheadTextBox.Text = _lookAheadMs.ToString();
+        }
+        else if (sender == _prefetchTextBox)
+        {
+            _prefetchTextBox.Text = _prefetchLengthMs.ToString();
+        }
+    }
+
+    private void OnStreamUiChanged()
+    {
+        if (_updating || _interactionLocked)
+        {
+            return;
+        }
+
+        var streamEnabled = _streamEnabledCheckBox.Checked;
+        var lookAheadOk = TryParseStreamMs(_lookAheadTextBox.Text, out var lookAhead);
+        var prefetchOk = TryParseStreamMs(_prefetchTextBox.Text, out var prefetch);
+        if (!lookAheadOk || !prefetchOk)
+        {
+            // チェックだけ変わった場合も保存する。
+            if (streamEnabled == _streamEnabled)
+            {
+                return;
+            }
+
+            _streamEnabled = streamEnabled;
+            UpdateDependentStates();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (streamEnabled == _streamEnabled
+            && lookAhead == _lookAheadMs
+            && prefetch == _prefetchLengthMs)
+        {
+            return;
+        }
+
+        _streamEnabled = streamEnabled;
+        _lookAheadMs = lookAhead;
+        _prefetchLengthMs = prefetch;
+        UpdateDependentStates();
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static bool TryParseStreamMs(string text, out int milliseconds)
+    {
+        if (int.TryParse(text.Trim(), out milliseconds)
+            && milliseconds >= StreamMsMin
+            && milliseconds <= StreamMsMax)
+        {
+            return true;
+        }
+
+        milliseconds = 0;
+        return false;
     }
 
     private void DigitsTextBox_KeyPress(object? sender, KeyPressEventArgs e)
@@ -476,6 +751,21 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private void ApplyToolTips()
     {
+        SetToolTip(_streamHeaderLabel,
+            "Wwise Music Track のストリーミング関連設定です。");
+        SetToolTip(_streamEnabledCheckBox,
+            "オンの場合、Music Track をストリーミング有効で作成します（既定オン）。"
+            + " オフのときは LookAhead／Prefetch は適用されません。");
+        SetToolTip(_lookAheadLabel,
+            "2 番目以降のセグメントの Look-ahead time（ms、0〜9999。既定 500）。"
+            + " Stream オン時のみ有効。先頭セグメントは Zero latency のため 0 固定です。");
+        SetToolTip(_lookAheadTextBox,
+            "Look-ahead time（ms）。0〜9999。既定は 500 です。Stream オン時のみ有効。");
+        SetToolTip(_prefetchLabel,
+            "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。");
+        SetToolTip(_prefetchTextBox,
+            "Prefetch Length（ms）。0〜9999。既定は 500 です。"
+            + " Playlist 先頭セグメント先頭トラックにだけ反映されます。Stream オン時のみ有効。");
         SetToolTip(_gridHeaderLabel,
             "マーカーをドラッグで付与するときのスナップ間隔を指定します。縦線の描画には影響しません。");
         SetToolTip(_gridDefaultRadio,
@@ -498,18 +788,19 @@ internal sealed class MarkerOptionsPanel : UserControl
             + "オフのときは桁埋めせず 1, 2, 3… と表示します。");
         SetToolTip(_resetPerPartCheckBox,
             "オンの場合、Music Playlist の各パート（書き出しファイル）ごとに連番を 1 へ戻します。");
-        SetToolTip(_prefixCheckBox,
-            "オンの場合、連番の前に接頭語を追加します。Digits が空欄または 0 のときは必須です。");
+        SetToolTip(_prefixLabel,
+            "入力がある場合、連番の前に接頭語を追加します。Digits が空欄または 0 のときは必須です。");
         SetToolTip(_prefixTextBox,
-            "Custom Cue 名の先頭に付ける文字列を入力します。Digits が空欄または 0 のときは必須です。");
-        SetToolTip(_suffixCheckBox,
-            "オンの場合、連番の後ろに接尾語を追加します。");
+            "Custom Cue 名の先頭に付ける文字列を入力します。空欄なら接頭語なし。"
+            + " Digits が空欄または 0 のときは必須です。");
+        SetToolTip(_suffixLabel,
+            "入力がある場合、連番の後ろに接尾語を追加します。");
         SetToolTip(_suffixTextBox,
-            "Custom Cue 名の連番より後ろに付ける文字列を入力します。Unicode 文字を使用できます。");
-        SetToolTip(_joinerCheckBox,
-            "オンの場合、接頭語／接尾語と連番の間に区切り文字を追加します。");
+            "Custom Cue 名の連番より後ろに付ける文字列を入力します。空欄なら接尾語なし。Unicode 文字を使用できます。");
+        SetToolTip(_joinerLabel,
+            "入力がある場合、接頭語／接尾語と連番の間に区切り文字を追加します。");
         SetToolTip(_joinerTextBox,
-            "接頭語／接尾語と連番を繋ぐ文字列を入力します（例: _ または -）。");
+            "接頭語／接尾語と連番を繋ぐ文字列を入力します（例: _ または -）。空欄なら区切りなし。");
         SetToolTip(_previewLabel,
             "生成される Wwise Custom Cue 名の例と、名前が有効かどうかを表示します。");
     }
@@ -547,8 +838,7 @@ internal sealed class MarkerOptionsPanel : UserControl
     {
         // 連番なし（Digits が 0）の場合は Prefix が無いと名前が空になるため必須。
         if (settings.CommentDigits <= 0
-            && (!settings.CommentPrefixEnabled
-                || string.IsNullOrWhiteSpace(settings.CommentPrefix)))
+            && string.IsNullOrWhiteSpace(settings.CommentPrefix))
         {
             return "Digits が 0 のときは Prefix を入力してください";
         }

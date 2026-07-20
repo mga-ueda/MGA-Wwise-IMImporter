@@ -7,6 +7,8 @@ internal sealed class WaapiStatusBar : Panel
 {
     private readonly Label _titleLabel;
     private readonly Label _detailLabel;
+    private readonly FlatOptionCheckBox _keepTargetCheckBox;
+    private readonly DarkToolTip _toolTip = new();
     private readonly Font _badgeFont = new("Yu Gothic UI", 9F, FontStyle.Bold);
 
     private string _badgeText = "—";
@@ -16,6 +18,8 @@ internal sealed class WaapiStatusBar : Panel
     private Rectangle _badgeFillBounds;
     private Rectangle _badgeTextBounds;
     private bool _selectionMissing;
+    private bool _keepTargetWarning;
+    private bool _suppressKeepTargetEvents;
 
     public WaapiStatusBar()
     {
@@ -43,12 +47,57 @@ internal sealed class WaapiStatusBar : Panel
             TabStop = false,
         };
 
+        _keepTargetCheckBox = new FlatOptionCheckBox
+        {
+            AutoSize = true,
+            Font = new Font("Yu Gothic UI", 9F),
+            Text = "Keep Target",
+            TabStop = false,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+        };
+        _keepTargetCheckBox.CheckedChanged += (_, _) =>
+        {
+            if (_suppressKeepTargetEvents)
+            {
+                return;
+            }
+
+            KeepTargetChanged?.Invoke(this, EventArgs.Empty);
+        };
+
+        Controls.Add(_keepTargetCheckBox);
         Controls.Add(_detailLabel);
         Controls.Add(_titleLabel);
         Resize += (_, _) => LayoutLabels();
         Paint += OnPaint;
         ApplyColors();
+        ApplyToolTips();
         SetPending();
+    }
+
+    /// <summary>Keep Target チェックの変更。</summary>
+    public event EventHandler? KeepTargetChanged;
+
+    public bool KeepTargetChecked
+    {
+        get => _keepTargetCheckBox.Checked;
+        set
+        {
+            if (_keepTargetCheckBox.Checked == value)
+            {
+                return;
+            }
+
+            _suppressKeepTargetEvents = true;
+            try
+            {
+                _keepTargetCheckBox.Checked = value;
+            }
+            finally
+            {
+                _suppressKeepTargetEvents = false;
+            }
+        }
     }
 
     protected override void Dispose(bool disposing)
@@ -56,6 +105,7 @@ internal sealed class WaapiStatusBar : Panel
         if (disposing)
         {
             _badgeFont.Dispose();
+            _toolTip.Dispose();
         }
 
         base.Dispose(disposing);
@@ -67,6 +117,9 @@ internal sealed class WaapiStatusBar : Panel
         _titleLabel.ForeColor = UiColors.StatusBarTitleFore;
         _titleLabel.BackColor = BackColor;
         _detailLabel.BackColor = BackColor;
+        _keepTargetCheckBox.BackColor = BackColor;
+        _keepTargetCheckBox.ForeColor = UiColors.StatusBarDetailFore;
+        _keepTargetCheckBox.ApplyColors();
 
         if (_badgeText == "CONNECT")
         {
@@ -85,6 +138,16 @@ internal sealed class WaapiStatusBar : Panel
         }
 
         Invalidate();
+    }
+
+    private void ApplyToolTips()
+    {
+        _toolTip.SetToolTip(
+            _keepTargetCheckBox,
+            "オンにした時点の作成先パスをアプリ側で固定します。"
+            + " その後 Wwise 上で選択を変えても、表示と EXPORT 先はこの Keep パスのままです。"
+            + " 起動時／EXPORT 前には可能なら Wwise 上でも同じパスを再選択します。"
+            + " 接続中は Keep 先へ書き出す旨を警告色で表示します。");
     }
 
     private void SetBadgeConnected()
@@ -118,9 +181,15 @@ internal sealed class WaapiStatusBar : Panel
             return;
         }
 
-        // 接続中でもターゲット未選択はエラー色で目立たせる
-        _detailLabel.ForeColor = _selectionMissing
-            ? UiColors.StatusBarErrorDetailFore
+        if (_selectionMissing)
+        {
+            _detailLabel.ForeColor = UiColors.StatusBarErrorDetailFore;
+            return;
+        }
+
+        // Keep Target 中は「このパスへ書き出す」ことを警告色で明示する（未選択エラーにはしない）。
+        _detailLabel.ForeColor = _keepTargetWarning
+            ? UiColors.LogWarning
             : UiColors.StatusBarDetailFore;
     }
 
@@ -149,12 +218,14 @@ internal sealed class WaapiStatusBar : Panel
         if (result.Ok)
         {
             _selectionMissing = !result.HasSelection;
+            _keepTargetWarning = false;
             SetBadgeConnected();
             ApplyDetailForeColor(connected: true);
         }
         else
         {
             _selectionMissing = false;
+            _keepTargetWarning = false;
             SetBadgeDisconnected();
             ApplyDetailForeColor(connected: false);
         }
@@ -163,10 +234,21 @@ internal sealed class WaapiStatusBar : Panel
         LayoutLabels();
     }
 
-    /// <summary>接続維持中に選択パスだけ差し替える。</summary>
-    public void UpdateSelection(string wwiseVersion, string projectName, string selectedPath)
+    /// <summary>
+    /// 接続維持中の表示更新。
+    /// <paramref name="keepTarget"/> が true のときは表示パスを Keep 先として扱い、
+    /// Wwise 上の選択有無ではエラーにしない（警告色で Keep 先を明示）。
+    /// </summary>
+    public void UpdateSelection(
+        string wwiseVersion,
+        string projectName,
+        string selectedPath,
+        bool keepTarget = false)
     {
-        _selectionMissing = string.IsNullOrEmpty(selectedPath);
+        _keepTargetWarning = keepTarget && selectedPath.Length > 0;
+        _selectionMissing = keepTarget
+            ? selectedPath.Length == 0
+            : string.IsNullOrEmpty(selectedPath);
         SetBadgeConnected();
         ApplyDetailForeColor(connected: true);
 
@@ -181,7 +263,17 @@ internal sealed class WaapiStatusBar : Panel
             parts.Add(projectName);
         }
 
-        parts.Add(string.IsNullOrEmpty(selectedPath) ? "（未選択）" : selectedPath);
+        if (keepTarget)
+        {
+            parts.Add(selectedPath.Length > 0
+                ? $"Keep → {selectedPath}"
+                : "Keep → （未設定）");
+        }
+        else
+        {
+            parts.Add(string.IsNullOrEmpty(selectedPath) ? "（未選択）" : selectedPath);
+        }
+
         _detailLabel.Text = string.Join("  ·  ", parts);
         LayoutLabels();
     }
@@ -211,9 +303,18 @@ internal sealed class WaapiStatusBar : Panel
             badgeWidth,
             textSize.Height + padY * 2);
 
+        var keepSize = _keepTargetCheckBox.GetPreferredSize(Size.Empty);
+        var keepLeft = Math.Max(
+            _badgeFillBounds.Right + 12,
+            ClientSize.Width - Padding.Right - keepSize.Width);
+        var keepTop = Math.Max(0, (ClientSize.Height - keepSize.Height) / 2);
+        _keepTargetCheckBox.Location = new Point(keepLeft, keepTop);
+        _keepTargetCheckBox.Size = keepSize;
+
         var detailX = _badgeFillBounds.Right + 12;
+        var detailRight = keepLeft - 8;
         _detailLabel.Location = new Point(detailX, titleMidY);
-        _detailLabel.Width = Math.Max(0, ClientSize.Width - detailX - Padding.Right);
+        _detailLabel.Width = Math.Max(0, detailRight - detailX);
         _detailLabel.Height = _detailLabel.PreferredHeight;
         Invalidate();
     }

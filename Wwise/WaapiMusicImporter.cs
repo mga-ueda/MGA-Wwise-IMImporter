@@ -68,34 +68,82 @@ internal static class WaapiMusicImporter
             outputParts,
             sampleRate,
             blockAlign,
-            Log,
-            progress);
+            Log);
 
         // タイムアウトは import を含むので長めに取る
         var timeout = TimeSpan.FromMilliseconds(Math.Max(waapiSettings.TimeoutMs, 30000));
         using var client = new WaapiHttpClient(waapiSettings.Url, timeout);
+        var returnOptions = new Dictionary<string, object>
+        {
+            ["return"] = new[] { "id", "name", "type", "path" },
+        };
 
-        // 構造の一括作成／更新（複数パート時は State Group も同じ呼び出しで処理）
-        var setArgs = BuildSetArgs(
-            plan,
-            parentPath,
-            segmentWavs,
-            importSettings,
-            stateGroupPath);
-        progress?.Report("Creating Wwise objects...");
-        _ = await client.CallAsync(
-                "ak.wwise.core.object.set",
-                setArgs,
-                new Dictionary<string, object> { ["return"] = new[] { "id", "name", "type", "path" } },
-                cancellationToken)
-            .ConfigureAwait(false);
-        progress?.Report("Wwise objects created.");
+        // 一括 object.set だと長時間 UI が止まったように見えるため、段階的に投げて進捗を出す。
+        if (plan.IsMultiPart)
+        {
+            if (stateGroupPath is null || stateGroupPath.Length == 0)
+            {
+                throw new InvalidOperationException("複数パート時は State Group パスが必要です。");
+            }
+
+            Log("Creating State Group...");
+            await CallObjectSetAsync(
+                    client,
+                    BuildStateGroupSetArgs(plan, importSettings),
+                    returnOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var containerPath = $"{parentPath.TrimEnd('\\')}\\{plan.ContainerName}";
+            Log("Creating Music Switch Container...");
+            await CallObjectSetAsync(
+                    client,
+                    BuildMusicSwitchShellSetArgs(plan, parentPath, containerPath, stateGroupPath),
+                    returnOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            for (var i = 0; i < plan.Playlists.Count; i++)
+            {
+                var playlist = plan.Playlists[i];
+                Log($"Creating playlist {i + 1}/{plan.Playlists.Count}: {playlist.Name}...");
+                await CallObjectSetAsync(
+                        client,
+                        BuildPlaylistAppendSetArgs(
+                            plan,
+                            containerPath,
+                            playlist,
+                            segmentWavs,
+                            importSettings),
+                        returnOptions,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            Log("Creating Wwise objects...");
+            await CallObjectSetAsync(
+                    client,
+                    BuildSinglePlaylistSetArgs(plan, parentPath, segmentWavs, importSettings),
+                    returnOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        Log("Wwise objects created.");
 
         if (plan.IsMultiPart)
         {
-            Log(
-                "Transition : any→any / Exit Source at=Immediate"
-                + " / Destination Sync To=Entry Cue / Fade-out ON");
+            Log("Transition : Any→Any（Transition）を先頭に維持");
+            foreach (var playlist in plan.Playlists)
+            {
+                Log(
+                    $"Transition : Any→{playlist.Name}"
+                    + $" / Exit Source at={playlist.ExitSourceAt.ToUiName()}"
+                    + " / Destination Sync To=Entry Cue / Fade-out ON");
+            }
+
             Log("Transition : Fade Time/Offset/Curve は WAAPI 非対応のため未設定（Wwise 上で手動設定）");
         }
 
@@ -147,6 +195,20 @@ internal static class WaapiMusicImporter
         return sb.ToString();
     }
 
+    private static async Task CallObjectSetAsync(
+        WaapiHttpClient client,
+        Dictionary<string, object?> setArgs,
+        Dictionary<string, object> returnOptions,
+        CancellationToken cancellationToken)
+    {
+        _ = await client.CallAsync(
+                "ak.wwise.core.object.set",
+                setArgs,
+                returnOptions,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>
     /// 元 WAV から各トラックの可聴範囲だけを直接切り出す。
     /// 返り値は TrackSliceKey → 切り出し WAV パス。
@@ -158,8 +220,7 @@ internal static class WaapiMusicImporter
         IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
-        Action<string> log,
-        IProgress<string>? progress)
+        Action<string> log)
     {
         Directory.CreateDirectory(outputDirectory);
         log($"Output  : {outputDirectory}");
@@ -213,7 +274,7 @@ internal static class WaapiMusicImporter
                         endSample,
                         blockAlign);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
-                    progress?.Report($"WAV: {fileName}");
+                    log($"WAV: {fileName}");
                 }
             }
         }
@@ -282,131 +343,201 @@ internal static class WaapiMusicImporter
     private static long MsToSample(double ms, uint sampleRate) =>
         (long)Math.Round(ms * sampleRate / 1000.0, MidpointRounding.AwayFromZero);
 
-    private static Dictionary<string, object?> BuildSetArgs(
+    private static Dictionary<string, object?> BuildStateGroupSetArgs(
         WwiseMusicPlan plan,
-        string parentPath,
-        IReadOnlyDictionary<string, string> segmentWavs,
-        WwiseImportSettings importSettings,
-        string? stateGroupPath)
+        WwiseImportSettings importSettings)
     {
-        var lookAheadMs = importSettings.LookAheadMs;
-        var prefetchLengthMs = importSettings.PrefetchLengthMs;
-        var containerPath = $"{parentPath}\\{plan.ContainerName}";
-
-        object BuildPlaylistDef(WwisePlaylistPlan playlist)
-        {
-            var playlistPath = plan.IsMultiPart
-                ? $"{containerPath}\\{playlist.Name}"
-                : containerPath;
-
-            var segmentDefs = new List<object>();
-            var itemDefs = new List<object>();
-            for (var i = 0; i < playlist.Segments.Count; i++)
+        var stateChildren = plan.Playlists
+            .Select(p => (object)new Dictionary<string, object?>
             {
-                var segment = playlist.Segments[i];
-                segmentDefs.Add(BuildSegmentDef(
-                    segment,
-                    segmentWavs,
-                    isFirstSegment: i == 0,
-                    lookAheadMs,
-                    prefetchLengthMs));
-                itemDefs.Add(new Dictionary<string, object?>
-                {
-                    ["type"] = "MusicPlaylistItem",
-                    ["name"] = string.Empty,
-                    ["@PlaylistItemType"] = 1,
-                    ["@LoopCount"] = segment.LoopInfinite ? 0 : 1,
-                    ["@Segment"] = $"{playlistPath}\\{segment.Name}",
-                });
-            }
-
-            var name = plan.IsMultiPart ? playlist.Name : plan.ContainerName;
-            return new Dictionary<string, object?>
-            {
-                ["type"] = "MusicPlaylistContainer",
-                ["name"] = name,
-                ["children"] = segmentDefs,
-                ["@PlaylistRoot"] = new Dictionary<string, object?>
-                {
-                    ["type"] = "MusicPlaylistItem",
-                    ["name"] = string.Empty,
-                    ["@PlaylistItemType"] = 0,
-                    ["@PlayMode"] = 0,
-                    ["@LoopCount"] = 1,
-                    ["children"] = itemDefs,
-                },
-            };
-        }
-
-        var rootObjects = new List<object>();
-
-        object topLevel;
-        if (plan.IsMultiPart)
-        {
-            if (stateGroupPath is null || stateGroupPath.Length == 0)
-            {
-                throw new InvalidOperationException("複数パート時は State Group パスが必要です。");
-            }
-
-            // State 名 = エクスポート WAV 名（拡張子無し）= Playlist 名
-            var stateChildren = plan.Playlists
-                .Select(p => (object)new Dictionary<string, object?>
-                {
-                    ["type"] = "State",
-                    ["name"] = p.Name,
-                })
-                .ToList();
-
-            rootObjects.Add(new Dictionary<string, object?>
-            {
-                ["object"] = importSettings.StateGroupParentPath.TrimEnd('\\'),
-                ["children"] = new object[]
-                {
-                    new Dictionary<string, object?>
-                    {
-                        ["type"] = "StateGroup",
-                        ["name"] = plan.ContainerName,
-                        ["children"] = stateChildren,
-                    },
-                },
-            });
-
-            var entries = plan.Playlists
-                .Select(p => (object)new Dictionary<string, object?>
-                {
-                    ["type"] = "MultiSwitchEntry",
-                    ["name"] = string.Empty,
-                    ["@EntryPath"] = new[] { $"{stateGroupPath}\\{p.Name}" },
-                    ["@AudioNode"] = $"{containerPath}\\{p.Name}",
-                })
-                .ToList();
-
-            topLevel = new Dictionary<string, object?>
-            {
-                ["type"] = "MusicSwitchContainer",
-                ["name"] = plan.ContainerName,
-                ["@Arguments"] = new[] { stateGroupPath },
-                ["@Entries"] = entries,
-                ["@TransitionRoot"] = WaapiMusicTransitionDefaults.BuildAnyToAnyTransitionRoot(),
-                ["children"] = plan.Playlists.Select(BuildPlaylistDef).ToList(),
-            };
-        }
-        else
-        {
-            topLevel = BuildPlaylistDef(plan.Playlists[0]);
-        }
-
-        rootObjects.Add(new Dictionary<string, object?>
-        {
-            ["object"] = parentPath,
-            ["children"] = new[] { topLevel },
-        });
+                ["type"] = "State",
+                ["name"] = p.Name,
+            })
+            .ToList();
 
         return new Dictionary<string, object?>
         {
-            ["objects"] = rootObjects,
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = importSettings.StateGroupParentPath.TrimEnd('\\'),
+                    ["children"] = new object[]
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["type"] = "StateGroup",
+                            ["name"] = plan.ContainerName,
+                            ["children"] = stateChildren,
+                        },
+                    },
+                },
+            },
             ["onNameConflict"] = "merge",
             ["listMode"] = "replaceAll",
+        };
+    }
+
+    /// <summary>
+    /// Music Switch Container 本体（Playlist 子は空）。
+    /// children を replaceAll で空にすることで、再 EXPORT 時の古い Playlist を落とす。
+    /// </summary>
+    private static Dictionary<string, object?> BuildMusicSwitchShellSetArgs(
+        WwiseMusicPlan plan,
+        string parentPath,
+        string containerPath,
+        string stateGroupPath)
+    {
+        var entries = plan.Playlists
+            .Select(p => (object)new Dictionary<string, object?>
+            {
+                ["type"] = "MultiSwitchEntry",
+                ["name"] = string.Empty,
+                ["@EntryPath"] = new[] { $"{stateGroupPath}\\{p.Name}" },
+                ["@AudioNode"] = $"{containerPath}\\{p.Name}",
+            })
+            .ToList();
+
+        return new Dictionary<string, object?>
+        {
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = parentPath,
+                    ["children"] = new object[]
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["type"] = "MusicSwitchContainer",
+                            ["name"] = plan.ContainerName,
+                            ["@Arguments"] = new[] { stateGroupPath },
+                            ["@Entries"] = entries,
+                            ["@TransitionRoot"] = WaapiMusicTransitionDefaults.BuildTransitionRoot(
+                                containerPath,
+                                plan.Playlists),
+                            ["children"] = Array.Empty<object>(),
+                        },
+                    },
+                },
+            },
+            ["onNameConflict"] = "merge",
+            ["listMode"] = "replaceAll",
+        };
+    }
+
+    private static Dictionary<string, object?> BuildPlaylistAppendSetArgs(
+        WwiseMusicPlan plan,
+        string containerPath,
+        WwisePlaylistPlan playlist,
+        IReadOnlyDictionary<string, string> segmentWavs,
+        WwiseImportSettings importSettings) =>
+        new()
+        {
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = containerPath,
+                    ["children"] = new object[]
+                    {
+                        BuildPlaylistDef(
+                            plan,
+                            containerPath,
+                            playlist,
+                            segmentWavs,
+                            importSettings,
+                            isMultiPart: true),
+                    },
+                },
+            },
+            ["onNameConflict"] = "merge",
+            ["listMode"] = "append",
+        };
+
+    private static Dictionary<string, object?> BuildSinglePlaylistSetArgs(
+        WwiseMusicPlan plan,
+        string parentPath,
+        IReadOnlyDictionary<string, string> segmentWavs,
+        WwiseImportSettings importSettings)
+    {
+        var containerPath = $"{parentPath}\\{plan.ContainerName}";
+        return new Dictionary<string, object?>
+        {
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = parentPath,
+                    ["children"] = new object[]
+                    {
+                        BuildPlaylistDef(
+                            plan,
+                            containerPath,
+                            plan.Playlists[0],
+                            segmentWavs,
+                            importSettings,
+                            isMultiPart: false),
+                    },
+                },
+            },
+            ["onNameConflict"] = "merge",
+            ["listMode"] = "replaceAll",
+        };
+    }
+
+    private static Dictionary<string, object?> BuildPlaylistDef(
+        WwiseMusicPlan plan,
+        string containerPath,
+        WwisePlaylistPlan playlist,
+        IReadOnlyDictionary<string, string> segmentWavs,
+        WwiseImportSettings importSettings,
+        bool isMultiPart)
+    {
+        var streamEnabled = importSettings.StreamEnabled;
+        var lookAheadMs = importSettings.LookAheadMs;
+        var prefetchLengthMs = importSettings.PrefetchLengthMs;
+        var playlistPath = isMultiPart
+            ? $"{containerPath}\\{playlist.Name}"
+            : containerPath;
+
+        var segmentDefs = new List<object>();
+        var itemDefs = new List<object>();
+        for (var i = 0; i < playlist.Segments.Count; i++)
+        {
+            var segment = playlist.Segments[i];
+            segmentDefs.Add(BuildSegmentDef(
+                segment,
+                segmentWavs,
+                isFirstSegment: i == 0,
+                streamEnabled,
+                lookAheadMs,
+                prefetchLengthMs));
+            itemDefs.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "MusicPlaylistItem",
+                ["name"] = string.Empty,
+                ["@PlaylistItemType"] = 1,
+                ["@LoopCount"] = segment.LoopInfinite ? 0 : 1,
+                ["@Segment"] = $"{playlistPath}\\{segment.Name}",
+            });
+        }
+
+        var name = isMultiPart ? playlist.Name : plan.ContainerName;
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "MusicPlaylistContainer",
+            ["name"] = name,
+            ["children"] = segmentDefs,
+            ["@PlaylistRoot"] = new Dictionary<string, object?>
+            {
+                ["type"] = "MusicPlaylistItem",
+                ["name"] = string.Empty,
+                ["@PlaylistItemType"] = 0,
+                ["@PlayMode"] = 0,
+                ["@LoopCount"] = 1,
+                ["children"] = itemDefs,
+            },
         };
     }
 
@@ -414,6 +545,7 @@ internal static class WaapiMusicImporter
         WwiseSegmentPlan segment,
         IReadOnlyDictionary<string, string> trackWavs,
         bool isFirstSegment,
+        bool streamEnabled,
         int lookAheadMs,
         int prefetchLengthMs)
     {
@@ -462,15 +594,12 @@ internal static class WaapiMusicImporter
                     $"切り出し WAV が見つかりません: {segment.Name}/{track.Name}");
             }
 
-            var zeroLatency = isFirstSegment && t == 0;
-            trackDefs.Add(new Dictionary<string, object?>
+            var zeroLatency = streamEnabled && isFirstSegment && t == 0;
+            var trackProps = new Dictionary<string, object?>
             {
                 ["type"] = "MusicTrack",
                 ["name"] = track.Name,
-                ["@IsStreamingEnabled"] = true,
-                ["@IsZeroLatency"] = zeroLatency,
-                ["@LookAheadTime"] = zeroLatency ? 0 : lookAheadMs,
-                ["@PreFetchLength"] = prefetchLengthMs,
+                ["@IsStreamingEnabled"] = streamEnabled,
                 ["import"] = new Dictionary<string, object?>
                 {
                     ["files"] = new object[]
@@ -478,7 +607,18 @@ internal static class WaapiMusicImporter
                         new Dictionary<string, object?> { ["audioFile"] = wavPath },
                     },
                 },
-            });
+            };
+            if (streamEnabled)
+            {
+                trackProps["@IsZeroLatency"] = zeroLatency;
+                trackProps["@LookAheadTime"] = zeroLatency ? 0 : lookAheadMs;
+                if (zeroLatency)
+                {
+                    trackProps["@PreFetchLength"] = prefetchLengthMs;
+                }
+            }
+
+            trackDefs.Add(trackProps);
         }
 
         return new Dictionary<string, object?>

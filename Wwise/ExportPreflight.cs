@@ -58,7 +58,9 @@ internal static class ExportPreflight
     public static ExportPreflightResult Evaluate(
         string? outputDirectory,
         WaapiProbeResult? waapi,
-        bool hasEnabledParts)
+        bool hasEnabledParts,
+        bool keepTarget = false,
+        string? keptTargetPath = null)
     {
         if (!hasEnabledParts)
         {
@@ -93,13 +95,31 @@ internal static class ExportPreflight
                 fullDirectory);
         }
 
-        if (!waapi.HasSelection)
+        string targetPath;
+        if (keepTarget)
         {
-            return Fail(
-                "Wwise 上で作成先オブジェクトが選択されていません。",
-                fullDirectory,
-                projectFilePath: waapi.ProjectFilePath,
-                targetPath: string.Empty);
+            targetPath = keptTargetPath?.Trim() ?? string.Empty;
+            if (targetPath.Length == 0)
+            {
+                return Fail(
+                    "Keep Target がオンですが作成先パスが未設定です。"
+                    + " Wwise で作成先を選んでから Keep Target をオンにしてください。",
+                    fullDirectory,
+                    projectFilePath: waapi.ProjectFilePath);
+            }
+        }
+        else
+        {
+            if (!waapi.HasSelection)
+            {
+                return Fail(
+                    "Wwise 上で作成先オブジェクトが選択されていません。",
+                    fullDirectory,
+                    projectFilePath: waapi.ProjectFilePath,
+                    targetPath: string.Empty);
+            }
+
+            targetPath = waapi.SelectedPath;
         }
 
         var projectFilePath = waapi.ProjectFilePath.Trim();
@@ -108,7 +128,7 @@ internal static class ExportPreflight
             return Fail(
                 "Wwise プロジェクトのパスを取得できません。プロジェクトを開いているか確認してください。",
                 fullDirectory,
-                targetPath: waapi.SelectedPath);
+                targetPath: targetPath);
         }
 
         string originalsRoot;
@@ -121,7 +141,7 @@ internal static class ExportPreflight
                     "Wwise プロジェクトのルートを解決できません。",
                     fullDirectory,
                     projectFilePath: projectFilePath,
-                    targetPath: waapi.SelectedPath);
+                    targetPath: targetPath);
             }
 
             originalsRoot = Path.GetFullPath(Path.Combine(projectRoot, "Originals"));
@@ -132,7 +152,7 @@ internal static class ExportPreflight
                 $"Originals パスの解決に失敗: {ex.Message}",
                 fullDirectory,
                 projectFilePath: projectFilePath,
-                targetPath: waapi.SelectedPath);
+                targetPath: targetPath);
         }
 
         if (!IsUnderDirectory(fullDirectory, originalsRoot))
@@ -142,15 +162,17 @@ internal static class ExportPreflight
                 fullDirectory,
                 projectFilePath: projectFilePath,
                 originalsRoot: originalsRoot,
-                targetPath: waapi.SelectedPath);
+                targetPath: targetPath);
         }
 
         return new ExportPreflightResult
         {
             CanExport = true,
-            Reason = "書き出し可能です。",
+            Reason = keepTarget
+                ? $"書き出し可能です（Keep Target → {targetPath} へ作成します）。"
+                : "書き出し可能です。",
             OutputDirectory = fullDirectory,
-            TargetPath = waapi.SelectedPath,
+            TargetPath = targetPath,
             ProjectFilePath = Path.GetFullPath(projectFilePath),
             OriginalsRoot = originalsRoot,
         };

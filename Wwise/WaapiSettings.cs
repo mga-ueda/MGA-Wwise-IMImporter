@@ -47,6 +47,14 @@ internal sealed class WaapiSettings
         var values = IniFile.ReadSection(Section);
         var changed = false;
 
+        // 旧 Keep Target キーはプロジェクト設定へ移したため除去する。
+        if (values.Remove("KeepTarget")
+            | values.Remove("KeptTargetPath")
+            | values.Remove("KeptTargetProjectFilePath"))
+        {
+            changed = true;
+        }
+
         if (!values.ContainsKey("ProbeOnStartup"))
         {
             values["ProbeOnStartup"] = "1";
@@ -74,6 +82,35 @@ internal sealed class WaapiSettings
                 ["TimeoutMs"] = values["TimeoutMs"],
             });
         }
+    }
+
+    /// <summary>
+    /// 旧 [Waapi] Keep Target 設定を読み取り、呼び出し側でプロジェクトへ移行するために返す。
+    /// </summary>
+    public static bool TryReadLegacyKeepTarget(
+        out bool keepTarget,
+        out string keptTargetPath,
+        out string keptTargetProjectFilePath)
+    {
+        keepTarget = false;
+        keptTargetPath = string.Empty;
+        keptTargetProjectFilePath = string.Empty;
+        var values = IniFile.ReadSection(Section);
+        if (!values.ContainsKey("KeepTarget")
+            && !values.ContainsKey("KeptTargetPath"))
+        {
+            return false;
+        }
+
+        keepTarget = values.TryGetValue("KeepTarget", out var keep)
+            && ParseBool(keep, defaultValue: false);
+        keptTargetPath = values.TryGetValue("KeptTargetPath", out var path)
+            ? path.Trim().Trim('"')
+            : string.Empty;
+        keptTargetProjectFilePath = values.TryGetValue("KeptTargetProjectFilePath", out var project)
+            ? project.Trim().Trim('"')
+            : string.Empty;
+        return keepTarget || keptTargetPath.Length > 0;
     }
 
     private static bool ParseBool(string text, bool defaultValue)
