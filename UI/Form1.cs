@@ -1505,7 +1505,7 @@ public partial class Form1 : Form
         projectNameComboBox.ApplyColors();
         projectOutputPathTextBox.BackColor = inputBack;
         projectOutputPathTextBox.ForeColor = inputFore;
-        // コンボ・スペアナと同じ枠色（ChromeBorder 系）に揃える。
+        // コンボ・出力パスと同じ枠色（ChromeBorder 系）に揃える。
         projectOutputPathTextBox.BorderColor = UiColors.ProjectBarBorder;
         var iconFore = UiColors.LogButtonFore;
         ApplyProjectIconButtonColors(projectFolderButton, iconFore, barBack);
@@ -1517,6 +1517,7 @@ public partial class Form1 : Form
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
+        projectSpectrumView.BackColor = barBack;
         projectSpectrumView.Invalidate();
         projectBar.Invalidate();
     }
@@ -1549,6 +1550,12 @@ public partial class Form1 : Form
         projectOutputPathTextBox.Enter += (_, _) => HideProjectPathCaret();
         projectOutputPathTextBox.Click += (_, _) => HideProjectPathCaret();
         projectBar.Resize += (_, _) => AlignProjectBarInputs();
+        waveformView.Resize += (_, _) => SyncProjectNameComboWidthToInfoLane();
+        waveformView.InfoLaneWidthChanged += (_, _) =>
+        {
+            SyncProjectNameComboWidthToInfoLane();
+            AlignProjectPathTextRect();
+        };
         // EM_SETRECT の整形矩形はリサイズで既定へ戻るため再適用する。
         projectOutputPathTextBox.Resize += (_, _) => AlignProjectPathTextRect();
         projectOutputPathTextBox.HandleCreated += (_, _) => AlignProjectPathTextRect();
@@ -1556,7 +1563,7 @@ public partial class Form1 : Form
 
     /// <summary>
     /// プロジェクト名コンボと出力先テキストボックスの高さをバーの内側高さに揃え、
-    /// 双方のテキスト縦位置も一致させる。
+    /// 双方のテキスト縦位置も一致させる。コンボ幅は情報レーン右端に合わせる。
     /// </summary>
     private void AlignProjectBarInputs()
     {
@@ -1567,7 +1574,37 @@ public partial class Form1 : Form
         }
 
         projectNameComboBox.SetControlHeight(targetHeight);
+        SyncProjectNameComboWidthToInfoLane();
         AlignProjectPathTextRect();
+    }
+
+    /// <summary>
+    /// プロジェクト名コンボの右端を、波形左の情報レーン（Measure 列）右端に揃える。
+    /// </summary>
+    private void SyncProjectNameComboWidthToInfoLane()
+    {
+        if (!IsHandleCreated
+            || !projectNameComboBox.IsHandleCreated
+            || !waveformView.IsHandleCreated
+            || projectNameComboBox.IsDisposed
+            || waveformView.IsDisposed)
+        {
+            return;
+        }
+
+        var infoRightScreen = waveformView
+            .PointToScreen(new Point(waveformView.InfoLaneRightX, 0))
+            .X;
+        var comboLeftScreen = projectNameComboBox.PointToScreen(Point.Empty).X;
+        // ドロップダウン矢印分は最低限確保する。
+        var minWidth = Math.Max(48, SystemInformation.VerticalScrollBarWidth + 24);
+        var width = Math.Max(minWidth, infoRightScreen - comboLeftScreen);
+        if (projectNameComboBox.Width == width)
+        {
+            return;
+        }
+
+        projectNameComboBox.Width = width;
     }
 
     /// <summary>

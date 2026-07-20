@@ -67,13 +67,13 @@ internal sealed class ProjectSpectrumView : Control
         _timer.Start();
     }
 
-    /// <summary>枠 1px ＋ 余白 1px。</summary>
-    private const int EdgeInset = 2;
+    /// <summary>枠なしのため余白なし。</summary>
+    private const int EdgeInset = 0;
 
     private Rectangle InnerBounds =>
         Rectangle.Inflate(ClientRectangle, -EdgeInset, -EdgeInset);
 
-    /// <summary>全バンドが丁度収まる幅（バー＋間隔＋両側余白）。</summary>
+    /// <summary>全バンドが丁度収まる幅（バー＋間隔）。</summary>
     public static int RequiredWidth =>
         BandCenters.Length * BarWidth
         + (BandCenters.Length - 1) * BarGap
@@ -310,8 +310,8 @@ internal sealed class ProjectSpectrumView : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        using (var backBrush = new SolidBrush(
-            UiColors.ForControlBack(UiColors.SpectrumBack)))
+        // 背景は親（プロジェクトバー）と同色。枠は描かない。
+        using (var backBrush = new SolidBrush(BackColor))
         {
             g.FillRectangle(backBrush, ClientRectangle);
         }
@@ -319,7 +319,6 @@ internal sealed class ProjectSpectrumView : Control
         var inner = InnerBounds;
         if (inner.Width > 0 && inner.Height > 0)
         {
-            using var baseBrush = new SolidBrush(UiColors.SpectrumBaseline);
             using var barBrush = new SolidBrush(UiColors.SpectrumBar);
             var bandCount = Math.Min(
                 _levels.Length,
@@ -331,13 +330,6 @@ internal sealed class ProjectSpectrumView : Control
             {
                 // 2px バー＋1px 間隔で固定し、全バンドを中央配置する。
                 var x = graphLeft + band * (BarWidth + BarGap);
-                // ゼロレベルでも 1px のベースラインを描いて存在を示す。
-                g.FillRectangle(
-                    baseBrush,
-                    x,
-                    inner.Bottom - 1,
-                    BarWidth,
-                    1);
                 var barHeight = (int)Math.Round(_levels[band] * inner.Height);
                 if (barHeight > 0)
                 {
@@ -350,8 +342,5 @@ internal sealed class ProjectSpectrumView : Control
                 }
             }
         }
-
-        using var borderPen = new Pen(UiColors.SpectrumBorder);
-        g.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
     }
 }

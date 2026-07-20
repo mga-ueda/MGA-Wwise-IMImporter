@@ -180,9 +180,6 @@ internal static class UiColors
     public static Color ProjectBarBorder => ChromeBorder;
     public static Color ProjectBarInputBack => DialogInputBack;
     public static Color ProjectBarInputFore => PrimaryFore;
-    public static Color SpectrumBack { get; set; } = Color.FromArgb(28, 28, 30);
-    public static Color SpectrumBorder { get; set; } = Color.FromArgb(55, 55, 58);
-    public static Color SpectrumBaseline { get; set; } = Color.FromArgb(72, 72, 72);
     public static Color SpectrumBar { get; set; } = Color.FromArgb(26, 121, 157);
     public static Color ActionButtonDisabledBorder => ChromeMid;
     public static Color ActionButtonDisabledFore => MutedFore;
@@ -280,9 +277,6 @@ internal static class UiColors
         new("ExportButtonHoverBack", "EXPORT・ホバー枠", () => ExportButtonHoverBack, c => ExportButtonHoverBack = c),
         new("ExportButtonPressedBack", "EXPORT・押下枠", () => ExportButtonPressedBack, c => ExportButtonPressedBack = c),
 
-        new("SpectrumBack", "スペアナ・背景", () => SpectrumBack, c => SpectrumBack = c),
-        new("SpectrumBorder", "スペアナ・枠", () => SpectrumBorder, c => SpectrumBorder = c),
-        new("SpectrumBaseline", "スペアナ・ベースライン", () => SpectrumBaseline, c => SpectrumBaseline = c),
         new("SpectrumBar", "スペアナ・バー", () => SpectrumBar, c => SpectrumBar = c),
 
         new("StatusBarBack", "WAAPI Status・背景", () => StatusBarBack, c => StatusBarBack = c),
@@ -477,6 +471,9 @@ internal static class UiColors
             "DeleteButtonPressedBack",
             "StatusBarSuccessFore",
             "StatusBarErrorFore",
+            "SpectrumBack",
+            "SpectrumBorder",
+            "SpectrumBaseline",
         ];
 
         foreach (var key in obsolete)

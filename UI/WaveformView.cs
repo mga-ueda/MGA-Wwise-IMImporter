@@ -1321,6 +1321,22 @@ internal sealed class WaveformView : Control
     /// <summary>時間軸の表示位置または倍率が変更された。</summary>
     public event EventHandler? TimeViewChanged;
 
+    /// <summary>左側情報レーン幅が変わった（プロジェクト名コンボ幅の追従用）。</summary>
+    public event EventHandler? InfoLaneWidthChanged;
+
+    /// <summary>
+    /// 情報レーン（Measure 等の色付き列）右端のクライアント X。
+    /// セパレータは含まない。
+    /// </summary>
+    public int InfoLaneRightX
+    {
+        get
+        {
+            var content = Rectangle.Inflate(ClientRectangle, -4, -4);
+            return content.Left + _infoLaneWidth;
+        }
+    }
+
     /// <summary>波形上のマウス操作に対応するトランスポート表示を要求する。</summary>
     public event EventHandler<TransportCommand>? TransportFeedbackRequested;
 
@@ -2379,7 +2395,22 @@ internal sealed class WaveformView : Control
         var rowHeight = Font.GetHeight(g) + 2f;
         var labelsHeight = (int)Math.Ceiling(rowHeight * LabelRowCount);
         var nameLaneHeight = (int)Math.Ceiling(rowHeight);
-        _infoLaneWidth = MeasureInfoLaneWidth(g, content.Width);
+        var infoLaneWidth = MeasureInfoLaneWidth(g, content.Width);
+        if (infoLaneWidth != _infoLaneWidth)
+        {
+            _infoLaneWidth = infoLaneWidth;
+            if (IsHandleCreated)
+            {
+                BeginInvoke(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        InfoLaneWidthChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                });
+            }
+        }
+
         var mainLeft = content.Left + _infoLaneWidth + InfoLaneSeparatorPx;
         var mainWidth = Math.Max(0, content.Width - _infoLaneWidth - InfoLaneSeparatorPx);
 
