@@ -27,6 +27,9 @@ internal sealed class WwisePlaylistPlan
     /// </summary>
     public required string SourceWavPath { get; init; }
 
+    /// <summary>この Playlist を構成するソースパート番号（先頭が代表）。</summary>
+    public required IReadOnlyList<int> SourcePartNumbers { get; init; }
+
     /// <summary>Any → この Playlist ルールに載せる Exit Source At（遷移先の記憶値）。</summary>
     public required PlaylistExitSourceMode ExitSourceAt { get; init; }
 

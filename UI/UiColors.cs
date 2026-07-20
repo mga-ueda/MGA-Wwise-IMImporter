@@ -170,6 +170,12 @@ internal static class UiColors
     public static Color ReloadButtonFore => PrimaryFore;
     public static Color ReloadButtonHoverBack { get; set; } = Color.FromArgb(245, 158, 66);
     public static Color ReloadButtonPressedBack { get; set; } = Color.FromArgb(184, 106, 31);
+    public static Color ClearButtonFill { get; set; } = Color.FromArgb(47, 20, 20);
+    public static Color ClearButtonHoverFill { get; set; } = Color.FromArgb(82, 35, 35);
+    public static Color ClearButtonBack { get; set; } = Color.FromArgb(190, 50, 50);
+    public static Color ClearButtonFore => PrimaryFore;
+    public static Color ClearButtonHoverBack { get; set; } = Color.FromArgb(220, 70, 70);
+    public static Color ClearButtonPressedBack { get; set; } = Color.FromArgb(150, 40, 40);
     public static Color ExportButtonFill { get; set; } = Color.FromArgb(15, 27, 45);
     public static Color ExportButtonHoverFill { get; set; } = Color.FromArgb(18, 40, 67);
     public static Color ExportButtonBack { get; set; } = Color.FromArgb(30, 110, 210);
@@ -195,6 +201,10 @@ internal static class UiColors
     public static Color StatusBarDisconnectedBadgeBack { get; set; } = Color.FromArgb(190, 50, 50);
     /// <summary>切断時詳細・ターゲット未選択など、ステータス詳細のエラー文字。</summary>
     public static Color StatusBarErrorDetailFore { get; set; } = Color.FromArgb(255, 110, 110);
+    public static Color KeepTargetLockFore { get; set; } = Color.FromArgb(255, 220, 48);
+    public static Color KeepTargetLockHoverFore { get; set; } = Color.FromArgb(255, 240, 140);
+    public static Color KeepTargetUnlockFore { get; set; } = Color.FromArgb(235, 235, 235);
+    public static Color KeepTargetUnlockHoverFore { get; set; } = Color.FromArgb(255, 255, 255);
 
     // --- ダイアログ／色設定パネル ---
     public static Color DialogBodyBack { get; set; } = Color.FromArgb(40, 40, 42);
@@ -271,6 +281,11 @@ internal static class UiColors
         new("ReloadButtonBack", "RELOAD・枠", () => ReloadButtonBack, c => ReloadButtonBack = c),
         new("ReloadButtonHoverBack", "RELOAD・ホバー枠", () => ReloadButtonHoverBack, c => ReloadButtonHoverBack = c),
         new("ReloadButtonPressedBack", "RELOAD・押下枠", () => ReloadButtonPressedBack, c => ReloadButtonPressedBack = c),
+        new("ClearButtonFill", "CLEAR・塗り", () => ClearButtonFill, c => ClearButtonFill = c),
+        new("ClearButtonHoverFill", "CLEAR・ホバー塗り", () => ClearButtonHoverFill, c => ClearButtonHoverFill = c),
+        new("ClearButtonBack", "CLEAR・枠", () => ClearButtonBack, c => ClearButtonBack = c),
+        new("ClearButtonHoverBack", "CLEAR・ホバー枠", () => ClearButtonHoverBack, c => ClearButtonHoverBack = c),
+        new("ClearButtonPressedBack", "CLEAR・押下枠", () => ClearButtonPressedBack, c => ClearButtonPressedBack = c),
         new("ExportButtonFill", "EXPORT・塗り", () => ExportButtonFill, c => ExportButtonFill = c),
         new("ExportButtonHoverFill", "EXPORT・ホバー塗り", () => ExportButtonHoverFill, c => ExportButtonHoverFill = c),
         new("ExportButtonBack", "EXPORT・枠", () => ExportButtonBack, c => ExportButtonBack = c),
@@ -283,6 +298,10 @@ internal static class UiColors
         new("StatusBarConnectedBadgeBack", "WAAPI Status・接続バッジ背景", () => StatusBarConnectedBadgeBack, c => StatusBarConnectedBadgeBack = c),
         new("StatusBarDisconnectedBadgeBack", "WAAPI Status・切断バッジ背景", () => StatusBarDisconnectedBadgeBack, c => StatusBarDisconnectedBadgeBack = c),
         new("StatusBarErrorDetailFore", "WAAPI Status・エラー詳細文字", () => StatusBarErrorDetailFore, c => StatusBarErrorDetailFore = c),
+        new("KeepTargetLockFore", "Keep Target・施錠", () => KeepTargetLockFore, c => KeepTargetLockFore = c),
+        new("KeepTargetLockHoverFore", "Keep Target・施錠ホバー", () => KeepTargetLockHoverFore, c => KeepTargetLockHoverFore = c),
+        new("KeepTargetUnlockFore", "Keep Target・開錠", () => KeepTargetUnlockFore, c => KeepTargetUnlockFore = c),
+        new("KeepTargetUnlockHoverFore", "Keep Target・開錠ホバー", () => KeepTargetUnlockHoverFore, c => KeepTargetUnlockHoverFore = c),
 
         new("DialogBodyBack", "Go To Measure・背景", () => DialogBodyBack, c => DialogBodyBack = c),
         new("DialogInputBack", "Go To Measure・入力背景", () => DialogInputBack, c => DialogInputBack = c),

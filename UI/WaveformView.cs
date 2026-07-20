@@ -1377,7 +1377,7 @@ internal sealed class WaveformView : Control
     /// ドラッグ付与時のスナップ単位。描画されるグリッド線には影響しない。
     /// </summary>
     public MarkerGridOverrideMode MarkerGridOverride { get; set; } =
-        MarkerGridOverrideMode.Default;
+        MarkerGridOverrideMode.Bar;
 
     /// <summary>マウス直下の Music Playlist 番号。範囲外では null。</summary>
     public event EventHandler<int?>? PlaylistHoverChanged;

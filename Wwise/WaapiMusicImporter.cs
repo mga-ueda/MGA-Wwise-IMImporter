@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wwise;
 
@@ -25,6 +27,8 @@ internal static class WaapiMusicImporter
         bool loudnessNormalizeEnabled = false,
         double loudnessTargetLkfs = -24.0,
         bool loudnessPreserveGroupBalance = true,
+        bool autoVolumeEnabled = true,
+        AutoVolumeTarget autoVolumeTarget = AutoVolumeTarget.MakeUpGain,
         bool updateExistingStateGroup = false,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
@@ -56,7 +60,7 @@ internal static class WaapiMusicImporter
             Log($"StateGrp : {stateGroupPath}");
             if (updateExistingStateGroup)
             {
-                // BuildSetArgs の onNameConflict=merge により、State Group 自体を維持したまま
+                // onNameConflict=merge により、State Group 自体を維持したまま
                 // State 一覧を現在の Playlist 構成へ同期する。
                 Log("StateGrp : 既存オブジェクトを変更");
             }
@@ -80,7 +84,18 @@ internal static class WaapiMusicImporter
                 loudnessTargetLkfs,
                 loudnessPreserveGroupBalance,
                 Log);
+            if (autoVolumeEnabled)
+            {
+                Log(
+                    $"Auto Volume: ON → {(autoVolumeTarget == AutoVolumeTarget.VoiceVolume ? "Voice Volume" : "Make-Up Gain")}");
+            }
+            else
+            {
+                Log("Auto Volume: OFF");
+            }
         }
+
+        var applyAutoVolume = loudnessNormalizeEnabled && autoVolumeEnabled && partGains is not null;
 
         // 中間パート WAV は作らず、元 WAV から最終セグメント WAV を直接切り出す。
         var segmentWavs = SliceSegmentWavs(
@@ -122,7 +137,7 @@ internal static class WaapiMusicImporter
             Log("Creating Music Switch Container...");
             await CallObjectSetAsync(
                     client,
-                    BuildMusicSwitchShellSetArgs(plan, parentPath, containerPath, stateGroupPath),
+                    BuildMusicSwitchShellSetArgs(plan, parentPath, stateGroupPath),
                     returnOptions,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -138,18 +153,56 @@ internal static class WaapiMusicImporter
                             containerPath,
                             playlist,
                             segmentWavs,
-                            importSettings),
+                            importSettings,
+                            applyAutoVolume,
+                            autoVolumeTarget,
+                            partGains,
+                            Log),
                         returnOptions,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+
+            // Playlist 未作成時に @AudioNode / Destination を張ると空参照になるため、子作成後に結ぶ。
+            Log("Binding States to Playlists...");
+            await CallObjectSetAsync(
+                    client,
+                    BuildMusicSwitchEntriesSetArgs(plan, containerPath, stateGroupPath),
+                    returnOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            Log("Configuring transitions...");
+            await CallObjectSetAsync(
+                    client,
+                    BuildMusicSwitchTransitionsSetArgs(plan, containerPath),
+                    returnOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            // DestinationContextObject は Reference のため、ネスト作成だけでは空になり得る。
+            await BindTransitionDestinationsAsync(
+                    client,
+                    containerPath,
+                    plan,
+                    Log,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         else
         {
             Log("Creating Wwise objects...");
             await CallObjectSetAsync(
                     client,
-                    BuildSinglePlaylistSetArgs(plan, parentPath, segmentWavs, importSettings),
+                    BuildSinglePlaylistSetArgs(
+                        plan,
+                        parentPath,
+                        segmentWavs,
+                        importSettings,
+                        applyAutoVolume,
+                        autoVolumeTarget,
+                        partGains,
+                        Log),
                     returnOptions,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -157,18 +210,25 @@ internal static class WaapiMusicImporter
 
         Log("Wwise objects created.");
 
+        // MusicSegment は作成時に既定の Entry/Exit を持つ。
+        // 作成と同時の @Cues 追加は二重化するため、作成後に replaceAll で差し替える。
+        var musicRootPath = $"{parentPath.TrimEnd('\\')}\\{plan.ContainerName}";
+        await ReplaceAllSegmentCuesAsync(
+                client,
+                plan,
+                musicRootPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+
         if (plan.IsMultiPart)
         {
-            Log("Transition : Any→Any（Transition）を先頭に維持");
             foreach (var playlist in plan.Playlists)
             {
                 Log(
-                    $"Transition : Any→{playlist.Name}"
+                    $"Transition : Any → {playlist.Name}"
                     + $" / Exit Source at={playlist.ExitSourceAt.ToUiName()}"
                     + " / Destination Sync To=Entry Cue / Fade-out ON");
             }
-
-            Log("Transition : Fade Time/Offset/Curve は WAAPI 非対応のため未設定（Wwise 上で手動設定）");
         }
 
         foreach (var playlist in plan.Playlists)
@@ -231,6 +291,166 @@ internal static class WaapiMusicImporter
                 returnOptions,
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Any → Playlist トランジションの Destination 参照を setReference で結ぶ。
+    /// 作成時の @DestinationContextObject で足りる場合もあるが、Reference は空のままのことがある。
+    /// </summary>
+    private static async Task BindTransitionDestinationsAsync(
+        WaapiHttpClient client,
+        string containerPath,
+        WwiseMusicPlan plan,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        var transitionsByName = await QueryMusicTransitionsByNameAsync(
+                client,
+                containerPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var playlist in plan.Playlists)
+        {
+            if (!transitionsByName.TryGetValue(playlist.Name, out var transitionIds)
+                || transitionIds.Count == 0)
+            {
+                // 規則名で見つからなくても、object.set 時の Destination 参照が効いていることがある。
+                // 誤検知のエラーログは出さない。
+                continue;
+            }
+
+            var playlistPath = $"{containerPath}\\{playlist.Name}";
+            var playlistId = await TryGetObjectIdAsync(client, playlistPath, cancellationToken)
+                .ConfigureAwait(false);
+            var destination = !string.IsNullOrEmpty(playlistId) ? playlistId : playlistPath;
+
+            foreach (var transitionId in transitionIds)
+            {
+                await client.CallAsync(
+                        "ak.wwise.core.object.setProperty",
+                        new Dictionary<string, object?>
+                        {
+                            ["object"] = transitionId,
+                            ["property"] = "DestinationContextType",
+                            ["value"] = 2,
+                        },
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                await client.CallAsync(
+                        "ak.wwise.core.object.setReference",
+                        new Dictionary<string, object?>
+                        {
+                            ["object"] = transitionId,
+                            ["reference"] = "DestinationContextObject",
+                            ["value"] = destination,
+                        },
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            log($"Transition : Any → {playlist.Name} の Destination を設定");
+        }
+    }
+
+    private static async Task<Dictionary<string, List<string>>> QueryMusicTransitionsByNameAsync(
+        WaapiHttpClient client,
+        string containerPath,
+        CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var escaped = containerPath.Replace("\"", "\\\"", StringComparison.Ordinal);
+        var result = await client.CallAsync(
+                "ak.wwise.core.object.get",
+                new Dictionary<string, object?>
+                {
+                    ["waql"] = $"$ \"{escaped}\" select descendants where type = \"MusicTransition\"",
+                },
+                new Dictionary<string, object?>
+                {
+                    ["return"] = new[] { "id", "name", "type" },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.TryGetProperty("return", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return map;
+        }
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (!item.TryGetProperty("id", out var idEl)
+                || !item.TryGetProperty("name", out var nameEl))
+            {
+                continue;
+            }
+
+            var id = idEl.GetString();
+            var name = nameEl.GetString();
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name))
+            {
+                continue;
+            }
+
+            // TransitionRoot フォルダ（空名）と既定 Any→Any（Transition）は対象外。
+            if (name.Length == 0
+                || string.Equals(
+                    name,
+                    WaapiMusicTransitionDefaults.DefaultAnyToAnyName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!map.TryGetValue(name, out var list))
+            {
+                list = [];
+                map[name] = list;
+            }
+
+            list.Add(id);
+        }
+
+        return map;
+    }
+
+    private static async Task<string?> TryGetObjectIdAsync(
+        WaapiHttpClient client,
+        string objectPath,
+        CancellationToken cancellationToken)
+    {
+        var escaped = objectPath.Replace("\"", "\\\"", StringComparison.Ordinal);
+        try
+        {
+            var result = await client.CallAsync(
+                    "ak.wwise.core.object.get",
+                    new Dictionary<string, object?>
+                    {
+                        ["waql"] = $"$ \"{escaped}\"",
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["return"] = new[] { "id", "path" },
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!result.TryGetProperty("return", out var arr)
+                || arr.ValueKind != JsonValueKind.Array
+                || arr.GetArrayLength() == 0)
+            {
+                return null;
+            }
+
+            var first = arr[0];
+            return first.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+        }
+        catch (WaapiException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -422,26 +642,14 @@ internal static class WaapiMusicImporter
     }
 
     /// <summary>
-    /// Music Switch Container 本体（Playlist 子は空）。
+    /// Music Switch Container 本体（Playlist 子は空、State 割当は後段）。
     /// children を replaceAll で空にすることで、再 EXPORT 時の古い Playlist を落とす。
     /// </summary>
     private static Dictionary<string, object?> BuildMusicSwitchShellSetArgs(
         WwiseMusicPlan plan,
         string parentPath,
-        string containerPath,
-        string stateGroupPath)
-    {
-        var entries = plan.Playlists
-            .Select(p => (object)new Dictionary<string, object?>
-            {
-                ["type"] = "MultiSwitchEntry",
-                ["name"] = string.Empty,
-                ["@EntryPath"] = new[] { $"{stateGroupPath}\\{p.Name}" },
-                ["@AudioNode"] = $"{containerPath}\\{p.Name}",
-            })
-            .ToList();
-
-        return new Dictionary<string, object?>
+        string stateGroupPath) =>
+        new()
         {
             ["objects"] = new object[]
             {
@@ -455,10 +663,6 @@ internal static class WaapiMusicImporter
                             ["type"] = "MusicSwitchContainer",
                             ["name"] = plan.ContainerName,
                             ["@Arguments"] = new[] { stateGroupPath },
-                            ["@Entries"] = entries,
-                            ["@TransitionRoot"] = WaapiMusicTransitionDefaults.BuildTransitionRoot(
-                                containerPath,
-                                plan.Playlists),
                             ["children"] = Array.Empty<object>(),
                         },
                     },
@@ -467,14 +671,74 @@ internal static class WaapiMusicImporter
             ["onNameConflict"] = "merge",
             ["listMode"] = "replaceAll",
         };
+
+    /// <summary>
+    /// Playlist 作成後に State→Playlist 割当を結ぶ。
+    /// </summary>
+    private static Dictionary<string, object?> BuildMusicSwitchEntriesSetArgs(
+        WwiseMusicPlan plan,
+        string containerPath,
+        string stateGroupPath)
+    {
+        var entries = plan.Playlists
+            .Select(p => (object)new Dictionary<string, object?>
+            {
+                ["type"] = "MultiSwitchEntry",
+                // 再 EXPORT 時に merge できるよう、Playlist 名で安定させる。
+                ["name"] = p.Name,
+                ["@EntryPath"] = new[] { $"{stateGroupPath}\\{p.Name}" },
+                ["@AudioNode"] = $"{containerPath}\\{p.Name}",
+            })
+            .ToList();
+
+        return new Dictionary<string, object?>
+        {
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = containerPath,
+                    ["@Entries"] = entries,
+                },
+            },
+            ["onNameConflict"] = "merge",
+            ["listMode"] = "replaceAll",
+        };
     }
+
+    /// <summary>
+    /// Playlist 作成後にトランジション（Any→Any + Any→各 Playlist）を結ぶ。
+    /// DestinationContextObject は実在する Playlist パスを参照する必要がある。
+    /// </summary>
+    private static Dictionary<string, object?> BuildMusicSwitchTransitionsSetArgs(
+        WwiseMusicPlan plan,
+        string containerPath) =>
+        new()
+        {
+            ["objects"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["object"] = containerPath,
+                    ["@TransitionRoot"] = WaapiMusicTransitionDefaults.BuildTransitionRoot(
+                        containerPath,
+                        plan.Playlists),
+                },
+            },
+            ["onNameConflict"] = "merge",
+            ["listMode"] = "replaceAll",
+        };
 
     private static Dictionary<string, object?> BuildPlaylistAppendSetArgs(
         WwiseMusicPlan plan,
         string containerPath,
         WwisePlaylistPlan playlist,
         IReadOnlyDictionary<string, string> segmentWavs,
-        WwiseImportSettings importSettings) =>
+        WwiseImportSettings importSettings,
+        bool applyAutoVolume,
+        AutoVolumeTarget autoVolumeTarget,
+        IReadOnlyDictionary<int, float>? partGains,
+        Action<string> log) =>
         new()
         {
             ["objects"] = new object[]
@@ -490,7 +754,11 @@ internal static class WaapiMusicImporter
                             playlist,
                             segmentWavs,
                             importSettings,
-                            isMultiPart: true),
+                            isMultiPart: true,
+                            applyAutoVolume,
+                            autoVolumeTarget,
+                            partGains,
+                            log),
                     },
                 },
             },
@@ -502,7 +770,11 @@ internal static class WaapiMusicImporter
         WwiseMusicPlan plan,
         string parentPath,
         IReadOnlyDictionary<string, string> segmentWavs,
-        WwiseImportSettings importSettings)
+        WwiseImportSettings importSettings,
+        bool applyAutoVolume,
+        AutoVolumeTarget autoVolumeTarget,
+        IReadOnlyDictionary<int, float>? partGains,
+        Action<string> log)
     {
         var containerPath = $"{parentPath}\\{plan.ContainerName}";
         return new Dictionary<string, object?>
@@ -520,7 +792,11 @@ internal static class WaapiMusicImporter
                             plan.Playlists[0],
                             segmentWavs,
                             importSettings,
-                            isMultiPart: false),
+                            isMultiPart: false,
+                            applyAutoVolume,
+                            autoVolumeTarget,
+                            partGains,
+                            log),
                     },
                 },
             },
@@ -535,7 +811,11 @@ internal static class WaapiMusicImporter
         WwisePlaylistPlan playlist,
         IReadOnlyDictionary<string, string> segmentWavs,
         WwiseImportSettings importSettings,
-        bool isMultiPart)
+        bool isMultiPart,
+        bool applyAutoVolume,
+        AutoVolumeTarget autoVolumeTarget,
+        IReadOnlyDictionary<int, float>? partGains,
+        Action<string> log)
     {
         var streamEnabled = importSettings.StreamEnabled;
         var lookAheadMs = importSettings.LookAheadMs;
@@ -567,7 +847,7 @@ internal static class WaapiMusicImporter
         }
 
         var name = isMultiPart ? playlist.Name : plan.ContainerName;
-        return new Dictionary<string, object?>
+        var def = new Dictionary<string, object?>
         {
             ["type"] = "MusicPlaylistContainer",
             ["name"] = name,
@@ -582,7 +862,85 @@ internal static class WaapiMusicImporter
                 ["children"] = itemDefs,
             },
         };
+
+        if (applyAutoVolume && partGains is not null)
+        {
+            var compensationDb = ResolveAutoVolumeCompensationDb(playlist, partGains, log);
+            if (autoVolumeTarget == AutoVolumeTarget.VoiceVolume)
+            {
+                def["@Volume"] = compensationDb;
+                def["@MakeUpGain"] = 0f;
+                log(
+                    $"Auto Volume: playlist {name} → Voice Volume {compensationDb:0.##} dB"
+                    + " (Make-Up Gain = 0)");
+            }
+            else
+            {
+                def["@MakeUpGain"] = compensationDb;
+                def["@Volume"] = 0f;
+                log(
+                    $"Auto Volume: playlist {name} → Make-Up Gain {compensationDb:0.##} dB"
+                    + " (Voice Volume = 0)");
+            }
+        }
+
+        return def;
     }
+
+    /// <summary>
+    /// Playlist 構成パートの線形ゲインから補償 dB を求める。
+    /// 複数パートでゲインが食い違う場合は先頭メンバーを使い警告する。
+    /// </summary>
+    private static float ResolveAutoVolumeCompensationDb(
+        WwisePlaylistPlan playlist,
+        IReadOnlyDictionary<int, float> partGains,
+        Action<string> log)
+    {
+        if (playlist.SourcePartNumbers.Count == 0)
+        {
+            return 0f;
+        }
+
+        float? firstGain = null;
+        var mismatched = false;
+        foreach (var partNumber in playlist.SourcePartNumbers)
+        {
+            if (!partGains.TryGetValue(partNumber, out var gain))
+            {
+                continue;
+            }
+
+            if (firstGain is null)
+            {
+                firstGain = gain;
+                continue;
+            }
+
+            if (Math.Abs(gain - firstGain.Value) > 1e-4f)
+            {
+                mismatched = true;
+            }
+        }
+
+        if (firstGain is null)
+        {
+            return 0f;
+        }
+
+        if (mismatched)
+        {
+            log(
+                $"Auto Volume: playlist {playlist.Name} のレイヤーゲインが不一致のため"
+                + $" 先頭パート {playlist.SourcePartNumbers[0]} の補償を使用");
+        }
+
+        return CompensationDb(firstGain.Value);
+    }
+
+    private static float CompensationDb(float linearGain) =>
+        linearGain <= 0f || Math.Abs(linearGain - 1f) < 1e-6f
+            ? 0f
+            : (float)(-20.0 * Math.Log10(linearGain));
 
     private static Dictionary<string, object?> BuildSegmentDef(
         WwiseSegmentPlan segment,
@@ -594,37 +952,8 @@ internal static class WaapiMusicImporter
     {
         // 切り出し WAV の先頭がセグメント 0。Cue は相対時刻。
         var origin = segment.ClipStartMs;
-        var entryLocal = Math.Max(0.0, segment.EntryCueMs - origin);
         var exitLocal = Math.Max(0.0, segment.ExitCueMs - origin);
         var endLocal = Math.Max(exitLocal, segment.ClipEndMs - origin);
-
-        var cues = new List<object>
-        {
-            new Dictionary<string, object?>
-            {
-                ["type"] = "MusicCue",
-                ["name"] = string.Empty,
-                ["@CueType"] = 0,
-                ["@TimeMs"] = entryLocal,
-            },
-            new Dictionary<string, object?>
-            {
-                ["type"] = "MusicCue",
-                ["name"] = string.Empty,
-                ["@CueType"] = 1,
-                ["@TimeMs"] = exitLocal,
-            },
-        };
-        foreach (var custom in segment.CustomCues)
-        {
-            cues.Add(new Dictionary<string, object?>
-            {
-                ["type"] = "MusicCue",
-                ["name"] = custom.Name,
-                ["@CueType"] = 2,
-                ["@TimeMs"] = Math.Max(0.0, custom.TimeMs - origin),
-            });
-        }
 
         var trackDefs = new List<object>();
         for (var t = 0; t < segment.Tracks.Count; t++)
@@ -637,7 +966,9 @@ internal static class WaapiMusicImporter
                     $"切り出し WAV が見つかりません: {segment.Name}/{track.Name}");
             }
 
-            var zeroLatency = streamEnabled && isFirstSegment && t == 0;
+            // 先頭セグメント内の全トラック（グループ化レイヤー含む）を Zero latency にする。
+            // Prefetch は従来どおり先頭トラックのみ。
+            var zeroLatency = streamEnabled && isFirstSegment;
             var trackProps = new Dictionary<string, object?>
             {
                 ["type"] = "MusicTrack",
@@ -655,7 +986,7 @@ internal static class WaapiMusicImporter
             {
                 trackProps["@IsZeroLatency"] = zeroLatency;
                 trackProps["@LookAheadTime"] = zeroLatency ? 0 : lookAheadMs;
-                if (zeroLatency)
+                if (isFirstSegment && t == 0)
                 {
                     trackProps["@PreFetchLength"] = prefetchLengthMs;
                 }
@@ -664,6 +995,8 @@ internal static class WaapiMusicImporter
             trackDefs.Add(trackProps);
         }
 
+        // Entry/Exit/Custom Cue は作成後に listMode=replaceAll で一括設定する
+        // （ここへ @Cues を載せる・既定 Cue と二重になる）。
         return new Dictionary<string, object?>
         {
             ["type"] = "MusicSegment",
@@ -673,8 +1006,99 @@ internal static class WaapiMusicImporter
             ["@TimeSignatureUpper"] = segment.TimeSignatureUpper,
             ["@TimeSignatureLower"] = segment.TimeSignatureLower,
             ["@EndPosition"] = endLocal,
-            ["@Cues"] = cues,
             ["children"] = trackDefs,
         };
+    }
+
+    private static bool IsReservedCueName(string name) =>
+        string.Equals(name, "Entry Cue", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Exit Cue", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Entry", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Exit", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 各 Music Segment の Cue 一覧を Entry / Exit / Custom だけに差し替える。
+    /// listMode=replaceAll により既定 Cue との二重化を防ぐ。
+    /// </summary>
+    private static async Task ReplaceAllSegmentCuesAsync(
+        WaapiHttpClient client,
+        WwiseMusicPlan plan,
+        string musicRootPath,
+        CancellationToken cancellationToken)
+    {
+        foreach (var playlist in plan.Playlists)
+        {
+            var playlistPath = plan.IsMultiPart
+                ? $"{musicRootPath}\\{playlist.Name}"
+                : musicRootPath;
+            foreach (var segment in playlist.Segments)
+            {
+                var segmentPath = $"{playlistPath}\\{segment.Name}";
+                var origin = segment.ClipStartMs;
+                var entryLocal = Math.Max(0.0, segment.EntryCueMs - origin);
+                var exitLocal = Math.Max(0.0, segment.ExitCueMs - origin);
+                var cues = BuildSegmentCueList(segment, origin, entryLocal, exitLocal);
+                await client.CallAsync(
+                        "ak.wwise.core.object.set",
+                        new Dictionary<string, object?>
+                        {
+                            ["objects"] = new object[]
+                            {
+                                new Dictionary<string, object?>
+                                {
+                                    ["object"] = segmentPath,
+                                    ["@Cues"] = cues,
+                                },
+                            },
+                            ["onNameConflict"] = "merge",
+                            ["listMode"] = "replaceAll",
+                        },
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static List<object> BuildSegmentCueList(
+        WwiseSegmentPlan segment,
+        double origin,
+        double entryLocal,
+        double exitLocal)
+    {
+        var cues = new List<object>
+        {
+            new Dictionary<string, object?>
+            {
+                ["type"] = "MusicCue",
+                ["name"] = string.Empty,
+                ["@CueType"] = 0,
+                ["@TimeMs"] = entryLocal,
+            },
+            new Dictionary<string, object?>
+            {
+                ["type"] = "MusicCue",
+                ["name"] = string.Empty,
+                ["@CueType"] = 1,
+                ["@TimeMs"] = exitLocal,
+            },
+        };
+
+        foreach (var custom in segment.CustomCues)
+        {
+            if (IsReservedCueName(custom.Name))
+            {
+                continue;
+            }
+
+            cues.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "MusicCue",
+                ["name"] = custom.Name,
+                ["@CueType"] = 2,
+                ["@TimeMs"] = Math.Max(0.0, custom.TimeMs - origin),
+            });
+        }
+
+        return cues;
     }
 }

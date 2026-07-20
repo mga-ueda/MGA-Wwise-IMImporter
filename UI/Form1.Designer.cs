@@ -69,8 +69,9 @@ partial class Form1
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
-    private FlatOptionCheckBox loadLastWaveCheckBox;
+    private FlatOptionCheckBox keepLastSessionCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
+    private RoundedButton clearButton;
     private RoundedButton reloadButton;
     private RoundedButton exportButton;
     private WaapiStatusBar waapiStatusBar;
@@ -80,7 +81,6 @@ partial class Form1
     private DarkBorderTextBox projectOutputPathTextBox;
     private FlowLayoutPanel projectActionPanel;
     private TransportIconButton projectFolderButton;
-    private TransportIconButton projectSaveButton;
     private TransportIconButton projectDeleteButton;
     private ProjectSpectrumView projectSpectrumView;
 
@@ -169,8 +169,9 @@ partial class Form1
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
-        loadLastWaveCheckBox = new FlatOptionCheckBox();
+        keepLastSessionCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
+        clearButton = new RoundedButton();
         reloadButton = new RoundedButton();
         exportButton = new RoundedButton();
         waapiStatusBar = new WaapiStatusBar();
@@ -180,7 +181,6 @@ partial class Form1
         projectOutputPathTextBox = new DarkBorderTextBox();
         projectActionPanel = new FlowLayoutPanel();
         projectFolderButton = new TransportIconButton(TransportIcon.Folder);
-        projectSaveButton = new TransportIconButton(TransportIcon.Save);
         projectDeleteButton = new TransportIconButton(TransportIcon.Delete);
         projectSpectrumView = new ProjectSpectrumView();
         SuspendLayout();
@@ -247,9 +247,8 @@ partial class Form1
         projectActionPanel.TabIndex = 2;
         projectActionPanel.WrapContents = false;
         projectActionPanel.Controls.Add(projectFolderButton);
-        projectActionPanel.Controls.Add(projectSaveButton);
         projectActionPanel.Controls.Add(projectDeleteButton);
-        projectActionPanel.Controls.Add(loadLastWaveCheckBox);
+        projectActionPanel.Controls.Add(keepLastSessionCheckBox);
         projectActionPanel.Controls.Add(topMostCheckBox);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
@@ -278,34 +277,25 @@ partial class Form1
         projectFolderButton.TabIndex = 0;
         playlistToolTip.SetToolTip(projectFolderButton, "波形の書き出し先フォルダを選択");
         //
-        // projectSaveButton
-        //
-        projectSaveButton.AccessibleName = "Save project";
-        projectSaveButton.Margin = new Padding(0, 0, 4, 0);
-        projectSaveButton.Name = "projectSaveButton";
-        projectSaveButton.Size = new Size(24, 24);
-        projectSaveButton.TabIndex = 1;
-        playlistToolTip.SetToolTip(projectSaveButton, "現在の設定をプロジェクトへ保存（SAVE）");
-        //
         // projectDeleteButton
         //
         projectDeleteButton.AccessibleName = "Delete project";
         projectDeleteButton.Margin = new Padding(0, 0, 8, 0);
         projectDeleteButton.Name = "projectDeleteButton";
         projectDeleteButton.Size = new Size(24, 24);
-        projectDeleteButton.TabIndex = 2;
+        projectDeleteButton.TabIndex = 1;
         playlistToolTip.SetToolTip(projectDeleteButton, "選択中のプロジェクトを削除（DEL）");
         //
-        // loadLastWaveCheckBox
-        //
-        loadLastWaveCheckBox.AutoSize = true;
-        loadLastWaveCheckBox.Font = new Font("Yu Gothic UI", 9F);
-        loadLastWaveCheckBox.Margin = new Padding(0, 3, 8, 0);
-        loadLastWaveCheckBox.Name = "loadLastWaveCheckBox";
-        loadLastWaveCheckBox.TabIndex = 3;
-        loadLastWaveCheckBox.Text = "Load Last Wave";
-        loadLastWaveCheckBox.UseVisualStyleBackColor = true;
-        loadLastWaveCheckBox.CheckedChanged += LoadLastWaveCheckBox_CheckedChanged;
+        // keepLastSessionCheckBox
+        // 
+        keepLastSessionCheckBox.AutoSize = true;
+        keepLastSessionCheckBox.Font = new Font("Yu Gothic UI", 9F);
+        keepLastSessionCheckBox.Margin = new Padding(0, 3, 8, 0);
+        keepLastSessionCheckBox.Name = "keepLastSessionCheckBox";
+        keepLastSessionCheckBox.TabIndex = 3;
+        keepLastSessionCheckBox.Text = "Keep Last Session";
+        keepLastSessionCheckBox.UseVisualStyleBackColor = true;
+        keepLastSessionCheckBox.CheckedChanged += KeepLastSessionCheckBox_CheckedChanged;
         //
         // projectSpectrumView
         //
@@ -899,9 +889,10 @@ partial class Form1
         exitSourceAtChoicesPanel.Controls.Add(exitSourceExitCueRadio);
         //
         // exitSourceImmediateRadio
-        //
+        // 
         exitSourceImmediateRadio.AutoSize = false;
         exitSourceImmediateRadio.Height = 30;
+        exitSourceImmediateRadio.Checked = true;
         exitSourceImmediateRadio.Font = new Font("Yu Gothic UI", 8.5F);
         exitSourceImmediateRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceImmediateRadio.Name = "exitSourceImmediateRadio";
@@ -909,12 +900,11 @@ partial class Form1
         exitSourceImmediateRadio.Tag = PlaylistExitSourceMode.Immediate;
         exitSourceImmediateRadio.Text = "Immediate";
         exitSourceImmediateRadio.CheckedChanged += ExitSourceAtRadio_CheckedChanged;
-        //
+        // 
         // exitSourceNextBarRadio
-        //
+        // 
         exitSourceNextBarRadio.AutoSize = false;
         exitSourceNextBarRadio.Height = 30;
-        exitSourceNextBarRadio.Checked = true;
         exitSourceNextBarRadio.Font = new Font("Yu Gothic UI", 8.5F);
         exitSourceNextBarRadio.Margin = new Padding(3, 1, 3, 1);
         exitSourceNextBarRadio.Name = "exitSourceNextBarRadio";
@@ -1078,6 +1068,7 @@ partial class Form1
         actionControlsPanel.WrapContents = false;
         actionControlsPanel.Controls.Add(exportButton);
         actionControlsPanel.Controls.Add(reloadButton);
+        actionControlsPanel.Controls.Add(clearButton);
         actionControlsPanel.Controls.Add(detailedLogCheckBox);
         //
         // detailedLogCheckBox
@@ -1096,7 +1087,7 @@ partial class Form1
         // compactFileNumbersCheckBox
         //
         compactFileNumbersCheckBox.AutoSize = false;
-        compactFileNumbersCheckBox.Checked = true;
+        compactFileNumbersCheckBox.Checked = false;
         compactFileNumbersCheckBox.CheckState = CheckState.Checked;
         // Music Playlist 一覧（スクロール領域）の外、パネル下端の固定エリアに配置。
         // 左 Padding は AlignCompactFileNumbersCheckBox がグループ枠と揃うよう再計算する。
@@ -1121,6 +1112,16 @@ partial class Form1
         topMostCheckBox.Text = "Always on Top";
         topMostCheckBox.UseVisualStyleBackColor = true;
         topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
+        //
+        // clearButton
+        //
+        clearButton.Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold);
+        clearButton.Margin = new Padding(0, 0, 8, 0);
+        clearButton.Name = "clearButton";
+        clearButton.Size = new Size(108, 32);
+        clearButton.TabIndex = 2;
+        clearButton.Text = "CLEAR";
+        clearButton.Click += ClearButton_Click;
         //
         // reloadButton
         //

@@ -499,6 +499,8 @@ internal enum TransportIcon
     Folder,
     Save,
     Delete,
+    Lock,
+    Unlock,
 }
 
 internal sealed class TransportIconButton : Button
@@ -544,7 +546,19 @@ internal sealed class TransportIconButton : Button
         base.OnEnabledChanged(e);
     }
 
-    public TransportIcon Icon { get; }
+    public TransportIcon Icon { get; private set; }
+
+    public void SetIcon(TransportIcon icon)
+    {
+        if (Icon == icon)
+        {
+            return;
+        }
+
+        Icon = icon;
+        Invalidate();
+    }
+
     public Color HoverBackColor { get; set; }
     public Color PressedBackColor { get; set; }
     public Color AccentColor { get; set; }
@@ -826,6 +840,20 @@ internal sealed class TransportIconButton : Button
                 g.DrawLine(pen, 17, 16, 17, 23);
                 g.DrawLine(pen, 20, 16, 20, 23);
                 break;
+            case TransportIcon.Lock:
+                DrawPadlockBody(g, pen);
+                // 閉じたツメ：左右とも胴体に接続
+                g.DrawLine(pen, 12.5f, 16f, 12.5f, 12.5f);
+                g.DrawArc(pen, 12.5f, 7.5f, 9f, 9f, 180f, 180f);
+                g.DrawLine(pen, 21.5f, 12.5f, 21.5f, 16f);
+                break;
+            case TransportIcon.Unlock:
+                DrawPadlockBody(g, pen);
+                // 開いたツメ：左だけ接続、右は下向きだが胴体との間に隙間を空ける
+                g.DrawLine(pen, 12.5f, 16f, 12.5f, 11.5f);
+                g.DrawArc(pen, 12.5f, 6.5f, 9.5f, 9.5f, 180f, 180f);
+                g.DrawLine(pen, 22f, 11.5f, 22f, 13.5f);
+                break;
         }
     }
 
@@ -839,6 +867,13 @@ internal sealed class TransportIconButton : Button
                 new PointF(centerX + direction * 3, centerY),
                 new PointF(centerX - direction * 4, centerY + 7),
             ]);
+    }
+
+    private static void DrawPadlockBody(Graphics g, Pen pen)
+    {
+        g.DrawRectangle(pen, 10f, 16f, 14f, 11f);
+        g.DrawEllipse(pen, 15.5f, 18.5f, 3f, 3f);
+        g.DrawLine(pen, 17f, 21.5f, 17f, 24.5f);
     }
 
     private static void DrawHash(Graphics g, Pen pen, float x, float y, float width, float height)

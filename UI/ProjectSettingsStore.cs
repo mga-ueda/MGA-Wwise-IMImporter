@@ -4,7 +4,7 @@ using System.Text;
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// プロジェクト単位の作業設定（手動 SAVE）。exe 横 INI の [Projects] / [Project.*]。
+/// プロジェクト単位の作業設定（変更時オートセーブ）。exe 横 INI の [Projects] / [Project.*]。
 /// </summary>
 internal sealed class ProjectProfile
 {
@@ -14,9 +14,9 @@ internal sealed class ProjectProfile
 
     public double FadeOutSeconds { get; set; }
 
-    public PlaylistExitSourceMode ExitSourceAt { get; set; } = PlaylistExitSourceMode.NextBar;
+    public PlaylistExitSourceMode ExitSourceAt { get; set; } = PlaylistExitSourceMode.Immediate;
 
-    public MarkerGridOverrideMode GridOverride { get; set; } = MarkerGridOverrideMode.Default;
+    public MarkerGridOverrideMode GridOverride { get; set; } = MarkerGridOverrideMode.Bar;
 
     public int CommentDigits { get; set; } = 3;
 
@@ -36,24 +36,9 @@ internal sealed class ProjectProfile
 
     public bool CommentResetPerPart { get; set; } = true;
 
-    public bool CompactFileNumbers { get; set; } = true;
-
-    public bool AlwaysOnTop { get; set; }
-
-    public bool LoadLastWaveOnStartup { get; set; }
-
-    public string LastWavePath { get; set; } = string.Empty;
+    public bool CompactFileNumbers { get; set; }
 
     public string OutputDirectory { get; set; } = string.Empty;
-
-    /// <summary>作成先パスをアプリ側で固定するか（ステータスバー Keep Target）。</summary>
-    public bool KeepTarget { get; set; }
-
-    /// <summary>Keep Target で固定する Wwise オブジェクトパス。</summary>
-    public string KeptTargetPath { get; set; } = string.Empty;
-
-    /// <summary>Keep 時の Wwise プロジェクトファイルパス。</summary>
-    public string KeptTargetProjectFilePath { get; set; } = string.Empty;
 
     /// <summary>Music Track のストリーミング有効（既定オン）。</summary>
     public bool StreamEnabled { get; set; } = true;
@@ -73,8 +58,20 @@ internal sealed class ProjectProfile
     /// <summary>グループ内の相対バランスを保って正規化するか（既定オン）。</summary>
     public bool LoudnessPreserveGroupBalance { get; set; } = true;
 
+    /// <summary>正規化ゲインの逆を Music Playlist へ戻すか（既定オン）。</summary>
+    public bool AutoVolumeEnabled { get; set; } = true;
+
+    /// <summary>Auto Volume の書き戻し先（既定 Make-Up Gain）。</summary>
+    public AutoVolumeTarget AutoVolumeTarget { get; set; } = AutoVolumeTarget.MakeUpGain;
+
     /// <summary>More Options パネルを開いた状態にするか（既定オン）。</summary>
     public bool MoreOptionsExpanded { get; set; } = true;
+
+    /// <summary>起動時／プロジェクト復帰時に最後のセッションを復元するか（既定オフ）。</summary>
+    public bool KeepLastSession { get; set; }
+
+    /// <summary>最後に正常に読み込んだ波形のフルパス。</summary>
+    public string LastWavePath { get; set; } = string.Empty;
 
     public ProjectProfile Clone() => new()
     {
@@ -93,20 +90,18 @@ internal sealed class ProjectProfile
         CommentJoiner = CommentJoiner,
         CommentResetPerPart = CommentResetPerPart,
         CompactFileNumbers = CompactFileNumbers,
-        AlwaysOnTop = AlwaysOnTop,
-        LoadLastWaveOnStartup = LoadLastWaveOnStartup,
-        LastWavePath = LastWavePath,
         OutputDirectory = OutputDirectory,
-        KeepTarget = KeepTarget,
-        KeptTargetPath = KeptTargetPath,
-        KeptTargetProjectFilePath = KeptTargetProjectFilePath,
         StreamEnabled = StreamEnabled,
         LookAheadMs = LookAheadMs,
         PrefetchLengthMs = PrefetchLengthMs,
         LoudnessNormalizeEnabled = LoudnessNormalizeEnabled,
         LoudnessTargetLkfs = LoudnessTargetLkfs,
         LoudnessPreserveGroupBalance = LoudnessPreserveGroupBalance,
+        AutoVolumeEnabled = AutoVolumeEnabled,
+        AutoVolumeTarget = AutoVolumeTarget,
         MoreOptionsExpanded = MoreOptionsExpanded,
+        KeepLastSession = KeepLastSession,
+        LastWavePath = LastWavePath,
     };
 
     public void CopyMarkerInto(MarkerSettings markers)
@@ -141,7 +136,7 @@ internal sealed class ProjectProfile
 }
 
 /// <summary>
-/// プロジェクト一覧と Active の読み書き。オートセーブは行わない。
+/// プロジェクト一覧と Active の読み書き。変更時はプロファイルを即時保存する。
 /// </summary>
 internal sealed class ProjectSettingsStore
 {
@@ -162,8 +157,8 @@ internal sealed class ProjectSettingsStore
         Name = name,
         FadeInSeconds = 0d,
         FadeOutSeconds = 0d,
-        ExitSourceAt = PlaylistExitSourceMode.NextBar,
-        GridOverride = MarkerGridOverrideMode.Default,
+        ExitSourceAt = PlaylistExitSourceMode.Immediate,
+        GridOverride = MarkerGridOverrideMode.Bar,
         CommentDigits = 3,
         CommentZeroPad = true,
         CommentPrefixEnabled = false,
@@ -173,21 +168,19 @@ internal sealed class ProjectSettingsStore
         CommentJoinerEnabled = false,
         CommentJoiner = string.Empty,
         CommentResetPerPart = true,
-        CompactFileNumbers = true,
-        AlwaysOnTop = false,
-        LoadLastWaveOnStartup = false,
-        LastWavePath = string.Empty,
+        CompactFileNumbers = false,
         OutputDirectory = string.Empty,
-        KeepTarget = false,
-        KeptTargetPath = string.Empty,
-        KeptTargetProjectFilePath = string.Empty,
         StreamEnabled = true,
         LookAheadMs = 500,
         PrefetchLengthMs = 500,
         LoudnessNormalizeEnabled = false,
         LoudnessTargetLkfs = -24.0,
         LoudnessPreserveGroupBalance = true,
+        AutoVolumeEnabled = true,
+        AutoVolumeTarget = AutoVolumeTarget.MakeUpGain,
         MoreOptionsExpanded = true,
+        KeepLastSession = false,
+        LastWavePath = string.Empty,
     };
 
     public static ProjectSettingsStore Load()
@@ -257,53 +250,6 @@ internal sealed class ProjectSettingsStore
         WriteIndex();
     }
 
-    public void SaveLoadLastWaveOnStartup(string name, bool enabled)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.LoadLastWaveOnStartup = enabled;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveLastWavePath(string name, string path)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.LastWavePath = path;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveKeepTarget(
-        string name,
-        bool enabled,
-        string? keptTargetPath = null,
-        string? keptTargetProjectFilePath = null)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.KeepTarget = enabled;
-        if (keptTargetPath is not null)
-        {
-            profile.KeptTargetPath = keptTargetPath.Trim();
-        }
-
-        if (keptTargetProjectFilePath is not null)
-        {
-            profile.KeptTargetProjectFilePath = keptTargetProjectFilePath.Trim();
-        }
-
-        WriteProfile(name, profile);
-    }
-
     public void SaveStreaming(
         string name,
         bool streamEnabled,
@@ -325,7 +271,9 @@ internal sealed class ProjectSettingsStore
         string name,
         bool enabled,
         double targetLkfs,
-        bool preserveGroupBalance)
+        bool preserveGroupBalance,
+        bool autoVolumeEnabled = true,
+        AutoVolumeTarget autoVolumeTarget = AutoVolumeTarget.MakeUpGain)
     {
         if (!_profiles.TryGetValue(name.Trim(), out var profile))
         {
@@ -335,6 +283,8 @@ internal sealed class ProjectSettingsStore
         profile.LoudnessNormalizeEnabled = enabled;
         profile.LoudnessTargetLkfs = Math.Clamp(targetLkfs, -70.0, 0.0);
         profile.LoudnessPreserveGroupBalance = preserveGroupBalance;
+        profile.AutoVolumeEnabled = autoVolumeEnabled;
+        profile.AutoVolumeTarget = autoVolumeTarget;
         WriteProfile(name, profile);
     }
 
@@ -346,6 +296,28 @@ internal sealed class ProjectSettingsStore
         }
 
         profile.MoreOptionsExpanded = expanded;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveKeepLastSession(string name, bool enabled)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.KeepLastSession = enabled;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveLastWavePath(string name, string path)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.LastWavePath = path?.Trim() ?? string.Empty;
         WriteProfile(name, profile);
     }
 
@@ -552,16 +524,22 @@ internal sealed class ProjectSettingsStore
 
     public string SuggestNewProjectName()
     {
+        const string baseName = "New Project";
+        if (!_profiles.ContainsKey(baseName))
+        {
+            return baseName;
+        }
+
         for (var i = 2; i < 10_000; i++)
         {
-            var candidate = $"Project {i}";
+            var candidate = $"{baseName} {i}";
             if (!_profiles.ContainsKey(candidate))
             {
                 return candidate;
             }
         }
 
-        return $"Project {DateTime.Now:yyyyMMddHHmmss}";
+        return $"{baseName} {DateTime.Now:yyyyMMddHHmmss}";
     }
 
     private void EnsureDefaultExists()
@@ -616,13 +594,7 @@ internal sealed class ProjectSettingsStore
             ["CommentJoiner"] = profile.CommentJoiner,
             ["CommentResetPerPart"] = profile.CommentResetPerPart ? "1" : "0",
             ["CompactFileNumbers"] = profile.CompactFileNumbers ? "1" : "0",
-            ["AlwaysOnTop"] = profile.AlwaysOnTop ? "1" : "0",
-            ["LoadLastWaveOnStartup"] = profile.LoadLastWaveOnStartup ? "1" : "0",
-            ["LastWavePath"] = profile.LastWavePath,
             ["OutputDirectory"] = profile.OutputDirectory,
-            ["KeepTarget"] = profile.KeepTarget ? "1" : "0",
-            ["KeptTargetPath"] = profile.KeptTargetPath,
-            ["KeptTargetProjectFilePath"] = profile.KeptTargetProjectFilePath,
             ["StreamEnabled"] = profile.StreamEnabled ? "1" : "0",
             ["LookAheadMs"] = Math.Clamp(profile.LookAheadMs, 0, 9999)
                 .ToString(CultureInfo.InvariantCulture),
@@ -632,7 +604,11 @@ internal sealed class ProjectSettingsStore
             ["LoudnessTargetLkfs"] = Math.Clamp(profile.LoudnessTargetLkfs, -70.0, 0.0)
                 .ToString("0.###", CultureInfo.InvariantCulture),
             ["LoudnessPreserveGroupBalance"] = profile.LoudnessPreserveGroupBalance ? "1" : "0",
+            ["AutoVolumeEnabled"] = profile.AutoVolumeEnabled ? "1" : "0",
+            ["AutoVolumeTarget"] = profile.AutoVolumeTarget.ToString(),
             ["MoreOptionsExpanded"] = profile.MoreOptionsExpanded ? "1" : "0",
+            ["KeepLastSession"] = profile.KeepLastSession ? "1" : "0",
+            ["LastWavePath"] = profile.LastWavePath,
         });
     }
 
@@ -681,11 +657,6 @@ internal sealed class ProjectSettingsStore
         profile.CommentZeroPad = ReadBool(values, "CommentZeroPad", profile.CommentZeroPad);
         profile.CommentResetPerPart = ReadBool(values, "CommentResetPerPart", profile.CommentResetPerPart);
         profile.CompactFileNumbers = ReadBool(values, "CompactFileNumbers", profile.CompactFileNumbers);
-        profile.AlwaysOnTop = ReadBool(values, "AlwaysOnTop", profile.AlwaysOnTop);
-        profile.LoadLastWaveOnStartup = ReadBool(
-            values,
-            "LoadLastWaveOnStartup",
-            profile.LoadLastWaveOnStartup);
 
         if (values.TryGetValue("CommentPrefix", out var prefix))
         {
@@ -709,22 +680,6 @@ internal sealed class ProjectSettingsStore
         if (values.TryGetValue("OutputDirectory", out var output))
         {
             profile.OutputDirectory = output;
-        }
-
-        if (values.TryGetValue("LastWavePath", out var lastWavePath))
-        {
-            profile.LastWavePath = lastWavePath;
-        }
-
-        profile.KeepTarget = ReadBool(values, "KeepTarget", profile.KeepTarget);
-        if (values.TryGetValue("KeptTargetPath", out var keptTargetPath))
-        {
-            profile.KeptTargetPath = keptTargetPath.Trim().Trim('"');
-        }
-
-        if (values.TryGetValue("KeptTargetProjectFilePath", out var keptTargetProject))
-        {
-            profile.KeptTargetProjectFilePath = keptTargetProject.Trim().Trim('"');
         }
 
         profile.StreamEnabled = ReadBool(values, "StreamEnabled", defaultValue: true);
@@ -760,10 +715,29 @@ internal sealed class ProjectSettingsStore
             "LoudnessPreserveGroupBalance",
             defaultValue: true);
 
+        profile.AutoVolumeEnabled = ReadBool(
+            values,
+            "AutoVolumeEnabled",
+            defaultValue: true);
+        if (values.TryGetValue("AutoVolumeTarget", out var autoVolumeTargetText)
+            && Enum.TryParse<AutoVolumeTarget>(autoVolumeTargetText, ignoreCase: true, out var autoVolumeTarget))
+        {
+            profile.AutoVolumeTarget = autoVolumeTarget;
+        }
+
         profile.MoreOptionsExpanded = ReadBool(
             values,
             "MoreOptionsExpanded",
             defaultValue: true);
+
+        profile.KeepLastSession = ReadBool(
+            values,
+            "KeepLastSession",
+            defaultValue: false);
+        if (values.TryGetValue("LastWavePath", out var lastWave))
+        {
+            profile.LastWavePath = lastWave.Trim().Trim('"');
+        }
 
         return profile;
     }

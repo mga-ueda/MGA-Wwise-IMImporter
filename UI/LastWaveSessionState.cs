@@ -5,7 +5,7 @@ using MgaWwiseIMImporter.Wave;
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// プロジェクト単位の Last Wave 作業状態（グループ／無効化／トランジション設定／アプリ追加マーカー）。
+/// プロジェクト単位の Last Session 作業状態（グループ／無効化／トランジション設定／アプリ追加マーカー）。
 /// exe 横 JSON サイドカーへ保存する。
 /// </summary>
 internal sealed class LastWaveSessionState

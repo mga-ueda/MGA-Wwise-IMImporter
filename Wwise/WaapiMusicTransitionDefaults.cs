@@ -76,7 +76,7 @@ internal static class WaapiMusicTransitionDefaults
             ["@DestinationContextObject"] = $"{containerPath}\\{playlist.Name}",
             ["@ExitSourceAt"] = ToWaapiExitSourceAt(playlist.ExitSourceAt),
             ["@DestinationJumpPositionPreset"] = DestinationJumpPositionEntryCue,
-            ["@EnableSourceFadeOut"] = true,
+            ["@EnableSourceFadeOut"] = 1,
         };
 
     /// <summary>Wwise ExitSourceAt 列挙値へ変換する。</summary>

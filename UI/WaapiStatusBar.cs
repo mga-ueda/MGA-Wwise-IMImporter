@@ -7,7 +7,8 @@ internal sealed class WaapiStatusBar : Panel
 {
     private readonly Label _titleLabel;
     private readonly Label _detailLabel;
-    private readonly FlatOptionCheckBox _keepTargetCheckBox;
+    private readonly TransportIconButton _keepLockButton;
+    private readonly Label _keepStateLabel;
     private readonly DarkToolTip _toolTip = new();
     private readonly Font _badgeFont = new("Yu Gothic UI", 9F, FontStyle.Bold);
 
@@ -18,8 +19,10 @@ internal sealed class WaapiStatusBar : Panel
     private Rectangle _badgeFillBounds;
     private Rectangle _badgeTextBounds;
     private bool _selectionMissing;
-    private bool _keepTargetWarning;
-    private bool _suppressKeepTargetEvents;
+    private bool _keepTargetChecked;
+    private bool _keepLockHovered;
+    private bool _keepLockEnabled = true;
+    private bool _showKeepLock;
 
     public WaapiStatusBar()
     {
@@ -40,32 +43,41 @@ internal sealed class WaapiStatusBar : Panel
 
         _detailLabel = new Label
         {
-            AutoEllipsis = true,
+            AutoSize = true,
+            AutoEllipsis = false,
             Text = string.Empty,
             Font = new Font("Yu Gothic UI", 9F),
             Location = new Point(100, 7),
             TabStop = false,
         };
 
-        _keepTargetCheckBox = new FlatOptionCheckBox
+        _keepLockButton = new TransportIconButton(TransportIcon.Unlock)
+        {
+            Size = new Size(24, 24),
+            TabStop = false,
+        };
+        _keepLockButton.Click += KeepLockButton_Click;
+        _keepLockButton.MouseEnter += (_, _) =>
+        {
+            _keepLockHovered = true;
+            ApplyKeepLockColors();
+        };
+        _keepLockButton.MouseLeave += (_, _) =>
+        {
+            _keepLockHovered = false;
+            ApplyKeepLockColors();
+        };
+
+        _keepStateLabel = new Label
         {
             AutoSize = true,
+            Text = "- Not Keep Target -",
             Font = new Font("Yu Gothic UI", 9F),
-            Text = "Keep Target",
             TabStop = false,
-            Anchor = AnchorStyles.Top | AnchorStyles.Right,
-        };
-        _keepTargetCheckBox.CheckedChanged += (_, _) =>
-        {
-            if (_suppressKeepTargetEvents)
-            {
-                return;
-            }
-
-            KeepTargetChanged?.Invoke(this, EventArgs.Empty);
         };
 
-        Controls.Add(_keepTargetCheckBox);
+        Controls.Add(_keepStateLabel);
+        Controls.Add(_keepLockButton);
         Controls.Add(_detailLabel);
         Controls.Add(_titleLabel);
         Resize += (_, _) => LayoutLabels();
@@ -75,28 +87,22 @@ internal sealed class WaapiStatusBar : Panel
         SetPending();
     }
 
-    /// <summary>Keep Target チェックの変更。</summary>
+    /// <summary>Keep Target（鍵アイコン）の変更。</summary>
     public event EventHandler? KeepTargetChanged;
 
     public bool KeepTargetChecked
     {
-        get => _keepTargetCheckBox.Checked;
+        get => _keepTargetChecked;
         set
         {
-            if (_keepTargetCheckBox.Checked == value)
+            if (_keepTargetChecked == value)
             {
                 return;
             }
 
-            _suppressKeepTargetEvents = true;
-            try
-            {
-                _keepTargetCheckBox.Checked = value;
-            }
-            finally
-            {
-                _suppressKeepTargetEvents = false;
-            }
+            _keepTargetChecked = value;
+            UpdateKeepLockAppearance();
+            LayoutLabels();
         }
     }
 
@@ -117,9 +123,9 @@ internal sealed class WaapiStatusBar : Panel
         _titleLabel.ForeColor = UiColors.StatusBarTitleFore;
         _titleLabel.BackColor = BackColor;
         _detailLabel.BackColor = BackColor;
-        _keepTargetCheckBox.BackColor = BackColor;
-        _keepTargetCheckBox.ForeColor = UiColors.StatusBarDetailFore;
-        _keepTargetCheckBox.ApplyColors();
+        _keepStateLabel.ForeColor = UiColors.StatusBarTitleFore;
+        _keepStateLabel.BackColor = BackColor;
+        ApplyKeepLockColors();
 
         if (_badgeText == "CONNECT")
         {
@@ -140,14 +146,60 @@ internal sealed class WaapiStatusBar : Panel
         Invalidate();
     }
 
+    private void UpdateKeepLockAppearance()
+    {
+        _keepLockButton.SetIcon(_keepTargetChecked ? TransportIcon.Lock : TransportIcon.Unlock);
+        _keepStateLabel.Text = _keepTargetChecked ? "- Keep Target -" : "- Not Keep Target -";
+        ApplyKeepLockColors();
+        ApplyToolTips();
+    }
+
+    private void ApplyKeepLockColors()
+    {
+        var barBack = UiColors.ForControlBack(UiColors.StatusBarBack);
+        _keepLockButton.BackColor = barBack;
+        _keepLockButton.HoverBackColor = UiColors.ForControlBack(UiColors.TransportHoverBack);
+        _keepLockButton.PressedBackColor = UiColors.ForControlBack(UiColors.TransportPressedBack);
+        _keepLockButton.AccentColor = Color.Empty;
+
+        if (_keepTargetChecked)
+        {
+            _keepLockButton.ForeColor = _keepLockHovered
+                ? UiColors.KeepTargetLockHoverFore
+                : UiColors.KeepTargetLockFore;
+            _keepLockButton.ActiveForeColor = UiColors.KeepTargetLockFore;
+        }
+        else
+        {
+            _keepLockButton.ForeColor = _keepLockHovered
+                ? UiColors.KeepTargetUnlockHoverFore
+                : UiColors.KeepTargetUnlockFore;
+            _keepLockButton.ActiveForeColor = UiColors.KeepTargetUnlockFore;
+        }
+
+        _keepLockButton.Invalidate();
+    }
+
     private void ApplyToolTips()
     {
         _toolTip.SetToolTip(
-            _keepTargetCheckBox,
-            "オンにした時点の作成先パスをアプリ側で固定します。"
-            + " その後 Wwise 上で選択を変えても、表示と EXPORT 先はこの Keep パスのままです。"
-            + " 起動時／EXPORT 前には可能なら Wwise 上でも同じパスを再選択します。"
-            + " 接続中は Keep 先へ書き出す旨を警告色で表示します。");
+            _keepLockButton,
+            _keepTargetChecked
+                ? "作成先の固定を解除します。"
+                : "いまの作成先パスをアプリ側で固定します。"
+                + " その後 Wwise 上で選択を変えても、表示と EXPORT 先はこの固定パスのままです。"
+                + " 起動時／EXPORT 前には可能なら Wwise 上でも同じパスを再選択します。");
+    }
+
+    private void KeepLockButton_Click(object? sender, EventArgs e)
+    {
+        if (!_keepLockEnabled)
+        {
+            return;
+        }
+
+        KeepTargetChecked = !KeepTargetChecked;
+        KeepTargetChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetBadgeConnected()
@@ -175,69 +227,60 @@ internal sealed class WaapiStatusBar : Panel
 
     private void ApplyDetailForeColor(bool connected)
     {
-        if (!connected)
-        {
-            _detailLabel.ForeColor = UiColors.StatusBarErrorDetailFore;
-            return;
-        }
-
-        if (_selectionMissing)
-        {
-            _detailLabel.ForeColor = UiColors.StatusBarErrorDetailFore;
-            return;
-        }
-
-        // Keep Target 中は「このパスへ書き出す」ことを警告色で明示する（未選択エラーにはしない）。
-        _detailLabel.ForeColor = _keepTargetWarning
-            ? UiColors.LogWarning
+        _detailLabel.ForeColor = !connected || _selectionMissing
+            ? UiColors.StatusBarErrorDetailFore
             : UiColors.StatusBarDetailFore;
     }
 
     public void SetPending()
     {
         _selectionMissing = false;
+        _keepLockEnabled = false;
+        _showKeepLock = false;
         _badgeText = "…";
         SetBadgeNeutral();
-        _detailLabel.Text = "確認中…";
-        _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
-        LayoutLabels();
+        SetPlainDetail("確認中…", UiColors.StatusBarTitleFore);
     }
 
     public void SetSkipped()
     {
         _selectionMissing = false;
+        _keepLockEnabled = false;
+        _showKeepLock = false;
         _badgeText = "—";
         SetBadgeNeutral();
-        _detailLabel.Text = "起動時チェックオフ";
-        _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
-        LayoutLabels();
+        SetPlainDetail("起動時チェックオフ", UiColors.StatusBarTitleFore);
     }
 
     public void SetResult(WaapiProbeResult result)
     {
+        _keepLockEnabled = result.Ok;
         if (result.Ok)
         {
             _selectionMissing = !result.HasSelection;
-            _keepTargetWarning = false;
             SetBadgeConnected();
             ApplyDetailForeColor(connected: true);
+            SetConnectedDetail(
+                result.WwiseVersion,
+                result.ProjectName,
+                result.HasSelection ? result.SelectedPath : "（未選択）");
         }
         else
         {
             _selectionMissing = false;
-            _keepTargetWarning = false;
+            _showKeepLock = false;
             SetBadgeDisconnected();
             ApplyDetailForeColor(connected: false);
+            SetPlainDetail(
+                result.Message.Length > 0 ? result.Message : "未接続",
+                UiColors.StatusBarErrorDetailFore);
         }
-
-        _detailLabel.Text = result.FormatStatusDetail();
-        LayoutLabels();
     }
 
     /// <summary>
     /// 接続維持中の表示更新。
-    /// <paramref name="keepTarget"/> が true のときは表示パスを Keep 先として扱い、
-    /// Wwise 上の選択有無ではエラーにしない（警告色で Keep 先を明示）。
+    /// <paramref name="keepTarget"/> が true のときは表示パスを固定先として扱い、
+    /// Wwise 上の選択有無ではエラーにしない（末尾の鍵で固定状態を示す）。
     /// </summary>
     public void UpdateSelection(
         string wwiseVersion,
@@ -245,37 +288,78 @@ internal sealed class WaapiStatusBar : Panel
         string selectedPath,
         bool keepTarget = false)
     {
-        _keepTargetWarning = keepTarget && selectedPath.Length > 0;
+        _keepLockEnabled = true;
+        if (keepTarget != _keepTargetChecked)
+        {
+            _keepTargetChecked = keepTarget;
+            UpdateKeepLockAppearance();
+        }
+
         _selectionMissing = keepTarget
             ? selectedPath.Length == 0
             : string.IsNullOrEmpty(selectedPath);
         SetBadgeConnected();
         ApplyDetailForeColor(connected: true);
+        SetConnectedDetail(
+            wwiseVersion,
+            projectName,
+            string.IsNullOrEmpty(selectedPath) ? "（未選択）" : selectedPath);
+    }
 
-        var parts = new List<string>();
-        if (wwiseVersion.Length > 0)
-        {
-            parts.Add(wwiseVersion);
-        }
+    private void SetPlainDetail(string text, Color foreColor)
+    {
+        _showKeepLock = false;
+        _detailLabel.Text = text;
+        _detailLabel.ForeColor = foreColor;
+        LayoutLabels();
+    }
 
+    private void SetConnectedDetail(string wwiseVersion, string projectName, string pathText)
+    {
+        _showKeepLock = true;
+        var parts = new List<string> { FormatDisplayVersion(wwiseVersion) };
         if (projectName.Length > 0)
         {
             parts.Add(projectName);
         }
 
-        if (keepTarget)
+        parts.Add(pathText);
+        _detailLabel.Text = string.Join(" - ", parts);
+        LayoutLabels();
+    }
+
+    /// <summary>表示用に <c>Wwise v2024.1.6</c> 形式へ揃える。</summary>
+    private static string FormatDisplayVersion(string wwiseVersion)
+    {
+        if (string.IsNullOrWhiteSpace(wwiseVersion))
         {
-            parts.Add(selectedPath.Length > 0
-                ? $"Keep → {selectedPath}"
-                : "Keep → （未設定）");
-        }
-        else
-        {
-            parts.Add(string.IsNullOrEmpty(selectedPath) ? "（未選択）" : selectedPath);
+            return "Wwise";
         }
 
-        _detailLabel.Text = string.Join("  ·  ", parts);
-        LayoutLabels();
+        var text = wwiseVersion.Trim();
+        if (text.StartsWith("Wwise v", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("Wwise V", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Wwise v" + text["Wwise ".Length..].TrimStart('v', 'V', ' ');
+        }
+
+        if (text.StartsWith("Wwise ", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = text["Wwise ".Length..].Trim();
+            if (rest.StartsWith('v') || rest.StartsWith('V'))
+            {
+                rest = rest[1..].TrimStart();
+            }
+
+            return rest.Length > 0 ? $"Wwise v{rest}" : "Wwise";
+        }
+
+        if (text.StartsWith('v') || text.StartsWith('V'))
+        {
+            return $"Wwise v{text[1..].TrimStart()}";
+        }
+
+        return $"Wwise v{text}";
     }
 
     private void LayoutLabels()
@@ -303,19 +387,28 @@ internal sealed class WaapiStatusBar : Panel
             badgeWidth,
             textSize.Height + padY * 2);
 
-        var keepSize = _keepTargetCheckBox.GetPreferredSize(Size.Empty);
-        var keepLeft = Math.Max(
-            _badgeFillBounds.Right + 12,
-            ClientSize.Width - Padding.Right - keepSize.Width);
-        var keepTop = Math.Max(0, (ClientSize.Height - keepSize.Height) / 2);
-        _keepTargetCheckBox.Location = new Point(keepLeft, keepTop);
-        _keepTargetCheckBox.Size = keepSize;
-
+        // 省略なし。全文＋末尾鍵＋状態ラベルをそのまま並べる。
+        const int gapBeforeLock = 6;
+        const int gapBeforeState = 2;
         var detailX = _badgeFillBounds.Right + 12;
-        var detailRight = keepLeft - 8;
+        _detailLabel.AutoSize = true;
+        _detailLabel.AutoEllipsis = false;
         _detailLabel.Location = new Point(detailX, titleMidY);
-        _detailLabel.Width = Math.Max(0, detailRight - detailX);
-        _detailLabel.Height = _detailLabel.PreferredHeight;
+
+        _keepLockButton.Visible = _showKeepLock;
+        _keepLockButton.Enabled = _keepLockEnabled;
+        _keepStateLabel.Visible = _showKeepLock;
+        if (_showKeepLock)
+        {
+            _keepStateLabel.Text = _keepTargetChecked ? "- Keep Target -" : "- Not Keep Target -";
+            var lockLeft = _detailLabel.Right + gapBeforeLock;
+            var lockTop = Math.Max(0, (ClientSize.Height - _keepLockButton.Height) / 2);
+            _keepLockButton.Location = new Point(lockLeft, lockTop);
+
+            var stateMidY = Math.Max(0, (ClientSize.Height - _keepStateLabel.PreferredHeight) / 2);
+            _keepStateLabel.Location = new Point(_keepLockButton.Right + gapBeforeState, stateMidY);
+        }
+
         Invalidate();
     }
 

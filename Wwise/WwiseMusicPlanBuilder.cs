@@ -27,7 +27,7 @@ internal static class WwiseMusicPlanBuilder
         IReadOnlyDictionary<int, string>? playlistNameOverrides = null,
         string? outputDirectory = null,
         IReadOnlyDictionary<int, PlaylistExitSourceMode>? partExitSourceModes = null,
-        PlaylistExitSourceMode defaultExitSourceAt = PlaylistExitSourceMode.NextBar)
+        PlaylistExitSourceMode defaultExitSourceAt = PlaylistExitSourceMode.Immediate)
     {
         if (sampleRate == 0)
         {
@@ -316,6 +316,7 @@ internal static class WwiseMusicPlanBuilder
         {
             Name = playlistName,
             SourceWavPath = sourceWavPath,
+            SourcePartNumbers = [part.Number],
             ExitSourceAt = exitSourceAt,
             Segments = segments,
         };
@@ -436,6 +437,7 @@ internal static class WwiseMusicPlanBuilder
         {
             Name = playlistName,
             SourceWavPath = memberPlans[0].WavPath,
+            SourcePartNumbers = parts.Select(p => p.Number).ToArray(),
             ExitSourceAt = exitSourceAt,
             Segments = segments,
         };

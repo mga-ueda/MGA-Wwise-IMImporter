@@ -99,6 +99,7 @@ public partial class Form1 : Form
     private DeveloperSettings _developerSettings = new();
     private WaapiSettings _waapiSettings = new();
     private ProjectSettingsStore _projectStore = ProjectSettingsStore.Load();
+    private AppSettings _appSettings = AppSettings.Load();
     private string _loadedProjectName = ProjectSettingsStore.DefaultName;
     private bool _creatingNewProject;
     private bool _suppressProjectUiEvents;
@@ -141,9 +142,9 @@ public partial class Form1 : Form
     private double _playlistFadeInSeconds;
     private double _playlistFadeSeconds;
     /// <summary>プロジェクト既定の Exit Source At（パート未設定時のフォールバック。編集では書き換えない）。</summary>
-    private PlaylistExitSourceMode _playlistExitSourceMode = PlaylistExitSourceMode.NextBar;
+    private PlaylistExitSourceMode _playlistExitSourceMode = PlaylistExitSourceMode.Immediate;
 
-    /// <summary>パート番号 → Exit Source At（Last Wave セッションへ永続化）。</summary>
+    /// <summary>パート番号 → Exit Source At（Last Session へ永続化）。</summary>
     private readonly Dictionary<int, PlaylistExitSourceMode> _playlistExitSourceModes = new();
 
     /// <summary>パート番号 → Fade In 秒数。</summary>
@@ -186,13 +187,13 @@ public partial class Form1 : Form
     private double _playlistTransitionGlowLevel;
     private double? _pendingWaveformScrollStart;
 
-    /// <summary>パート番号 → グループ ID（Last Wave セッションへ永続化）。</summary>
+    /// <summary>パート番号 → グループ ID（Last Session へ永続化）。</summary>
     private readonly Dictionary<int, int> _playlistPartGroupIds = new();
 
     /// <summary>グループ ID → 色パレット index（作成順）。</summary>
     private readonly Dictionary<int, int> _playlistGroupColorIndexes = new();
 
-    /// <summary>書き出し対象外のパート番号（Last Wave セッションへ永続化）。</summary>
+    /// <summary>書き出し対象外のパート番号（Last Session へ永続化）。</summary>
     private readonly HashSet<int> _disabledPlaylistPartNumbers = [];
 
     private int _nextPlaylistGroupId = 1;
@@ -323,6 +324,7 @@ public partial class Form1 : Form
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
         WireProjectBarEvents();
+        ApplyAppSettings();
         ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
 #if DEBUG
         detailedLogCheckBox.Checked = _developerSettings.DetailedPlaybackLog;
@@ -447,8 +449,18 @@ public partial class Form1 : Form
         Activate();
 
         // 起動時にプロジェクト名コンボが先頭フォーカス／全選択になるのを防ぐ。
-        projectNameComboBox.ClearTextSelection();
+        projectNameComboBox.DismissTransientSelection();
         ReleaseFocusToWaveform();
+        BeginInvoke(() =>
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            projectNameComboBox.DismissTransientSelection();
+            ReleaseFocusToWaveform();
+        });
 
         BeginInvoke(RunStartupSequenceAsync);
     }
@@ -494,7 +506,7 @@ public partial class Form1 : Form
 
             if (!IsDisposed)
             {
-                lastSessionLoadStarted = LoadLastWaveAsDropped();
+                lastSessionLoadStarted = RestoreKeepLastSessionIfEnabled();
             }
         }
         finally
@@ -559,13 +571,13 @@ public partial class Form1 : Form
             var projectFile = livePath.Length > 0
                 ? (_waapiLastResult?.ProjectFilePath ?? string.Empty)
                 : _keptTargetProjectFilePath;
-            PersistKeepTargetToProject(true, pathToKeep, projectFile);
+            PersistKeepTarget(true, pathToKeep, projectFile);
             AppendReport(
                 $"Keep Target : ON（このパスへ書き出します → {pathToKeep}）{Environment.NewLine}");
         }
         else
         {
-            PersistKeepTargetToProject(false, _keptTargetPath, _keptTargetProjectFilePath);
+            PersistKeepTarget(false, _keptTargetPath, _keptTargetProjectFilePath);
             AppendReport($"Keep Target : OFF（Wwise の選択に追従します）{Environment.NewLine}");
         }
 
@@ -574,7 +586,7 @@ public partial class Form1 : Form
         ReleaseFocusToWaveform();
     }
 
-    private void PersistKeepTargetToProject(
+    private void PersistKeepTarget(
         bool enabled,
         string keptTargetPath,
         string keptTargetProjectFilePath)
@@ -582,75 +594,19 @@ public partial class Form1 : Form
         _keepTarget = enabled;
         _keptTargetPath = keptTargetPath.Trim();
         _keptTargetProjectFilePath = keptTargetProjectFilePath.Trim();
-        if (_creatingNewProject || !_projectStore.ContainsName(_loadedProjectName))
-        {
-            return;
-        }
-
-        _projectStore.SaveKeepTarget(
-            _loadedProjectName,
+        _appSettings.SaveKeepTarget(
             enabled,
             _keptTargetPath,
             _keptTargetProjectFilePath);
     }
 
-    private void PersistMarkersToProject()
-    {
-        if (_suppressProjectUiEvents
-            || _creatingNewProject
-            || !_projectStore.ContainsName(_loadedProjectName))
-        {
-            return;
-        }
+    private void PersistMarkersToProject() => AutosaveCurrentProject();
 
-        _projectStore.SaveMarkers(_loadedProjectName, _markerSettings);
-    }
+    private void PersistStreamingToProject() => AutosaveCurrentProject();
 
-    private void PersistStreamingToProject()
-    {
-        if (_suppressProjectUiEvents
-            || _creatingNewProject
-            || !_projectStore.ContainsName(_loadedProjectName))
-        {
-            return;
-        }
+    private void PersistLoudnessToProject() => AutosaveCurrentProject();
 
-        _projectStore.SaveStreaming(
-            _loadedProjectName,
-            markerOptionsPanel.StreamEnabled,
-            markerOptionsPanel.LookAheadMs,
-            markerOptionsPanel.PrefetchLengthMs);
-    }
-
-    private void PersistLoudnessToProject()
-    {
-        if (_suppressProjectUiEvents
-            || _creatingNewProject
-            || !_projectStore.ContainsName(_loadedProjectName))
-        {
-            return;
-        }
-
-        _projectStore.SaveLoudness(
-            _loadedProjectName,
-            markerOptionsPanel.LoudnessNormalizeEnabled,
-            markerOptionsPanel.LoudnessTargetLkfs,
-            markerOptionsPanel.LoudnessPreserveGroupBalance);
-    }
-
-    private void PersistMoreOptionsToProject()
-    {
-        if (_suppressProjectUiEvents
-            || _creatingNewProject
-            || !_projectStore.ContainsName(_loadedProjectName))
-        {
-            return;
-        }
-
-        _projectStore.SaveMoreOptionsExpanded(
-            _loadedProjectName,
-            markerOptionsPanel.MoreOptionsExpanded);
-    }
+    private void PersistMoreOptionsToProject() => AutosaveCurrentProject();
 
     private string GetDisplayTargetPath()
     {
@@ -1309,12 +1265,19 @@ public partial class Form1 : Form
         }
 
         // 名前編集中やマーカーコメント／Stream 入力中はフォーカスを奪わない。
-        // プロジェクト書き出し先（ReadOnly）は例外で波形へ戻す。
+        // プロジェクト書き出し先（ReadOnly）とプロジェクト名コンボは例外で波形へ戻す。
+        // （コンボの子 EDIT を通常 TextBox と誤判定すると、全選択ハイライトが残る）
         // Form.ActiveControl は UserControl 止まりのため、入れ子の ActiveControl を辿る。
         if (GetDeepActiveControl() is TextBox textBox
-            && !ReferenceEquals(textBox, projectOutputPathTextBox))
+            && !ReferenceEquals(textBox, projectOutputPathTextBox)
+            && !projectNameComboBox.ContainsFocus)
         {
             return;
+        }
+
+        if (projectNameComboBox.ContainsFocus)
+        {
+            projectNameComboBox.DismissTransientSelection();
         }
 
         waveformView.Focus();
@@ -1531,6 +1494,18 @@ public partial class Form1 : Form
         reloadButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
         reloadButton.BorderSize = 2;
 
+        clearButton.BackColor = UiColors.ForControlBack(UiColors.ClearButtonFill);
+        clearButton.ForeColor = UiColors.ClearButtonFore;
+        clearButton.HoverBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
+        clearButton.PressedBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
+        clearButton.DisabledBackColor = innerBack;
+        clearButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
+        clearButton.BorderColor = UiColors.ForControlBack(UiColors.ClearButtonBack);
+        clearButton.HoverBorderColor = UiColors.ForControlBack(UiColors.ClearButtonHoverBack);
+        clearButton.PressedBorderColor = UiColors.ForControlBack(UiColors.ClearButtonPressedBack);
+        clearButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
+        clearButton.BorderSize = 2;
+
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.BackColor = actionBar.BackColor;
         RefreshFlatOptionControl(detailedLogCheckBox);
@@ -1566,11 +1541,10 @@ public partial class Form1 : Form
         projectOutputPathTextBox.BorderColor = UiColors.ProjectBarBorder;
         var iconFore = UiColors.LogButtonFore;
         ApplyProjectIconButtonColors(projectFolderButton, iconFore, barBack);
-        ApplyProjectIconButtonColors(projectSaveButton, iconFore, barBack);
         ApplyProjectIconButtonColors(projectDeleteButton, iconFore, barBack);
-        loadLastWaveCheckBox.ForeColor = UiColors.ActionOptionFore;
-        loadLastWaveCheckBox.BackColor = barBack;
-        RefreshFlatOptionControl(loadLastWaveCheckBox);
+        keepLastSessionCheckBox.ForeColor = UiColors.ActionOptionFore;
+        keepLastSessionCheckBox.BackColor = barBack;
+        RefreshFlatOptionControl(keepLastSessionCheckBox);
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
@@ -1600,8 +1574,8 @@ public partial class Form1 : Form
         projectNameComboBox.SelectedIndexChanged += ProjectNameComboBox_SelectedIndexChanged;
         projectNameComboBox.SelectionChangeCommitted += ProjectNameComboBox_SelectionChangeCommitted;
         projectNameComboBox.DropDownClosed += ProjectNameComboBox_DropDownClosed;
+        projectNameComboBox.Leave += ProjectNameComboBox_Leave;
         projectFolderButton.Click += ProjectFolderButton_Click;
-        projectSaveButton.Click += ProjectSaveButton_Click;
         projectDeleteButton.Click += ProjectDeleteButton_Click;
         projectOutputPathTextBox.GotFocus += ProjectOutputPathTextBox_GotFocus;
         projectOutputPathTextBox.Enter += (_, _) => HideProjectPathCaret();
@@ -1745,11 +1719,32 @@ public partial class Form1 : Form
             }
 
             // SelectedIndex 設定で全選択になるため、直後に解除する。
-            projectNameComboBox.ClearTextSelection();
+            projectNameComboBox.DismissTransientSelection();
         }
         finally
         {
             projectNameComboBox.EndUpdate();
+            _suppressProjectUiEvents = false;
+        }
+    }
+
+    private void ApplyAppSettings()
+    {
+        _suppressProjectUiEvents = true;
+        try
+        {
+            topMostCheckBox.CheckedChanged -= TopMostCheckBox_CheckedChanged;
+            topMostCheckBox.Checked = _appSettings.AlwaysOnTop;
+            topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
+            TopMost = _appSettings.AlwaysOnTop;
+
+            _keepTarget = _appSettings.KeepTarget;
+            _keptTargetPath = _appSettings.KeptTargetPath?.Trim() ?? string.Empty;
+            _keptTargetProjectFilePath = _appSettings.KeptTargetProjectFilePath?.Trim() ?? string.Empty;
+            waapiStatusBar.KeepTargetChecked = _keepTarget;
+        }
+        finally
+        {
             _suppressProjectUiEvents = false;
         }
     }
@@ -1776,7 +1771,9 @@ public partial class Form1 : Form
             markerOptionsPanel.BindLoudness(
                 profile.LoudnessNormalizeEnabled,
                 profile.LoudnessTargetLkfs,
-                profile.LoudnessPreserveGroupBalance);
+                profile.LoudnessPreserveGroupBalance,
+                profile.AutoVolumeEnabled,
+                profile.AutoVolumeTarget);
             markerOptionsPanel.BindMoreOptions(profile.MoreOptionsExpanded);
             waveformView.MarkerGridOverride = _markerSettings.GridOverride;
             if (_previewSession is { } session)
@@ -1785,36 +1782,22 @@ public partial class Form1 : Form
                 waveformView.SetMarkers(session.EffectiveMarkers);
             }
 
-            SelectFadeRadio(fadeInChoicesPanel, profile.FadeInSeconds, FadeInTimeRadio_CheckedChanged);
-            SelectFadeRadio(transitionTimeChoicesPanel, profile.FadeOutSeconds, TransitionTimeRadio_CheckedChanged);
             _playlistFadeInSeconds = profile.FadeInSeconds;
             _playlistFadeSeconds = profile.FadeOutSeconds;
             _playlistExitSourceMode = profile.ExitSourceAt;
-            if (_transitionSettingsEditPartNumber is int editPart)
-            {
-                ShowTransitionSettingsForPart(editPart);
-            }
-            else
-            {
-                SelectExitSourceRadio(profile.ExitSourceAt);
-            }
+            _playlistGroupFadeInSeconds = 0d;
+            _playlistGroupFadeOutSeconds = 0d;
+            // パート別記憶を捨て、プロジェクト既定をラジオへ出す。
+            ClearPlaylistTransitionSettingsState();
 
             compactFileNumbersCheckBox.CheckedChanged -= CompactFileNumbersCheckBox_CheckedChanged;
             compactFileNumbersCheckBox.Checked = profile.CompactFileNumbers;
             compactFileNumbersCheckBox.CheckedChanged += CompactFileNumbersCheckBox_CheckedChanged;
-            loadLastWaveCheckBox.CheckedChanged -= LoadLastWaveCheckBox_CheckedChanged;
-            loadLastWaveCheckBox.Checked = profile.LoadLastWaveOnStartup;
-            loadLastWaveCheckBox.CheckedChanged += LoadLastWaveCheckBox_CheckedChanged;
-            _lastWavePath = profile.LastWavePath?.Trim() ?? string.Empty;
-            topMostCheckBox.CheckedChanged -= TopMostCheckBox_CheckedChanged;
-            topMostCheckBox.Checked = profile.AlwaysOnTop;
-            topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
-            TopMost = profile.AlwaysOnTop;
 
-            _keepTarget = profile.KeepTarget;
-            _keptTargetPath = profile.KeptTargetPath?.Trim() ?? string.Empty;
-            _keptTargetProjectFilePath = profile.KeptTargetProjectFilePath?.Trim() ?? string.Empty;
-            waapiStatusBar.KeepTargetChecked = _keepTarget;
+            keepLastSessionCheckBox.CheckedChanged -= KeepLastSessionCheckBox_CheckedChanged;
+            keepLastSessionCheckBox.Checked = profile.KeepLastSession;
+            keepLastSessionCheckBox.CheckedChanged += KeepLastSessionCheckBox_CheckedChanged;
+            _lastWavePath = profile.LastWavePath?.Trim() ?? string.Empty;
 
             if (selectInCombo)
             {
@@ -1887,7 +1870,7 @@ public partial class Form1 : Form
             }
         }
 
-        match ??= exitSourceNextBarRadio;
+        match ??= exitSourceImmediateRadio;
         match.CheckedChanged -= ExitSourceAtRadio_CheckedChanged;
         match.Checked = true;
         match.CheckedChanged += ExitSourceAtRadio_CheckedChanged;
@@ -2148,20 +2131,18 @@ public partial class Form1 : Form
         profile.ExitSourceAt = _playlistExitSourceMode;
         profile.CopyMarkerFrom(_markerSettings);
         profile.CompactFileNumbers = compactFileNumbersCheckBox.Checked;
-        profile.AlwaysOnTop = topMostCheckBox.Checked;
-        profile.LoadLastWaveOnStartup = loadLastWaveCheckBox.Checked;
-        profile.LastWavePath = _lastWavePath;
         profile.OutputDirectory = _projectOutputDirectory;
-        profile.KeepTarget = _keepTarget;
-        profile.KeptTargetPath = _keptTargetPath;
-        profile.KeptTargetProjectFilePath = _keptTargetProjectFilePath;
         profile.LookAheadMs = markerOptionsPanel.LookAheadMs;
         profile.PrefetchLengthMs = markerOptionsPanel.PrefetchLengthMs;
         profile.StreamEnabled = markerOptionsPanel.StreamEnabled;
         profile.LoudnessNormalizeEnabled = markerOptionsPanel.LoudnessNormalizeEnabled;
         profile.LoudnessTargetLkfs = markerOptionsPanel.LoudnessTargetLkfs;
         profile.LoudnessPreserveGroupBalance = markerOptionsPanel.LoudnessPreserveGroupBalance;
+        profile.AutoVolumeEnabled = markerOptionsPanel.AutoVolumeEnabled;
+        profile.AutoVolumeTarget = markerOptionsPanel.AutoVolumeTarget;
         profile.MoreOptionsExpanded = markerOptionsPanel.MoreOptionsExpanded;
+        profile.KeepLastSession = keepLastSessionCheckBox.Checked;
+        profile.LastWavePath = _lastWavePath?.Trim() ?? string.Empty;
         return profile;
     }
 
@@ -2191,8 +2172,10 @@ public partial class Form1 : Form
             return;
         }
 
+        ClearLoadedWaveAndSession();
         ApplyProjectProfile(_projectStore.GetRequired(selected), selectInCombo: false);
         _projectStore.SetActive(selected);
+        RestoreKeepLastSessionIfEnabled();
         ReleaseProjectComboFocus();
     }
 
@@ -2230,28 +2213,125 @@ public partial class Form1 : Form
                 return;
             }
 
-            projectNameComboBox.ClearTextSelection();
+            projectNameComboBox.DismissTransientSelection();
             ReleaseFocusToWaveform();
+
+            // ComboBox が選択直後にフォーカス／全選択を取り戻すことがあるのでもう一度。
+            BeginInvoke(() =>
+            {
+                if (IsDisposed || _creatingNewProject)
+                {
+                    return;
+                }
+
+                projectNameComboBox.DismissTransientSelection();
+                if (projectNameComboBox.ContainsFocus)
+                {
+                    ReleaseFocusToWaveform();
+                }
+            });
         });
     }
 
     private void BeginNewProjectDraft()
     {
-        var draftName = _projectStore.SuggestNewProjectName();
-        var profile = ProjectSettingsStore.CreateAppDefaults(draftName);
-        ApplyProjectProfile(profile, selectInCombo: false, asNewDraft: true);
-        _suppressProjectUiEvents = true;
+        ClearLoadedWaveAndSession();
+
+        var name = _projectStore.SuggestNewProjectName();
+        var profile = ProjectSettingsStore.CreateAppDefaults(name);
         try
         {
-            projectNameComboBox.SelectedIndex = -1;
-            projectNameComboBox.Text = draftName;
-            projectNameComboBox.SelectAll();
-            projectNameComboBox.Focus();
+            var savedName = _projectStore.SaveProfile(
+                currentName: string.Empty,
+                newName: name,
+                profile,
+                creatingNew: true);
+            ApplyProjectProfile(
+                _projectStore.GetRequired(savedName),
+                selectInCombo: true,
+                asNewDraft: false);
+            editorTextBox.Clear();
+            AppendReport(
+                $"=== Project ==={Environment.NewLine}"
+                + $"Message : プロジェクト「{savedName}」を作成しました（アプリ既定）。{Environment.NewLine}{Environment.NewLine}");
         }
-        finally
+        catch (Exception ex)
         {
-            _suppressProjectUiEvents = false;
+            OwnerCenteredMessageBox.Show(
+                this,
+                ex.Message,
+                "プロジェクトの作成に失敗",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
         }
+
+        ReleaseProjectComboFocus();
+    }
+
+    /// <summary>
+    /// 読み込み中の波形・再生・Playlist／セッション状態をすべて卸す。
+    /// </summary>
+    private void ClearLoadedWaveAndSession()
+    {
+        _exportGeneration++;
+        _playheadTimer.Stop();
+        _audioPlayer.Clear();
+        waveformView.ClearPreview();
+        _loadedPreview = null;
+        _previewSession = null;
+        _sourceBaseNameOverride = null;
+        _lastInputFiles = [];
+        reloadButton.Enabled = false;
+        ClearPendingPlaylistUiTransition();
+        ClearPlaylistChoices("Playlist はありません");
+        UpdateTransportPosition();
+        UpdateTransportPlaybackState();
+        UpdateSourceLevelMeter();
+        UpdateWaveformHorizontalScrollBar();
+        UpdateExportButtonState();
+    }
+
+    /// <summary>
+    /// 波形・セッションを卸し、選択中プロジェクトの設定をアプリ既定へ戻して保存する。
+    /// Always on Top／Keep Target はアプリ設定のため変更しない。
+    /// プロジェクト名／一覧は消さない。
+    /// </summary>
+    private void ClearCurrentProjectToDefaults()
+    {
+        ClearLoadedWaveAndSession();
+
+        var name = _creatingNewProject || string.IsNullOrWhiteSpace(_loadedProjectName)
+            ? _projectStore.ActiveName
+            : _loadedProjectName;
+        _creatingNewProject = false;
+
+        var profile = ProjectSettingsStore.CreateAppDefaults(name);
+        if (_projectStore.ContainsName(name))
+        {
+            try
+            {
+                _projectStore.SaveProfile(name, name, profile, creatingNew: false);
+                ProjectSettingsStore.DeleteLastWaveSessionFile(name);
+            }
+            catch (Exception ex)
+            {
+                OwnerCenteredMessageBox.Show(
+                    this,
+                    ex.Message,
+                    "プロジェクトのクリアに失敗",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
+                return;
+            }
+        }
+
+        ApplyProjectProfile(profile, selectInCombo: true, asNewDraft: false);
+        editorTextBox.Clear();
+        AppendReport(
+            $"=== Project ==={Environment.NewLine}"
+            + $"Message : プロジェクト「{name}」をクリアしました（アプリ既定）。{Environment.NewLine}{Environment.NewLine}");
     }
 
     private void ProjectFolderButton_Click(object? sender, EventArgs e)
@@ -2268,29 +2348,50 @@ public partial class Form1 : Form
         {
             _projectOutputDirectory = dialog.SelectedPath.Trim();
             projectOutputPathTextBox.Text = _projectOutputDirectory;
+            AutosaveCurrentProject();
             UpdateExportButtonState();
         }
 
         ReleaseFocusToWaveform();
     }
 
-    private void ProjectSaveButton_Click(object? sender, EventArgs e)
+    /// <summary>
+    /// 現在の UI 状態を選択中プロジェクトへ即時保存する（無音）。
+    /// </summary>
+    private void AutosaveCurrentProject(bool allowRename = false)
     {
+        if (_suppressProjectUiEvents
+            || _creatingNewProject
+            || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
         try
         {
-            var newName = projectNameComboBox.Text;
+            var newName = allowRename
+                ? projectNameComboBox.Text.Trim()
+                : _loadedProjectName;
+            if (newName.Length == 0
+                || string.Equals(
+                    newName,
+                    ProjectSettingsStore.NewProjectMenuItem,
+                    StringComparison.Ordinal))
+            {
+                newName = _loadedProjectName;
+            }
+
             var profile = CaptureCurrentProfile(newName);
             var savedName = _projectStore.SaveProfile(
                 _loadedProjectName,
                 newName,
                 profile,
-                _creatingNewProject);
-            _creatingNewProject = false;
-            _loadedProjectName = savedName;
-            RefreshProjectComboItems(savedName);
-            AppendReport(
-                $"=== Project ==={Environment.NewLine}"
-                + $"Message : プロジェクト「{savedName}」を保存しました。{Environment.NewLine}{Environment.NewLine}");
+                creatingNew: false);
+            if (!string.Equals(savedName, _loadedProjectName, StringComparison.OrdinalIgnoreCase))
+            {
+                _loadedProjectName = savedName;
+                RefreshProjectComboItems(savedName);
+            }
         }
         catch (Exception ex)
         {
@@ -2300,9 +2401,41 @@ public partial class Form1 : Form
                 "プロジェクトの保存に失敗",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
+            // 改名失敗時は表示名を現在のロード名へ戻す。
+            if (allowRename)
+            {
+                _suppressProjectUiEvents = true;
+                try
+                {
+                    projectNameComboBox.Text = _loadedProjectName;
+                }
+                finally
+                {
+                    _suppressProjectUiEvents = false;
+                }
+            }
+        }
+    }
+
+    private void ProjectNameComboBox_Leave(object? sender, EventArgs e)
+    {
+        if (_suppressProjectUiEvents || _creatingNewProject)
+        {
+            return;
         }
 
-        ReleaseFocusToWaveform();
+        var typed = projectNameComboBox.Text.Trim();
+        if (typed.Length == 0
+            || string.Equals(typed, _loadedProjectName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                typed,
+                ProjectSettingsStore.NewProjectMenuItem,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        AutosaveCurrentProject(allowRename: true);
     }
 
     private void ProjectDeleteButton_Click(object? sender, EventArgs e)
@@ -2792,6 +2925,7 @@ public partial class Form1 : Form
         else
         {
             _playlistFadeSeconds = fadeSeconds;
+            AutosaveCurrentProject();
         }
 
         ApplyPlaylistSelectorColors();
@@ -2823,6 +2957,7 @@ public partial class Form1 : Form
         else
         {
             _playlistFadeInSeconds = fadeInSeconds;
+            AutosaveCurrentProject();
         }
 
         ApplyPlaylistSelectorColors();
@@ -2920,6 +3055,7 @@ public partial class Form1 : Form
         else
         {
             _playlistExitSourceMode = mode;
+            AutosaveCurrentProject();
         }
 
         ApplyPlaylistSelectorColors();
@@ -4527,11 +4663,18 @@ public partial class Form1 : Form
             + Environment.NewLine
             + "OFF: 元の番号を維持します（欠番が残ります）。");
         playlistToolTip.SetToolTip(
-            loadLastWaveCheckBox,
-            "起動時に、選択中のプロジェクトで最後に読み込んだ波形を再読み込みします。");
+            keepLastSessionCheckBox,
+            "起動時およびこのプロジェクトへ戻ったときに、最後の作業セッション（波形・グループ／無効化／追加マーカー／Fade・Exit Source At）を復元します（プロジェクト設定）。");
         playlistToolTip.SetToolTip(
             topMostCheckBox,
-            "ウィンドウを常に最前面へ表示します。");
+            "ウィンドウを常に最前面へ表示します（アプリ設定）。");
+        playlistToolTip.SetToolTip(
+            clearButton,
+            "波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻します。"
+            + Environment.NewLine
+            + "Always on Top／Keep Target はアプリ設定のため変わりません。"
+            + Environment.NewLine
+            + "プロジェクト自体は削除しません。");
         playlistToolTip.SetToolTip(
             reloadButton,
             "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
@@ -4641,27 +4784,41 @@ public partial class Form1 : Form
 
     private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
     {
-        TopMost = topMostCheckBox.Checked;
-        ReleaseFocusToWaveform();
-    }
-
-    private void LoadLastWaveCheckBox_CheckedChanged(object? sender, EventArgs e)
-    {
-        if (!_creatingNewProject && _projectStore.ContainsName(_loadedProjectName))
+        if (_suppressProjectUiEvents)
         {
-            _projectStore.SaveLoadLastWaveOnStartup(
-                _loadedProjectName,
-                loadLastWaveCheckBox.Checked);
+            return;
         }
 
+        TopMost = topMostCheckBox.Checked;
+        _appSettings.SaveAlwaysOnTop(topMostCheckBox.Checked);
         ReleaseFocusToWaveform();
     }
+
+    private void KeepLastSessionCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (_suppressProjectUiEvents)
+        {
+            return;
+        }
+
+        PersistKeepLastSessionToProject();
+        ReleaseFocusToWaveform();
+    }
+
+    private void PersistKeepLastSessionToProject() => AutosaveCurrentProject();
+
+    private void PersistLastWavePathToProject() => AutosaveCurrentProject();
 
     private void CompactFileNumbersCheckBox_CheckedChanged(object? sender, EventArgs e)
     {
         if (_loadedPreview is { } preview)
         {
             UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+
+        if (!_suppressProjectUiEvents)
+        {
+            AutosaveCurrentProject();
         }
 
         UpdateExportButtonState();
@@ -4906,6 +5063,17 @@ public partial class Form1 : Form
         ReleaseFocusToWaveform();
     }
 
+    private void ClearButton_Click(object? sender, EventArgs e)
+    {
+        if (_uiInteractionLocks != UiInteractionLock.None)
+        {
+            return;
+        }
+
+        ClearCurrentProjectToDefaults();
+        ReleaseFocusToWaveform();
+    }
+
     private void ReloadButton_Click(object? sender, EventArgs e)
     {
         if (_lastInputFiles.Count == 0)
@@ -5075,9 +5243,9 @@ public partial class Form1 : Form
     }
 
     /// <returns>読み込み処理を開始したら true（すりガラス解除は呼び出し側ではなく読み込み側が担当）。</returns>
-    private bool LoadLastWaveAsDropped()
+    private bool RestoreKeepLastSessionIfEnabled()
     {
-        if (!loadLastWaveCheckBox.Checked || string.IsNullOrWhiteSpace(_lastWavePath))
+        if (!keepLastSessionCheckBox.Checked || string.IsNullOrWhiteSpace(_lastWavePath))
         {
             return false;
         }
@@ -5231,10 +5399,7 @@ public partial class Form1 : Form
 
         _loadedPreview = preview;
         _lastWavePath = Path.GetFullPath(preview.SourcePath);
-        if (!_creatingNewProject && _projectStore.ContainsName(_loadedProjectName))
-        {
-            _projectStore.SaveLastWavePath(_loadedProjectName, _lastWavePath);
-        }
+        PersistLastWavePathToProject();
 
         UpdateTransportPosition();
         PopulatePlaylistChoices(preview.OutputParts);
@@ -5783,6 +5948,8 @@ public partial class Form1 : Form
                 markerOptionsPanel.LoudnessNormalizeEnabled,
                 markerOptionsPanel.LoudnessTargetLkfs,
                 markerOptionsPanel.LoudnessPreserveGroupBalance,
+                markerOptionsPanel.AutoVolumeEnabled,
+                markerOptionsPanel.AutoVolumeTarget,
                 updateExistingStateGroup,
                 progress));
         }

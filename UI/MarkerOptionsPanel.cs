@@ -41,6 +41,12 @@ internal sealed class MarkerOptionsPanel : UserControl
     private readonly Label _loudnessUnitLabel;
     private readonly FlatOptionCheckBox _loudnessGroupBalanceCheckBox;
 
+    private readonly SectionHeaderLabel _autoVolumeHeaderLabel;
+    private readonly FlatOptionCheckBox _autoVolumeCheckBox;
+    private readonly Panel _autoVolumeTargetPanel;
+    private readonly FlatOptionRadioButton _autoVolumeMakeUpGainRadio;
+    private readonly FlatOptionRadioButton _autoVolumeVoiceVolumeRadio;
+
     private readonly SectionHeaderLabel _moreOptionsHeaderLabel;
     private readonly SectionHeaderLabel _gridHeaderLabel;
     private readonly FlatOptionRadioButton _gridDefaultRadio;
@@ -73,6 +79,8 @@ internal sealed class MarkerOptionsPanel : UserControl
     private bool _loudnessNormalizeEnabled;
     private double _loudnessTargetLkfs = LoudnessTargetDefault;
     private bool _loudnessPreserveGroupBalance = true;
+    private bool _autoVolumeEnabled = true;
+    private AutoVolumeTarget _autoVolumeTarget = AutoVolumeTarget.MakeUpGain;
     private bool _moreOptionsExpanded = true;
 
     /// <summary>設定値が UI 操作で変更された（保存・適用は購読側で行う）。</summary>
@@ -91,7 +99,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         var headerFont = new Font("Yu Gothic UI", 8.5F, FontStyle.Bold);
 
         // 折りたたみ見出しの下に
-        // 上段: Stream | Loudness Normalize
+        // 上段: Stream | Loudness Normalize | Auto Volume
         // 下段: Marker Grid | Marker Comment
         var commentColumnGap = S(4);
         var streamPadL = S(12);
@@ -118,11 +126,21 @@ internal sealed class MarkerOptionsPanel : UserControl
         var loudnessCheckW = Math.Max(
             MeasureLabelWidth("Normalize", baseFont),
             MeasureLabelWidth("Preserve Group Balance", baseFont));
-        var loudnessW = loudnessPadL
+        var loudnessColW = loudnessPadL
             + Math.Max(
                 loudnessCheckW,
                 loudnessTargetLabelW + loudnessGap + loudnessTargetBoxW + loudnessGap + loudnessUnitW)
             + loudnessPadR;
+
+        var autoVolumePadL = S(12);
+        var autoVolumePadR = S(8);
+        var autoVolumeColW = autoVolumePadL
+            + Math.Max(
+                MeasureLabelWidth("Auto Volume", baseFont),
+                Math.Max(
+                    MeasureLabelWidth("Make-Up Gain", baseFont),
+                    MeasureLabelWidth("Voice Volume", baseFont)) + S(22))
+            + autoVolumePadR;
 
         var col2W = S(114);
         var col3PadL = S(12);
@@ -137,14 +155,16 @@ internal sealed class MarkerOptionsPanel : UserControl
         var commentW = col2W + commentColumnGap + col3PadL + col3LabelW + col3Gap + col3EditorW + col3PadR;
 
         var leftX = 1;
-        var rightX = leftX + leftColW;
-        var rightW = Math.Max(loudnessW, commentW);
-        RequiredWidth = rightX + rightW + S(8);
+        var loudnessX = leftX + leftColW;
+        var autoVolumeX = loudnessX + loudnessColW;
+        var rightBlockW = Math.Max(loudnessColW + autoVolumeColW, commentW);
+        RequiredWidth = loudnessX + rightBlockW + S(8);
 
         // 閉じた状態は More Options 見出しのみ。開くと直後に各セクションが続く。
         var moreOptionsHeaderY = 1;
         var row1HeaderY = moreOptionsHeaderY + S(HeaderHeight) + 1;
         var row1ContentTop = row1HeaderY + S(HeaderHeight) + 1;
+        // 上段は各列とも 3 行。
         var primaryBottom = row1ContentTop + RowPitch * 2 + RowHeight;
         // 見出し帯の下マージン（SectionHeaderLabel）と同程度の間隔を空ける。
         var row2HeaderY = primaryBottom + S(8);
@@ -201,20 +221,25 @@ internal sealed class MarkerOptionsPanel : UserControl
             row1ContentTop + RowPitch * 2,
             streamMsBoxW);
 
-        _loudnessHeaderLabel = CreateHeader("Loudness Normalize", headerFont, rightX, rightW, y: row1HeaderY);
+        _loudnessHeaderLabel = CreateHeader(
+            "Loudness Normalize",
+            headerFont,
+            loudnessX,
+            loudnessColW,
+            y: row1HeaderY);
         _loudnessEnabledCheckBox = new FlatOptionCheckBox
         {
             AutoSize = false,
             Font = baseFont,
-            Location = new Point(rightX + loudnessPadL, row1ContentTop),
-            Size = new Size(rightW - loudnessPadL - loudnessPadR, RowHeight),
+            Location = new Point(loudnessX + loudnessPadL, row1ContentTop),
+            Size = new Size(loudnessColW - loudnessPadL - loudnessPadR, RowHeight),
             Text = "Normalize",
         };
         _loudnessEnabledCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
         _loudnessTargetLabel = new Label
         {
             Font = baseFont,
-            Location = new Point(rightX + loudnessPadL, row1ContentTop + RowPitch),
+            Location = new Point(loudnessX + loudnessPadL, row1ContentTop + RowPitch),
             Size = new Size(loudnessTargetLabelW, RowHeight),
             Text = "Target",
             TextAlign = ContentAlignment.MiddleLeft,
@@ -229,7 +254,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Text = LoudnessTargetDefault.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
         };
         _loudnessTargetTextBox.Location = new Point(
-            rightX + loudnessPadL + loudnessTargetLabelW + loudnessGap,
+            loudnessX + loudnessPadL + loudnessTargetLabelW + loudnessGap,
             CenterInRow(row1ContentTop + RowPitch, _loudnessTargetTextBox.PreferredHeight));
         _loudnessTargetTextBox.KeyPress += LoudnessTargetTextBox_KeyPress;
         _loudnessTargetTextBox.Leave += LoudnessTargetTextBox_Leave;
@@ -250,11 +275,70 @@ internal sealed class MarkerOptionsPanel : UserControl
             AutoSize = false,
             Checked = true,
             Font = baseFont,
-            Location = new Point(rightX + loudnessPadL, row1ContentTop + RowPitch * 2),
-            Size = new Size(rightW - loudnessPadL - loudnessPadR, RowHeight),
+            Location = new Point(loudnessX + loudnessPadL, row1ContentTop + RowPitch * 2),
+            Size = new Size(loudnessColW - loudnessPadL - loudnessPadR, RowHeight),
             Text = "Preserve Group Balance",
         };
         _loudnessGroupBalanceCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
+
+        _autoVolumeHeaderLabel = CreateHeader(
+            "Auto Volume",
+            headerFont,
+            autoVolumeX,
+            autoVolumeColW,
+            y: row1HeaderY);
+        _autoVolumeCheckBox = new FlatOptionCheckBox
+        {
+            AutoSize = false,
+            Checked = true,
+            Font = baseFont,
+            Location = new Point(autoVolumeX + autoVolumePadL, row1ContentTop),
+            Size = new Size(autoVolumeColW - autoVolumePadL - autoVolumePadR, RowHeight),
+            Text = "Auto Volume",
+        };
+        _autoVolumeCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
+
+        // Grid ラジオと排他にならないよう、調整先ラジオは専用 Panel に縦一列で載せる。
+        var autoVolumeInnerW = autoVolumeColW - autoVolumePadL - autoVolumePadR;
+        _autoVolumeTargetPanel = new Panel
+        {
+            Location = new Point(autoVolumeX + autoVolumePadL, row1ContentTop + RowPitch),
+            Size = new Size(autoVolumeInnerW, RowPitch + RowHeight),
+            TabStop = false,
+        };
+        _autoVolumeMakeUpGainRadio = new FlatOptionRadioButton
+        {
+            Font = baseFont,
+            Location = new Point(0, 0),
+            Size = new Size(autoVolumeInnerW, RowHeight),
+            Tag = AutoVolumeTarget.MakeUpGain,
+            Text = "Make-Up Gain",
+            Checked = true,
+        };
+        _autoVolumeMakeUpGainRadio.CheckedChanged += (_, _) =>
+        {
+            if (_autoVolumeMakeUpGainRadio.Checked)
+            {
+                OnLoudnessUiChanged();
+            }
+        };
+        _autoVolumeVoiceVolumeRadio = new FlatOptionRadioButton
+        {
+            Font = baseFont,
+            Location = new Point(0, RowPitch),
+            Size = new Size(autoVolumeInnerW, RowHeight),
+            Tag = AutoVolumeTarget.VoiceVolume,
+            Text = "Voice Volume",
+        };
+        _autoVolumeVoiceVolumeRadio.CheckedChanged += (_, _) =>
+        {
+            if (_autoVolumeVoiceVolumeRadio.Checked)
+            {
+                OnLoudnessUiChanged();
+            }
+        };
+        _autoVolumeTargetPanel.Controls.Add(_autoVolumeMakeUpGainRadio);
+        _autoVolumeTargetPanel.Controls.Add(_autoVolumeVoiceVolumeRadio);
 
         _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, leftX, leftColW, y: row2HeaderY);
         _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, leftX, leftColW, row2ContentTop);
@@ -266,9 +350,14 @@ internal sealed class MarkerOptionsPanel : UserControl
             leftColW,
             row2ContentTop + RowPitch * 2);
 
-        var commentDigitsX = rightX;
-        var commentFieldsX = rightX + col2W + commentColumnGap;
-        _commentHeaderLabel = CreateHeader("Marker Comment", headerFont, rightX, rightW, y: row2HeaderY);
+        var commentDigitsX = loudnessX;
+        var commentFieldsX = loudnessX + col2W + commentColumnGap;
+        _commentHeaderLabel = CreateHeader(
+            "Marker Comment",
+            headerFont,
+            loudnessX,
+            rightBlockW,
+            y: row2HeaderY);
 
         _digitsLabel = new Label
         {
@@ -312,7 +401,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             AutoEllipsis = true,
             Font = baseFont,
             Location = new Point(commentDigitsX + S(12), row2ContentTop + RowPitch * 3),
-            Size = new Size(rightW - S(12), RowHeight),
+            Size = new Size(rightBlockW - S(12), RowHeight),
             Text = string.Empty,
             TextAlign = ContentAlignment.MiddleLeft,
         };
@@ -340,6 +429,9 @@ internal sealed class MarkerOptionsPanel : UserControl
             _loudnessTargetTextBox,
             _loudnessUnitLabel,
             _loudnessGroupBalanceCheckBox,
+            _autoVolumeHeaderLabel,
+            _autoVolumeCheckBox,
+            _autoVolumeTargetPanel,
             _gridHeaderLabel,
             _gridBarRadio,
             _gridBeatRadio,
@@ -422,6 +514,12 @@ internal sealed class MarkerOptionsPanel : UserControl
     /// <summary>グループ内の相対バランスを保って正規化するか。</summary>
     public bool LoudnessPreserveGroupBalance => _loudnessPreserveGroupBalance;
 
+    /// <summary>正規化ゲインの逆を Music Playlist へ戻すか。</summary>
+    public bool AutoVolumeEnabled => _autoVolumeEnabled;
+
+    /// <summary>Auto Volume の書き戻し先プロパティ。</summary>
+    public AutoVolumeTarget AutoVolumeTarget => _autoVolumeTarget;
+
     /// <summary>More Options が開いているか。</summary>
     public bool MoreOptionsExpanded => _moreOptionsExpanded;
 
@@ -488,11 +586,13 @@ internal sealed class MarkerOptionsPanel : UserControl
         UpdateDependentStates();
     }
 
-    /// <summary>Loudness Normalize を UI へ反映する。</summary>
+    /// <summary>Loudness Normalize／Auto Volume を UI へ反映する。</summary>
     public void BindLoudness(
         bool enabled,
         double targetLkfs,
-        bool preserveGroupBalance)
+        bool preserveGroupBalance,
+        bool autoVolumeEnabled = true,
+        AutoVolumeTarget autoVolumeTarget = AutoVolumeTarget.MakeUpGain)
     {
         _updating = true;
         try
@@ -503,6 +603,17 @@ internal sealed class MarkerOptionsPanel : UserControl
             _loudnessTargetTextBox.Text = FormatLoudnessTarget(_loudnessTargetLkfs);
             _loudnessPreserveGroupBalance = preserveGroupBalance;
             _loudnessGroupBalanceCheckBox.Checked = preserveGroupBalance;
+            _autoVolumeEnabled = autoVolumeEnabled;
+            _autoVolumeCheckBox.Checked = autoVolumeEnabled;
+            _autoVolumeTarget = autoVolumeTarget;
+            if (autoVolumeTarget == AutoVolumeTarget.VoiceVolume)
+            {
+                _autoVolumeVoiceVolumeRadio.Checked = true;
+            }
+            else
+            {
+                _autoVolumeMakeUpGainRadio.Checked = true;
+            }
         }
         finally
         {
@@ -539,6 +650,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         {
             _streamHeaderLabel,
             _loudnessHeaderLabel,
+            _autoVolumeHeaderLabel,
             _moreOptionsHeaderLabel,
             _gridHeaderLabel,
             _commentHeaderLabel,
@@ -567,7 +679,14 @@ internal sealed class MarkerOptionsPanel : UserControl
         _joinerLabel.ForeColor = optionFore;
         _previewLabel.BackColor = back;
 
-        foreach (var radio in new[] { _gridBarRadio, _gridBeatRadio, _gridDefaultRadio })
+        foreach (var radio in new[]
+        {
+            _gridBarRadio,
+            _gridBeatRadio,
+            _gridDefaultRadio,
+            _autoVolumeMakeUpGainRadio,
+            _autoVolumeVoiceVolumeRadio,
+        })
         {
             radio.BackColor = back;
             radio.ForeColor = optionFore;
@@ -579,6 +698,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             _streamEnabledCheckBox,
             _loudnessEnabledCheckBox,
             _loudnessGroupBalanceCheckBox,
+            _autoVolumeCheckBox,
             _zeroPadCheckBox,
             _resetPerPartCheckBox,
         })
@@ -587,6 +707,8 @@ internal sealed class MarkerOptionsPanel : UserControl
             checkBox.ForeColor = optionFore;
             checkBox.ApplyColors();
         }
+
+        _autoVolumeTargetPanel.BackColor = back;
 
         var inputBack = UiColors.ForControlBack(UiColors.DialogInputBack);
         foreach (var textBox in new[]
@@ -812,6 +934,10 @@ internal sealed class MarkerOptionsPanel : UserControl
         _prefetchTextBox.ReadOnly = !_streamEnabled;
         _loudnessTargetTextBox.ReadOnly = !_loudnessNormalizeEnabled;
         _loudnessGroupBalanceCheckBox.Enabled = _loudnessNormalizeEnabled;
+        _autoVolumeCheckBox.Enabled = _loudnessNormalizeEnabled;
+        var autoVolumeRadiosEnabled = _loudnessNormalizeEnabled && _autoVolumeEnabled;
+        _autoVolumeMakeUpGainRadio.Enabled = autoVolumeRadiosEnabled;
+        _autoVolumeVoiceVolumeRadio.Enabled = autoVolumeRadiosEnabled;
         _prefixTextBox.ReadOnly = false;
         _suffixTextBox.ReadOnly = false;
         _joinerTextBox.ReadOnly = false;
@@ -831,6 +957,13 @@ internal sealed class MarkerOptionsPanel : UserControl
         _loudnessUnitLabel.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
         _loudnessGroupBalanceCheckBox.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
         _loudnessGroupBalanceCheckBox.ApplyColors();
+        _autoVolumeCheckBox.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
+        _autoVolumeCheckBox.ApplyColors();
+        var autoVolumeRadiosEnabled = _loudnessNormalizeEnabled && _autoVolumeEnabled;
+        _autoVolumeMakeUpGainRadio.ForeColor = autoVolumeRadiosEnabled ? optionFore : disabledFore;
+        _autoVolumeVoiceVolumeRadio.ForeColor = autoVolumeRadiosEnabled ? optionFore : disabledFore;
+        _autoVolumeMakeUpGainRadio.ApplyColors();
+        _autoVolumeVoiceVolumeRadio.ApplyColors();
         _prefixLabel.ForeColor = optionFore;
         _suffixLabel.ForeColor = optionFore;
         _joinerLabel.ForeColor = optionFore;
@@ -961,17 +1094,25 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         var enabled = _loudnessEnabledCheckBox.Checked;
         var groupBalance = _loudnessGroupBalanceCheckBox.Checked;
+        var autoVolume = _autoVolumeCheckBox.Checked;
+        var autoTarget = _autoVolumeVoiceVolumeRadio.Checked
+            ? AutoVolumeTarget.VoiceVolume
+            : AutoVolumeTarget.MakeUpGain;
         var targetOk = TryParseLoudnessTarget(_loudnessTargetTextBox.Text, out var target);
         if (!targetOk)
         {
             if (enabled == _loudnessNormalizeEnabled
-                && groupBalance == _loudnessPreserveGroupBalance)
+                && groupBalance == _loudnessPreserveGroupBalance
+                && autoVolume == _autoVolumeEnabled
+                && autoTarget == _autoVolumeTarget)
             {
                 return;
             }
 
             _loudnessNormalizeEnabled = enabled;
             _loudnessPreserveGroupBalance = groupBalance;
+            _autoVolumeEnabled = autoVolume;
+            _autoVolumeTarget = autoTarget;
             UpdateDependentStates();
             SettingsChanged?.Invoke(this, EventArgs.Empty);
             return;
@@ -979,7 +1120,9 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         if (enabled == _loudnessNormalizeEnabled
             && Math.Abs(target - _loudnessTargetLkfs) < 0.0001
-            && groupBalance == _loudnessPreserveGroupBalance)
+            && groupBalance == _loudnessPreserveGroupBalance
+            && autoVolume == _autoVolumeEnabled
+            && autoTarget == _autoVolumeTarget)
         {
             return;
         }
@@ -987,6 +1130,8 @@ internal sealed class MarkerOptionsPanel : UserControl
         _loudnessNormalizeEnabled = enabled;
         _loudnessTargetLkfs = target;
         _loudnessPreserveGroupBalance = groupBalance;
+        _autoVolumeEnabled = autoVolume;
+        _autoVolumeTarget = autoTarget;
         UpdateDependentStates();
         SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -1056,11 +1201,12 @@ internal sealed class MarkerOptionsPanel : UserControl
             + " オフのときは Look-ahead Time／Prefetch Length は適用されません。");
         SetToolTip(_lookAheadLabel,
             "2 番目以降のセグメントの Look-ahead Time（ms、0〜9999。既定 500）。"
-            + " Stream オン時のみ有効。先頭セグメントは Zero latency のため 0 固定です。");
+            + " Stream オン時のみ有効。先頭セグメント内の全トラック（グループ化レイヤー含む）は Zero latency のため 0 固定です。");
         SetToolTip(_lookAheadTextBox,
             "Look-ahead Time（ms）。0〜9999。既定は 500 です。Stream オン時のみ有効。");
         SetToolTip(_prefetchLabel,
-            "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。");
+            "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。"
+            + " 先頭セグメントの 2 番目以降トラック（グループ化レイヤー）には Zero latency のみ適用します。");
         SetToolTip(_prefetchTextBox,
             "Prefetch Length（ms）。0〜9999。既定は 500 です。"
             + " Playlist 先頭セグメント先頭トラックにだけ反映されます。Stream オン時のみ有効。");
@@ -1081,6 +1227,15 @@ internal sealed class MarkerOptionsPanel : UserControl
             "オンの場合、グループ内で最も大きい音量のファイルを Target に合わせ、"
             + "他メンバーは相対バランスを保ったまま同じゲインを破壊編集で適用します（既定オン）。"
             + " オフでは各ファイルを個別に Target へ正規化します。");
+        SetToolTip(_autoVolumeCheckBox,
+            "オンの場合、Loudness Normalize で変化した音量の逆を Music Playlist の"
+            + " Make-Up Gain または Voice Volume へ書き戻します（既定オン）。Normalize オン時のみ有効。");
+        SetToolTip(_autoVolumeMakeUpGainRadio,
+            "Auto Volume の補償を Music Playlist の Make-Up Gain へ設定します（既定）。"
+            + " Voice Volume は 0 にします。");
+        SetToolTip(_autoVolumeVoiceVolumeRadio,
+            "Auto Volume の補償を Music Playlist の Voice Volume へ設定します。"
+            + " Make-Up Gain は 0 にします。");
         SetToolTip(_moreOptionsHeaderLabel,
             "Stream／Loudness Normalize／Marker Grid／Marker Comment を開閉します（既定は開いた状態）。"
             + " 開閉状態はプロジェクト設定へ自動保存されます。"

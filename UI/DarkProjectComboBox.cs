@@ -13,13 +13,21 @@ internal sealed class DarkProjectComboBox : ComboBox
     private const int WmEraseBkgnd = 0x0014;
     private const int WmPaint = 0x000F;
     private const int WmNcPaint = 0x0085;
+    private const int WmSetFocus = 0x0007;
+    private const int WmKillFocus = 0x0008;
+    private const int WmLButtonDown = 0x0201;
+    private const int WmLButtonDblClk = 0x0203;
     private const int EmSetSel = 0x00B1;
     private const int CbSetItemHeight = 0x0153;
     private const int CbGetItemHeight = 0x0154;
+    private const int GwlStyle = -16;
+    private const int EsNoHideSel = 0x0100;
 
     private bool _hovered;
+    private bool _clearingSelection;
     private int? _controlHeightTarget;
     private DropDownBorderWindow? _dropDownBorderWindow;
+    private EditSelectionGuard? _editGuard;
 
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hWnd, string? pszSubAppName, string? pszSubIdList);
@@ -42,8 +50,43 @@ internal sealed class DarkProjectComboBox : ComboBox
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
 
+    [DllImport("user32.dll")]
+    private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+    [DllImport("user32.dll")]
+    private static extern bool HideCaret(IntPtr hWnd);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+    private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    private static int GetWindowStyle(IntPtr hWnd) =>
+        IntPtr.Size == 8
+            ? unchecked((int)(long)GetWindowLongPtr64(hWnd, GwlStyle))
+            : GetWindowLong32(hWnd, GwlStyle);
+
+    private static void SetWindowStyle(IntPtr hWnd, int style)
+    {
+        if (IntPtr.Size == 8)
+        {
+            _ = SetWindowLongPtr64(hWnd, GwlStyle, (IntPtr)style);
+        }
+        else
+        {
+            _ = SetWindowLong32(hWnd, GwlStyle, style);
+        }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect
@@ -105,22 +148,63 @@ internal sealed class DarkProjectComboBox : ComboBox
     /// </summary>
     public void ClearTextSelection()
     {
-        SelectionLength = 0;
-        SelectionStart = Text?.Length ?? 0;
-
-        if (!IsHandleCreated)
+        // 自身が送る EM_SETSEL を EditSelectionGuard が再処理しないよう再入を抑止する。
+        if (_clearingSelection)
         {
             return;
         }
 
-        var info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
-        if (!GetComboBoxInfo(Handle, ref info) || info.HwndItem == IntPtr.Zero)
+        _clearingSelection = true;
+        try
         {
-            return;
-        }
+            try
+            {
+                SelectionLength = 0;
+                SelectionStart = Math.Min(SelectionStart, Text?.Length ?? 0);
+            }
+            catch
+            {
+                // Selection プロパティ失敗時も子 EDIT へ直接送る。
+            }
 
-        // EM_SETSEL(hwnd, -1, 0) で選択解除（キャレットは末尾）。
-        _ = SendMessage(info.HwndItem, EmSetSel, (IntPtr)(-1), IntPtr.Zero);
+            if (!IsHandleCreated || !TryGetEditHwnd(out var editHwnd))
+            {
+                return;
+            }
+
+            // フォーカス無しでも選択が残るスタイルを毎回剥がす（再作成・テーマ適用で戻ることがある）。
+            StripNoHideSel(editHwnd);
+
+            // 選択解除（開始=終了=0）。-1 指定は環境によって全選択に見えることがあるため使わない。
+            _ = SendMessage(editHwnd, EmSetSel, IntPtr.Zero, IntPtr.Zero);
+            _ = InvalidateRect(editHwnd, IntPtr.Zero, true);
+
+            // アイドル時はキャレットも隠す（フォーカスが残っていても「選択中」に見えにくくする）。
+            if (!DroppedDown)
+            {
+                _ = HideCaret(editHwnd);
+            }
+        }
+        finally
+        {
+            _clearingSelection = false;
+        }
+    }
+
+    /// <summary>ドロップダウン選択後など、ユーザー編集以外の全選択を打ち消す。</summary>
+    public void DismissTransientSelection()
+    {
+        _editGuard?.ResetUserSelectAllowance();
+        ClearTextSelection();
+    }
+
+    private static void StripNoHideSel(IntPtr editHwnd)
+    {
+        var style = GetWindowStyle(editHwnd);
+        if ((style & EsNoHideSel) != 0)
+        {
+            SetWindowStyle(editHwnd, style & ~EsNoHideSel);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -129,6 +213,13 @@ internal sealed class DarkProjectComboBox : ComboBox
         // ドロップダウン一覧のスクロールバーへ対応 OS のダークテーマを適用する。
         _ = SetWindowTheme(Handle, "DarkMode_CFD", null);
         ApplyControlHeightTarget();
+        AttachEditGuard();
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        DetachEditGuard();
+        base.OnHandleDestroyed(e);
     }
 
     /// <summary>
@@ -170,18 +261,51 @@ internal sealed class DarkProjectComboBox : ComboBox
     /// </summary>
     public Rectangle? GetEditItemBounds()
     {
-        if (!IsHandleCreated)
-        {
-            return null;
-        }
-
-        var info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
-        if (!GetComboBoxInfo(Handle, ref info))
+        if (!TryGetEditInfo(out var info))
         {
             return null;
         }
 
         return info.RcItem.ToRectangle();
+    }
+
+    private bool TryGetEditHwnd(out IntPtr editHwnd)
+    {
+        editHwnd = IntPtr.Zero;
+        if (!TryGetEditInfo(out var info) || info.HwndItem == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        editHwnd = info.HwndItem;
+        return true;
+    }
+
+    private bool TryGetEditInfo(out ComboBoxInfo info)
+    {
+        info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        return IsHandleCreated && GetComboBoxInfo(Handle, ref info);
+    }
+
+    private void AttachEditGuard()
+    {
+        DetachEditGuard();
+        if (!TryGetEditHwnd(out var editHwnd))
+        {
+            return;
+        }
+
+        // フォーカスが無くても選択ハイライトを残すスタイルを外す。
+        StripNoHideSel(editHwnd);
+
+        _editGuard = new EditSelectionGuard(editHwnd, this);
+        ClearTextSelection();
+    }
+
+    private void DetachEditGuard()
+    {
+        _editGuard?.ReleaseHandle();
+        _editGuard = null;
     }
 
     protected override void OnDropDown(EventArgs e)
@@ -195,6 +319,8 @@ internal sealed class DarkProjectComboBox : ComboBox
     {
         _dropDownBorderWindow?.ReleaseHandle();
         _dropDownBorderWindow = null;
+        // 一覧から選ぶと全選択になるため解除する。
+        BeginInvoke(DismissTransientSelection);
         Invalidate();
         base.OnDropDownClosed(e);
     }
@@ -203,6 +329,7 @@ internal sealed class DarkProjectComboBox : ComboBox
     {
         if (disposing)
         {
+            DetachEditGuard();
             _dropDownBorderWindow?.ReleaseHandle();
             _dropDownBorderWindow = null;
         }
@@ -223,10 +350,27 @@ internal sealed class DarkProjectComboBox : ComboBox
         PaintWindowBorder(info.HwndList);
     }
 
+    protected override void OnGotFocus(EventArgs e)
+    {
+        base.OnGotFocus(e);
+        // 起動時／タブ移動の自動全選択は消す（マウスクリック編集は Guard 側で許可）。
+        BeginInvoke(ClearTextSelection);
+    }
+
     protected override void OnLostFocus(EventArgs e)
     {
-        ClearTextSelection();
+        DismissTransientSelection();
         base.OnLostFocus(e);
+    }
+
+    protected override void OnSelectedIndexChanged(EventArgs e)
+    {
+        base.OnSelectedIndexChanged(e);
+        // SelectedIndex 設定でも全選択になるため、遅延で消す。
+        if (IsHandleCreated)
+        {
+            BeginInvoke(DismissTransientSelection);
+        }
     }
 
     protected override void OnMouseEnter(EventArgs e)
@@ -299,6 +443,70 @@ internal sealed class DarkProjectComboBox : ComboBox
         finally
         {
             _ = ReleaseDC(handle, hdc);
+        }
+    }
+
+    /// <summary>
+    /// 子 EDIT のフォーカス／選択を監視し、勝手な全選択ハイライトを抑止する。
+    /// </summary>
+    private sealed class EditSelectionGuard : NativeWindow
+    {
+        private readonly DarkProjectComboBox _owner;
+        private bool _allowUserSelect;
+        private bool _clearPosted;
+
+        public EditSelectionGuard(IntPtr handle, DarkProjectComboBox owner)
+        {
+            _owner = owner;
+            AssignHandle(handle);
+        }
+
+        public void ResetUserSelectAllowance() => _allowUserSelect = false;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg is WmLButtonDown or WmLButtonDblClk)
+            {
+                // ユーザーがドラッグ／ダブルクリックで選ぶときは消さない。
+                _allowUserSelect = true;
+            }
+
+            base.WndProc(ref m);
+
+            if (m.Msg == WmKillFocus)
+            {
+                _allowUserSelect = false;
+                _owner.ClearTextSelection();
+                return;
+            }
+
+            if (_allowUserSelect || _clearPosted || _owner._clearingSelection)
+            {
+                return;
+            }
+
+            // フォーカス取得や外部からの EM_SETSEL（全選択）を次ループで打ち消す。
+            // ClearTextSelection 内の EM_SETSEL は _clearingSelection で無視する。
+            if (m.Msg is not (WmSetFocus or EmSetSel))
+            {
+                return;
+            }
+
+            // キャレット移動だけの EM_SETSEL(start==end) は無視。
+            if (m.Msg == EmSetSel && m.WParam == m.LParam)
+            {
+                return;
+            }
+
+            _clearPosted = true;
+            _owner.BeginInvoke(new Action(() =>
+            {
+                _clearPosted = false;
+                if (!_allowUserSelect)
+                {
+                    _owner.ClearTextSelection();
+                }
+            }));
         }
     }
 

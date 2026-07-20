@@ -23,7 +23,7 @@ internal enum MarkerGridOverrideMode
 internal sealed class MarkerSettings
 {
     /// <summary>ドラッグ付与時のスナップ単位。</summary>
-    public MarkerGridOverrideMode GridOverride { get; set; } = MarkerGridOverrideMode.Default;
+    public MarkerGridOverrideMode GridOverride { get; set; } = MarkerGridOverrideMode.Bar;
 
     /// <summary>連番の桁数（幅・上限。0 で連番なし）。</summary>
     public int CommentDigits { get; set; } = 3;
