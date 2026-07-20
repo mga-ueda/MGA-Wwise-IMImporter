@@ -460,6 +460,13 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         ApplyMoreOptionsVisibility();
         ApplyToolTips();
+        UiStrings.LanguageChanged += (_, _) =>
+        {
+            if (!IsDisposed)
+            {
+                ApplyToolTips();
+            }
+        };
     }
 
     /// <summary>自前で DPI を考慮して配置するため、AutoScale を子へ伝播させない。</summary>
@@ -1194,89 +1201,39 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private void ApplyToolTips()
     {
-        SetToolTip(_streamHeaderLabel,
-            "Wwise Music Track のストリーミング関連設定です。");
-        SetToolTip(_streamEnabledCheckBox,
-            "オンの場合、Music Track をストリーミング有効で作成します（既定オン）。"
-            + " オフのときは Look-ahead Time／Prefetch Length は適用されません。");
-        SetToolTip(_lookAheadLabel,
-            "2 番目以降のセグメントの Look-ahead Time（ms、0〜9999。既定 500）。"
-            + " Stream オン時のみ有効。先頭セグメント内の全トラック（グループ化レイヤー含む）は Zero latency のため 0 固定です。");
-        SetToolTip(_lookAheadTextBox,
-            "Look-ahead Time（ms）。0〜9999。既定は 500 です。Stream オン時のみ有効。");
-        SetToolTip(_prefetchLabel,
-            "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。"
-            + " 先頭セグメントの 2 番目以降トラック（グループ化レイヤー）には Zero latency のみ適用します。");
-        SetToolTip(_prefetchTextBox,
-            "Prefetch Length（ms）。0〜9999。既定は 500 です。"
-            + " Playlist 先頭セグメント先頭トラックにだけ反映されます。Stream オン時のみ有効。");
-        SetToolTip(_loudnessHeaderLabel,
-            "このアプリ独自のラウドネス正規化です（Wwise の非破壊 Loudness Normalize とは無関係）。"
-            + " EXPORT 時に分割 WAV へ破壊編集でゲインを焼き込みます。");
-        SetToolTip(_loudnessEnabledCheckBox,
-            "オンの場合、EXPORT で分割した各 WAV の音量を Target LKFS へ破壊的に正規化します"
-            + "（既定オフ。Wwise 標準機能ではなく、このアプリ独自の処理です）。"
-            + " 元の連続波形は変更せず、書き出すセパレート WAV のみを書き換えます。");
-        SetToolTip(_loudnessTargetLabel,
-            "正規化の目標ラウドネス（LKFS、−70〜0。既定 −24）。Normalize オン時のみ有効。");
-        SetToolTip(_loudnessTargetTextBox,
-            "目標ラウドネス（LKFS）。−70〜0。既定は −24 です。Normalize オン時のみ有効。");
-        SetToolTip(_loudnessUnitLabel,
-            "単位は LKFS（ITU-R BS.1770 / LUFS と同値）です。");
-        SetToolTip(_loudnessGroupBalanceCheckBox,
-            "オンの場合、グループ内で最も大きい音量のファイルを Target に合わせ、"
-            + "他メンバーは相対バランスを保ったまま同じゲインを破壊編集で適用します（既定オン）。"
-            + " オフでは各ファイルを個別に Target へ正規化します。");
-        SetToolTip(_autoVolumeCheckBox,
-            "オンの場合、Loudness Normalize で変化した音量の逆を Music Playlist の"
-            + " Make-Up Gain または Voice Volume へ書き戻します（既定オン）。Normalize オン時のみ有効。");
-        SetToolTip(_autoVolumeMakeUpGainRadio,
-            "Auto Volume の補償を Music Playlist の Make-Up Gain へ設定します（既定）。"
-            + " Voice Volume は 0 にします。");
-        SetToolTip(_autoVolumeVoiceVolumeRadio,
-            "Auto Volume の補償を Music Playlist の Voice Volume へ設定します。"
-            + " Make-Up Gain は 0 にします。");
-        SetToolTip(_moreOptionsHeaderLabel,
-            "Stream／Loudness Normalize／Marker Grid／Marker Comment を開閉します（既定は開いた状態）。"
-            + " 開閉状態はプロジェクト設定へ自動保存されます。"
-            + " 開閉しても Music Playlist の高さは変わりません。");
-        SetToolTip(_gridHeaderLabel,
-            "マーカーをドラッグで付与するときのスナップ間隔を指定します。縦線の描画には影響しません。");
-        SetToolTip(_gridDefaultRadio,
-            "現在タイムラインに表示されているグリッドへスナップします。従来と同じ動作です。");
-        SetToolTip(_gridBarRadio,
-            "タイムラインの表示倍率に関係なく、必ず小節単位でマーカーを付与します。");
-        SetToolTip(_gridBeatRadio,
-            "タイムラインの表示倍率に関係なく、必ず拍単位でマーカーを付与します。");
-        SetToolTip(_commentHeaderLabel,
-            "追加マーカーから生成する Wwise Custom Cue 名の規則を設定します。");
-        SetToolTip(_digitsLabel,
-            "連番の桁数を 1～6 で指定します。空欄または 0 の場合は連番自体を付けません。"
-            + " 1 以上のときは、その桁で表せる最大値までしかマーカーを追加できません（例: 3 → 999 件）。");
-        SetToolTip(_digitsTextBox,
-            "連番の桁数です。空欄または 0 で連番なし、1～6 で連番ありになります。"
-            + " 桁数を超える連番は追加できません。");
-        SetToolTip(_zeroPadCheckBox,
-            "オンの場合、Digits の桁数まで常に 0 で埋めます"
-            + "（例: Digits=2 → 01、Digits=3 → 001、Digits=4 → 0001）。"
-            + "オフのときは桁埋めせず 1, 2, 3… と表示します。");
-        SetToolTip(_resetPerPartCheckBox,
-            "オンの場合、Music Playlist の各パート（書き出しファイル）ごとに連番を 1 へ戻します。");
-        SetToolTip(_prefixLabel,
-            "入力がある場合、連番の前に接頭語を追加します。Digits が空欄または 0 のときは必須です。");
-        SetToolTip(_prefixTextBox,
-            "Custom Cue 名の先頭に付ける文字列を入力します。空欄なら接頭語なし。"
-            + " Digits が空欄または 0 のときは必須です。");
-        SetToolTip(_suffixLabel,
-            "入力がある場合、連番の後ろに接尾語を追加します。");
-        SetToolTip(_suffixTextBox,
-            "Custom Cue 名の連番より後ろに付ける文字列を入力します。空欄なら接尾語なし。Unicode 文字を使用できます。");
-        SetToolTip(_joinerLabel,
-            "入力がある場合、接頭語／接尾語と連番の間に区切り文字を追加します。");
-        SetToolTip(_joinerTextBox,
-            "接頭語／接尾語と連番を繋ぐ文字列を入力します（例: _ または -）。空欄なら区切りなし。");
-        SetToolTip(_previewLabel,
-            "生成される Wwise Custom Cue 名の例と、名前が有効かどうかを表示します。");
+        SetToolTip(_streamHeaderLabel, UiStrings.TipStreamHeader);
+        SetToolTip(_streamEnabledCheckBox, UiStrings.TipStreamEnabled);
+        SetToolTip(_lookAheadLabel, UiStrings.TipLookAheadLabel);
+        SetToolTip(_lookAheadTextBox, UiStrings.TipLookAheadBox);
+        SetToolTip(_prefetchLabel, UiStrings.TipPrefetchLabel);
+        SetToolTip(_prefetchTextBox, UiStrings.TipPrefetchBox);
+        SetToolTip(_loudnessHeaderLabel, UiStrings.TipLoudnessHeader);
+        SetToolTip(_loudnessEnabledCheckBox, UiStrings.TipLoudnessEnabled);
+        SetToolTip(_loudnessTargetLabel, UiStrings.TipLoudnessTarget);
+        SetToolTip(_loudnessTargetTextBox, UiStrings.TipLoudnessTargetBox);
+        SetToolTip(_loudnessUnitLabel, UiStrings.TipLoudnessUnit);
+        SetToolTip(_loudnessGroupBalanceCheckBox, UiStrings.TipLoudnessGroupBalance);
+        SetToolTip(_autoVolumeCheckBox, UiStrings.TipAutoVolume);
+        SetToolTip(_autoVolumeHeaderLabel, UiStrings.TipAutoVolumeHeader);
+        SetToolTip(_autoVolumeMakeUpGainRadio, UiStrings.TipAutoVolumeMakeUpGain);
+        SetToolTip(_autoVolumeVoiceVolumeRadio, UiStrings.TipAutoVolumeVoiceVolume);
+        SetToolTip(_moreOptionsHeaderLabel, UiStrings.TipMoreOptionsHeader);
+        SetToolTip(_gridHeaderLabel, UiStrings.TipMarkerGridHeader);
+        SetToolTip(_gridDefaultRadio, UiStrings.TipMarkerGridTimeline);
+        SetToolTip(_gridBarRadio, UiStrings.TipMarkerGridBar);
+        SetToolTip(_gridBeatRadio, UiStrings.TipMarkerGridBeat);
+        SetToolTip(_commentHeaderLabel, UiStrings.TipMarkerCommentHeader);
+        SetToolTip(_digitsLabel, UiStrings.TipCommentDigits);
+        SetToolTip(_digitsTextBox, UiStrings.TipCommentDigitsBox);
+        SetToolTip(_zeroPadCheckBox, UiStrings.TipCommentZeroPad);
+        SetToolTip(_resetPerPartCheckBox, UiStrings.TipCommentResetPerPart);
+        SetToolTip(_prefixLabel, UiStrings.TipCommentPrefix);
+        SetToolTip(_prefixTextBox, UiStrings.TipCommentPrefixBox);
+        SetToolTip(_suffixLabel, UiStrings.TipCommentSuffix);
+        SetToolTip(_suffixTextBox, UiStrings.TipCommentSuffixBox);
+        SetToolTip(_joinerLabel, UiStrings.TipCommentSeparator);
+        SetToolTip(_joinerTextBox, UiStrings.TipCommentSeparatorBox);
+        SetToolTip(_previewLabel, UiStrings.TipCommentPreview);
     }
 
     private void SetToolTip(Control control, string text) => _toolTip.SetToolTip(control, text);

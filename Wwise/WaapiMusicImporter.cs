@@ -48,7 +48,7 @@ internal static class WaapiMusicImporter
             progress?.Report(line);
         }
 
-        Log("=== Wwise Import ===");
+        Log(UiStrings.LogWwiseImportHeader);
         Log($"Target  : {parentPath}");
         Log($"Mode    : {(plan.IsMultiPart ? "Music Switch Container" : "Music Playlist Container")}");
         Log($"Name    : {plan.ContainerName}");
@@ -62,11 +62,11 @@ internal static class WaapiMusicImporter
             {
                 // onNameConflict=merge により、State Group 自体を維持したまま
                 // State 一覧を現在の Playlist 構成へ同期する。
-                Log("StateGrp : 既存オブジェクトを変更");
+                Log(UiStrings.LogStateGroupUpdateExisting);
             }
             else
             {
-                Log("StateGrp : 新規作成");
+                Log(UiStrings.LogStateGroupCreateNew);
             }
         }
 
@@ -125,7 +125,7 @@ internal static class WaapiMusicImporter
                 throw new InvalidOperationException("複数パート時は State Group パスが必要です。");
             }
 
-            Log("Creating State Group...");
+            Log(UiStrings.LogCreatingStateGroup);
             await CallObjectSetAsync(
                     client,
                     BuildStateGroupSetArgs(plan, importSettings),
@@ -134,7 +134,7 @@ internal static class WaapiMusicImporter
                 .ConfigureAwait(false);
 
             var containerPath = $"{parentPath.TrimEnd('\\')}\\{plan.ContainerName}";
-            Log("Creating Music Switch Container...");
+            Log(UiStrings.LogCreatingMusicSwitch);
             await CallObjectSetAsync(
                     client,
                     BuildMusicSwitchShellSetArgs(plan, parentPath, stateGroupPath),
@@ -145,7 +145,7 @@ internal static class WaapiMusicImporter
             for (var i = 0; i < plan.Playlists.Count; i++)
             {
                 var playlist = plan.Playlists[i];
-                Log($"Creating playlist {i + 1}/{plan.Playlists.Count}: {playlist.Name}...");
+                Log(UiStrings.LogCreatingPlaylist(i + 1, plan.Playlists.Count, playlist.Name));
                 await CallObjectSetAsync(
                         client,
                         BuildPlaylistAppendSetArgs(
@@ -164,7 +164,7 @@ internal static class WaapiMusicImporter
             }
 
             // Playlist 未作成時に @AudioNode / Destination を張ると空参照になるため、子作成後に結ぶ。
-            Log("Binding States to Playlists...");
+            Log(UiStrings.LogBindingStates);
             await CallObjectSetAsync(
                     client,
                     BuildMusicSwitchEntriesSetArgs(plan, containerPath, stateGroupPath),
@@ -172,7 +172,7 @@ internal static class WaapiMusicImporter
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            Log("Configuring transitions...");
+            Log(UiStrings.LogConfiguringTransitions);
             await CallObjectSetAsync(
                     client,
                     BuildMusicSwitchTransitionsSetArgs(plan, containerPath),
@@ -191,7 +191,7 @@ internal static class WaapiMusicImporter
         }
         else
         {
-            Log("Creating Wwise objects...");
+            Log(UiStrings.LogCreatingWwiseObjects);
             await CallObjectSetAsync(
                     client,
                     BuildSinglePlaylistSetArgs(
@@ -208,7 +208,7 @@ internal static class WaapiMusicImporter
                 .ConfigureAwait(false);
         }
 
-        Log("Wwise objects created.");
+        Log(UiStrings.LogWwiseObjectsCreated);
 
         // MusicSegment は作成時に既定の Entry/Exit を持つ。
         // 作成と同時の @Cues 追加は二重化するため、作成後に replaceAll で差し替える。
@@ -225,9 +225,9 @@ internal static class WaapiMusicImporter
             foreach (var playlist in plan.Playlists)
             {
                 Log(
-                    $"Transition : Any → {playlist.Name}"
-                    + $" / Exit Source at={playlist.ExitSourceAt.ToUiName()}"
-                    + " / Destination Sync To=Entry Cue / Fade-out ON");
+                    UiStrings.LogTransitionAnyToPlaylist(
+                        playlist.Name,
+                        playlist.ExitSourceAt.ToUiName()));
             }
         }
 
@@ -274,7 +274,7 @@ internal static class WaapiMusicImporter
         }
 
         Log($"Slices  : {segmentWavs.Count}");
-        Log("=== Wwise Import complete ===");
+        Log(UiStrings.LogWwiseImportComplete);
         Log();
         return sb.ToString();
     }
@@ -350,7 +350,7 @@ internal static class WaapiMusicImporter
                     .ConfigureAwait(false);
             }
 
-            log($"Transition : Any → {playlist.Name} の Destination を設定");
+            log(UiStrings.LogTransitionDestinationSet(playlist.Name));
         }
     }
 

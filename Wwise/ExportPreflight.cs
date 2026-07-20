@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>EXPORT / Wwise インポート前の書き出し先・接続・選択の検証結果。</summary>
@@ -15,8 +17,8 @@ internal sealed class ExportPreflightResult
     {
         var lines = new List<string>
         {
-            "=== Export Preflight ===",
-            $"Status  : {(CanExport ? "OK" : "NG")}",
+            UiStrings.LogExportPreflightHeader,
+            $"Status  : {(CanExport ? UiStrings.LogStatusOk : UiStrings.LogStatusNg)}",
             $"Message : {Reason}",
         };
 
@@ -39,14 +41,18 @@ internal sealed class ExportPreflightResult
         {
             lines.Add($"Target  : {TargetPath}");
         }
-        else if (!CanExport && Reason.Contains("未選択", StringComparison.Ordinal))
+        else if (!CanExport && IsUnselectedTargetReason(Reason))
         {
-            lines.Add("Target  : （未選択）");
+            lines.Add($"Target  : {UiStrings.LogTargetUnselected}");
         }
 
         lines.Add(string.Empty);
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
+
+    private static bool IsUnselectedTargetReason(string reason) =>
+        reason.Contains("未選択", StringComparison.Ordinal)
+        || reason.Contains("No destination object", StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -64,13 +70,13 @@ internal static class ExportPreflight
     {
         if (!hasEnabledParts)
         {
-            return Fail("有効な出力パートがありません。");
+            return Fail(UiStrings.PreflightNoParts);
         }
 
         var directory = outputDirectory?.Trim() ?? string.Empty;
         if (directory.Length == 0)
         {
-            return Fail("書き出し先が未指定です。プロジェクト設定でフォルダを選択してください。");
+            return Fail(UiStrings.PreflightNoOutputDir);
         }
 
         string fullDirectory;
@@ -80,19 +86,17 @@ internal static class ExportPreflight
         }
         catch (Exception ex)
         {
-            return Fail($"書き出し先パスが不正です: {ex.Message}", directory);
+            return Fail(UiStrings.PreflightBadOutputPath(ex.Message), directory);
         }
 
         if (!Directory.Exists(fullDirectory))
         {
-            return Fail("書き出し先フォルダが存在しません。", fullDirectory);
+            return Fail(UiStrings.PreflightOutputMissing, fullDirectory);
         }
 
         if (waapi is null || !waapi.Ok)
         {
-            return Fail(
-                "Wwise に接続されていません。WAAPI 有効化と Wwise の起動を確認してください。",
-                fullDirectory);
+            return Fail(UiStrings.PreflightWaapiDisconnected, fullDirectory);
         }
 
         string targetPath;
@@ -102,8 +106,7 @@ internal static class ExportPreflight
             if (targetPath.Length == 0)
             {
                 return Fail(
-                    "Keep Target がオンですが作成先パスが未設定です。"
-                    + " Wwise で作成先を選んでから Keep Target をオンにしてください。",
+                    UiStrings.PreflightKeepTargetNoPath,
                     fullDirectory,
                     projectFilePath: waapi.ProjectFilePath);
             }
@@ -113,7 +116,7 @@ internal static class ExportPreflight
             if (!waapi.HasSelection)
             {
                 return Fail(
-                    "Wwise 上で作成先オブジェクトが選択されていません。",
+                    UiStrings.PreflightNoSelection,
                     fullDirectory,
                     projectFilePath: waapi.ProjectFilePath,
                     targetPath: string.Empty);
@@ -126,7 +129,7 @@ internal static class ExportPreflight
         if (projectFilePath.Length == 0)
         {
             return Fail(
-                "Wwise プロジェクトのパスを取得できません。プロジェクトを開いているか確認してください。",
+                UiStrings.PreflightNoProjectPath,
                 fullDirectory,
                 targetPath: targetPath);
         }
@@ -138,7 +141,7 @@ internal static class ExportPreflight
             if (string.IsNullOrEmpty(projectRoot))
             {
                 return Fail(
-                    "Wwise プロジェクトのルートを解決できません。",
+                    UiStrings.PreflightNoProjectRoot,
                     fullDirectory,
                     projectFilePath: projectFilePath,
                     targetPath: targetPath);
@@ -149,7 +152,7 @@ internal static class ExportPreflight
         catch (Exception ex)
         {
             return Fail(
-                $"Originals パスの解決に失敗: {ex.Message}",
+                UiStrings.PreflightOriginalsResolveFailed(ex.Message),
                 fullDirectory,
                 projectFilePath: projectFilePath,
                 targetPath: targetPath);
@@ -158,7 +161,7 @@ internal static class ExportPreflight
         if (!IsUnderDirectory(fullDirectory, originalsRoot))
         {
             return Fail(
-                "書き出し先は接続中 Wwise プロジェクトの Originals 配下である必要があります。",
+                UiStrings.PreflightNotUnderOriginals,
                 fullDirectory,
                 projectFilePath: projectFilePath,
                 originalsRoot: originalsRoot,
@@ -169,8 +172,8 @@ internal static class ExportPreflight
         {
             CanExport = true,
             Reason = keepTarget
-                ? $"書き出し可能です（Keep Target → {targetPath} へ作成します）。"
-                : "書き出し可能です。",
+                ? UiStrings.PreflightOkKeepTarget(targetPath)
+                : UiStrings.PreflightOk,
             OutputDirectory = fullDirectory,
             TargetPath = targetPath,
             ProjectFilePath = Path.GetFullPath(projectFilePath),

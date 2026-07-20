@@ -68,6 +68,7 @@ partial class Form1
     private SmoothLinkLabel copyrightLinkLabel;
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
+    private LanguageFlagButton languageFlagButton;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
     private FlatOptionCheckBox keepLastSessionCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
@@ -168,6 +169,7 @@ partial class Form1
         copyrightLinkLabel = new SmoothLinkLabel();
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
+        languageFlagButton = new LanguageFlagButton();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
         keepLastSessionCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
@@ -250,6 +252,7 @@ partial class Form1
         projectActionPanel.Controls.Add(projectDeleteButton);
         projectActionPanel.Controls.Add(keepLastSessionCheckBox);
         projectActionPanel.Controls.Add(topMostCheckBox);
+        projectActionPanel.Controls.Add(languageFlagButton);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
         // projectOutputPathTextBox
@@ -275,7 +278,6 @@ partial class Form1
         projectFolderButton.Name = "projectFolderButton";
         projectFolderButton.Size = new Size(24, 24);
         projectFolderButton.TabIndex = 0;
-        playlistToolTip.SetToolTip(projectFolderButton, "波形の書き出し先フォルダを選択");
         //
         // projectDeleteButton
         //
@@ -284,7 +286,6 @@ partial class Form1
         projectDeleteButton.Name = "projectDeleteButton";
         projectDeleteButton.Size = new Size(24, 24);
         projectDeleteButton.TabIndex = 1;
-        playlistToolTip.SetToolTip(projectDeleteButton, "選択中のプロジェクトを削除（DEL）");
         //
         // keepLastSessionCheckBox
         // 
@@ -296,6 +297,12 @@ partial class Form1
         keepLastSessionCheckBox.Text = "Keep Last Session";
         keepLastSessionCheckBox.UseVisualStyleBackColor = true;
         keepLastSessionCheckBox.CheckedChanged += KeepLastSessionCheckBox_CheckedChanged;
+        //
+        // languageFlagButton
+        //
+        languageFlagButton.Name = "languageFlagButton";
+        languageFlagButton.TabIndex = 4;
+        languageFlagButton.Click += LanguageFlagButton_Click;
         //
         // projectSpectrumView
         //
@@ -381,7 +388,6 @@ partial class Form1
         logClearButton.Name = "logClearButton";
         logClearButton.Size = new Size(24, 24);
         logClearButton.TabIndex = 0;
-        playlistToolTip.SetToolTip(logClearButton, "ログをクリア");
         logClearButton.Click += LogClearButton_Click;
         //
         // logCopyButton
@@ -391,7 +397,6 @@ partial class Form1
         logCopyButton.Name = "logCopyButton";
         logCopyButton.Size = new Size(24, 24);
         logCopyButton.TabIndex = 1;
-        playlistToolTip.SetToolTip(logCopyButton, "ログをクリップボードへコピー");
         logCopyButton.Click += LogCopyButton_Click;
         //
         // logDownloadButton
@@ -401,7 +406,6 @@ partial class Form1
         logDownloadButton.Name = "logDownloadButton";
         logDownloadButton.Size = new Size(24, 24);
         logDownloadButton.TabIndex = 2;
-        playlistToolTip.SetToolTip(logDownloadButton, "ログをファイルへ保存");
         logDownloadButton.Click += LogDownloadButton_Click;
         //
         // logEditorPanel

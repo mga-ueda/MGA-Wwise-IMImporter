@@ -2092,7 +2092,7 @@ internal sealed class WaveformView : Control
             && !_interactionLocked
             && IsSourceNamePoint(sourceLocation))
         {
-            text = "ダブルクリックでファイル名を編集";
+            text = UiStrings.TipWaveformEditSourceName;
         }
         else if (mouseLocation is { } location
             && !_isDraggingSeek
@@ -2103,15 +2103,13 @@ internal sealed class WaveformView : Control
             if (TryGetMarkerLane(out var markerLane, out _)
                 && markerLane.Contains(location))
             {
-                text = "Shift + クリック／ドラッグ: マーカーを連続付与"
-                    + Environment.NewLine
-                    + "Ctrl + クリック／ドラッグ: マーカーを連続削除";
+                text = UiStrings.TipWaveformMarkerLane;
             }
             else
             {
                 text = CountPlaylistsIntersectingView() == 1
-                    ? "ダブルクリックでタイムライン全体を表示"
-                    : "ダブルクリックで Music Playlist を拡大表示";
+                    ? UiStrings.TipWaveformZoomFitAll
+                    : UiStrings.TipWaveformZoomPlaylist;
             }
         }
 
@@ -2122,6 +2120,14 @@ internal sealed class WaveformView : Control
 
         _timelineToolTipText = text;
         _timelineToolTip.SetToolTip(this, text);
+    }
+
+    /// <summary>表示言語切替後にツールチップ文言を付け直す。</summary>
+    public void RefreshLocalizedToolTips()
+    {
+        _timelineToolTipText = null;
+        var client = PointToClient(Cursor.Position);
+        UpdateTimelineToolTip(ClientRectangle.Contains(client) ? client : null);
     }
 
     private void UpdateHoveredPlaylistPart(int mouseX)

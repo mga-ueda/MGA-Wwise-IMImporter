@@ -17,6 +17,9 @@ internal sealed class AppSettings
 
     public string KeptTargetProjectFilePath { get; set; } = string.Empty;
 
+    /// <summary>UI／ログの表示言語（既定 ja）。</summary>
+    public UiLanguage UiLanguage { get; set; } = UiLanguage.Japanese;
+
     public static AppSettings Load()
     {
         var values = IniFile.ReadSection(Section);
@@ -34,6 +37,12 @@ internal sealed class AppSettings
     public void SaveAlwaysOnTop(bool enabled)
     {
         AlwaysOnTop = enabled;
+        Save();
+    }
+
+    public void SaveUiLanguage(UiLanguage language)
+    {
+        UiLanguage = language;
         Save();
     }
 
@@ -62,6 +71,7 @@ internal sealed class AppSettings
         ["KeepTarget"] = KeepTarget ? "1" : "0",
         ["KeptTargetPath"] = KeptTargetPath,
         ["KeptTargetProjectFilePath"] = KeptTargetProjectFilePath,
+        ["UiLanguage"] = UiStrings.ToIniValue(UiLanguage),
     };
 
     private static void WriteValues(Dictionary<string, string> values)
@@ -74,6 +84,7 @@ internal sealed class AppSettings
             ["KeptTargetProjectFilePath"] = values.TryGetValue("KeptTargetProjectFilePath", out var keptProject)
                 ? keptProject
                 : string.Empty,
+            ["UiLanguage"] = values.TryGetValue("UiLanguage", out var language) ? language : "ja",
         });
     }
 
@@ -87,13 +98,17 @@ internal sealed class AppSettings
         KeptTargetProjectFilePath = values.TryGetValue("KeptTargetProjectFilePath", out var keptProject)
             ? keptProject.Trim().Trim('"')
             : string.Empty,
+        UiLanguage = values.TryGetValue("UiLanguage", out var languageText)
+            ? UiStrings.ParseLanguage(languageText)
+            : UiLanguage.Japanese,
     };
 
     private static bool HasKnownKeys(Dictionary<string, string> values) =>
         values.ContainsKey("AlwaysOnTop")
         || values.ContainsKey("KeepTarget")
         || values.ContainsKey("KeptTargetPath")
-        || values.ContainsKey("KeptTargetProjectFilePath");
+        || values.ContainsKey("KeptTargetProjectFilePath")
+        || values.ContainsKey("UiLanguage");
 
     private static bool ReadBool(Dictionary<string, string> values, string key, bool defaultValue)
     {

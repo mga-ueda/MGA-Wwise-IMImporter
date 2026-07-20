@@ -85,6 +85,15 @@ internal sealed class WaapiStatusBar : Panel
         ApplyColors();
         ApplyToolTips();
         SetPending();
+        UiStrings.LanguageChanged += (_, _) =>
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            UpdateKeepLockAppearance();
+        };
     }
 
     /// <summary>Keep Target（鍵アイコン）の変更。</summary>
@@ -149,7 +158,9 @@ internal sealed class WaapiStatusBar : Panel
     private void UpdateKeepLockAppearance()
     {
         _keepLockButton.SetIcon(_keepTargetChecked ? TransportIcon.Lock : TransportIcon.Unlock);
-        _keepStateLabel.Text = _keepTargetChecked ? "- Keep Target -" : "- Not Keep Target -";
+        _keepStateLabel.Text = _keepTargetChecked
+            ? UiStrings.KeepTargetOnLabel
+            : UiStrings.KeepTargetOffLabel;
         ApplyKeepLockColors();
         ApplyToolTips();
     }
@@ -184,11 +195,7 @@ internal sealed class WaapiStatusBar : Panel
     {
         _toolTip.SetToolTip(
             _keepLockButton,
-            _keepTargetChecked
-                ? "作成先の固定を解除します。"
-                : "いまの作成先パスをアプリ側で固定します。"
-                + " その後 Wwise 上で選択を変えても、表示と EXPORT 先はこの固定パスのままです。"
-                + " 起動時／EXPORT 前には可能なら Wwise 上でも同じパスを再選択します。");
+            _keepTargetChecked ? UiStrings.TipKeepTargetLock : UiStrings.TipKeepTargetUnlock);
     }
 
     private void KeepLockButton_Click(object? sender, EventArgs e)

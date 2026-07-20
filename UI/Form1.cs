@@ -239,7 +239,15 @@ public partial class Form1 : Form
         InitializeComponent();
         WireRightSideContentHost();
         transportBar.CommandHoldEnded += TransportBar_CommandHoldEnded;
-        ApplyActionBarToolTips();
+        UiStrings.SetLanguage(_appSettings.UiLanguage);
+        ApplyLocalizedUiText();
+        UiStrings.LanguageChanged += (_, _) =>
+        {
+            if (!IsDisposed)
+            {
+                ApplyLocalizedUiText();
+            }
+        };
         DpiChanged += (_, _) =>
         {
             AdjustTransitionSectionHeights();
@@ -561,9 +569,7 @@ public partial class Form1 : Form
             {
                 waapiStatusBar.KeepTargetChecked = false;
                 AppendReport(
-                    "Keep Target : 作成先が表示されていないためオンにできません。"
-                    + " Wwise で作成先を選んでから再度オンにしてください。"
-                    + Environment.NewLine);
+                    UiStrings.LogKeepTargetNeedSelection + Environment.NewLine);
                 ReleaseFocusToWaveform();
                 return;
             }
@@ -573,12 +579,12 @@ public partial class Form1 : Form
                 : _keptTargetProjectFilePath;
             PersistKeepTarget(true, pathToKeep, projectFile);
             AppendReport(
-                $"Keep Target : ON（このパスへ書き出します → {pathToKeep}）{Environment.NewLine}");
+                UiStrings.LogKeepTargetOn(pathToKeep) + Environment.NewLine);
         }
         else
         {
             PersistKeepTarget(false, _keptTargetPath, _keptTargetProjectFilePath);
-            AppendReport($"Keep Target : OFF（Wwise の選択に追従します）{Environment.NewLine}");
+            AppendReport(UiStrings.LogKeepTargetOff + Environment.NewLine);
         }
 
         RefreshWaapiStatusDisplay();
@@ -951,8 +957,8 @@ public partial class Form1 : Form
     {
         var confirm = OwnerCenteredMessageBox.Show(
             this,
-            "アプリケーションを終了しますか？",
-            "終了確認",
+            UiStrings.DialogExitBody,
+            UiStrings.DialogExitTitle,
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button1);
@@ -1548,6 +1554,7 @@ public partial class Form1 : Form
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
+        languageFlagButton.ApplyColors();
         projectSpectrumView.BackColor = barBack;
         projectSpectrumView.Invalidate();
         projectBar.Invalidate();
@@ -1595,6 +1602,7 @@ public partial class Form1 : Form
     /// <summary>
     /// プロジェクト名コンボと出力先テキストボックスの高さをバーの内側高さに揃え、
     /// 双方のテキスト縦位置も一致させる。コンボ幅は情報レーン右端に合わせる。
+    /// 右端アイコン（フォルダ／削除／言語／スペクトラム）は上下中央に揃える。
     /// </summary>
     private void AlignProjectBarInputs()
     {
@@ -1607,6 +1615,31 @@ public partial class Form1 : Form
         projectNameComboBox.SetControlHeight(targetHeight);
         SyncProjectNameComboWidthToInfoLane();
         AlignProjectPathTextRect();
+        AlignProjectBarActionIcons(targetHeight);
+    }
+
+    /// <summary>
+    /// FlowLayout は既定で上寄せのため、正方形アイコンの上下余白が偏る。
+    /// バー内側高さに対して上下中央になるよう Margin.Top を付ける。
+    /// </summary>
+    private void AlignProjectBarActionIcons(int contentHeight)
+    {
+        CenterProjectBarControl(projectFolderButton, contentHeight);
+        CenterProjectBarControl(projectDeleteButton, contentHeight);
+        CenterProjectBarControl(languageFlagButton, contentHeight);
+        CenterProjectBarControl(projectSpectrumView, contentHeight);
+    }
+
+    private static void CenterProjectBarControl(Control control, int contentHeight)
+    {
+        var top = Math.Max(0, (contentHeight - control.Height) / 2);
+        var margin = control.Margin;
+        if (margin.Top == top && margin.Bottom == 0)
+        {
+            return;
+        }
+
+        control.Margin = new Padding(margin.Left, top, margin.Right, 0);
     }
 
     /// <summary>
@@ -2251,16 +2284,14 @@ public partial class Form1 : Form
                 selectInCombo: true,
                 asNewDraft: false);
             editorTextBox.Clear();
-            AppendReport(
-                $"=== Project ==={Environment.NewLine}"
-                + $"Message : プロジェクト「{savedName}」を作成しました（アプリ既定）。{Environment.NewLine}{Environment.NewLine}");
+            AppendReport(UiStrings.LogProjectCreated(savedName));
         }
         catch (Exception ex)
         {
             OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
-                "プロジェクトの作成に失敗",
+                UiStrings.DialogCreateProjectFailedTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
@@ -2319,7 +2350,7 @@ public partial class Form1 : Form
                 OwnerCenteredMessageBox.Show(
                     this,
                     ex.Message,
-                    "プロジェクトのクリアに失敗",
+                    UiStrings.DialogClearProjectFailedTitle,
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
@@ -2329,16 +2360,14 @@ public partial class Form1 : Form
 
         ApplyProjectProfile(profile, selectInCombo: true, asNewDraft: false);
         editorTextBox.Clear();
-        AppendReport(
-            $"=== Project ==={Environment.NewLine}"
-            + $"Message : プロジェクト「{name}」をクリアしました（アプリ既定）。{Environment.NewLine}{Environment.NewLine}");
+        AppendReport(UiStrings.LogProjectCleared(name));
     }
 
     private void ProjectFolderButton_Click(object? sender, EventArgs e)
     {
         using var dialog = new FolderBrowserDialog
         {
-            Description = "波形の書き出し先フォルダを選択",
+            Description = UiStrings.DialogFolderBrowseDescription,
             UseDescriptionForTitle = true,
             SelectedPath = Directory.Exists(_projectOutputDirectory)
                 ? _projectOutputDirectory
@@ -2398,7 +2427,7 @@ public partial class Form1 : Form
             OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
-                "プロジェクトの保存に失敗",
+                UiStrings.DialogSaveProjectFailedTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             // 改名失敗時は表示名を現在のロード名へ戻す。
@@ -2450,8 +2479,8 @@ public partial class Form1 : Form
         var name = _loadedProjectName;
         var confirm = OwnerCenteredMessageBox.Show(
             this,
-            $"プロジェクト「{name}」を削除しますか？",
-            "プロジェクト削除",
+            UiStrings.DialogDeleteProjectBody(name),
+            UiStrings.DialogDeleteProjectTitle,
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2);
@@ -2465,16 +2494,14 @@ public partial class Form1 : Form
         {
             var next = _projectStore.Delete(name);
             ApplyProjectProfile(next, selectInCombo: true);
-            AppendReport(
-                $"=== Project ==={Environment.NewLine}"
-                + $"Message : プロジェクト「{name}」を削除しました。{Environment.NewLine}{Environment.NewLine}");
+            AppendReport(UiStrings.LogProjectDeleted(name));
         }
         catch (Exception ex)
         {
             OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
-                "プロジェクトの削除に失敗",
+                UiStrings.DialogDeleteProjectFailedTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
@@ -3615,12 +3642,7 @@ public partial class Form1 : Form
     }
 
     private static string BuildPlaylistGroupToolTip(string playlistName) =>
-        $"{playlistName}{Environment.NewLine}"
-        + "Shift + クリック／ドラッグ: グループ化（既存グループも新しい ID で上書き可）"
-        + Environment.NewLine
-        + "Ctrl + クリック／ドラッグ: グループ解除"
-        + Environment.NewLine
-        + "Ctrl + Shift + クリック／ドラッグ: 無効化／再有効化";
+        UiStrings.TipPlaylistItem(playlistName);
 
     private WaveformOutputPart? HitTestPlaylistPartAtCursor()
     {
@@ -4652,39 +4674,141 @@ public partial class Form1 : Form
         return new Bitmap(source);
     }
 
+    private void ApplyLocalizedUiText()
+    {
+        languageFlagButton.RefreshAppearance();
+        ApplyActionBarToolTips();
+        ApplyProjectBarToolTips();
+        ApplyTransitionToolTips();
+        ApplyLogAreaToolTips();
+        ApplyPlaylistItemToolTips();
+        transportBar.ApplyLocalizedToolTips();
+        waveformView.RefreshLocalizedToolTips();
+    }
+
+    private void ApplyPlaylistItemToolTips()
+    {
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            if (control.Tag is not WaveformOutputPart part)
+            {
+                continue;
+            }
+
+            var name = ResolvePlaylistTooltipName(part);
+            playlistToolTip.SetToolTip(control, BuildPlaylistGroupToolTip(name));
+        }
+    }
+
+    private string ResolvePlaylistTooltipName(WaveformOutputPart part)
+    {
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            if (control is FlatPlaylistButton button
+                && control.Tag is WaveformOutputPart tagged
+                && tagged.Number == part.Number
+                && !string.IsNullOrWhiteSpace(button.Text))
+            {
+                return button.Text;
+            }
+        }
+
+        var fallback = Path.GetFileNameWithoutExtension(part.FileName);
+        return string.IsNullOrWhiteSpace(fallback) ? part.FileName : fallback;
+    }
+
+    private void LanguageFlagButton_Click(object? sender, EventArgs e)
+    {
+        var next = UiStrings.IsJapanese ? UiLanguage.English : UiLanguage.Japanese;
+        _appSettings.SaveUiLanguage(next);
+        UiStrings.SetLanguage(next);
+        ReleaseFocusToWaveform();
+    }
+
     private void ApplyActionBarToolTips()
     {
-        playlistToolTip.SetToolTip(
-            detailedLogCheckBox,
-            "再生・操作の詳細な診断情報を画面ログへ出力します（開発用）。");
-        playlistToolTip.SetToolTip(
-            compactFileNumbersCheckBox,
-            "ON: 無効化した Playlist があっても、書き出す WAV の番号を 1 から詰めます。"
-            + Environment.NewLine
-            + "OFF: 元の番号を維持します（欠番が残ります）。");
-        playlistToolTip.SetToolTip(
-            keepLastSessionCheckBox,
-            "起動時およびこのプロジェクトへ戻ったときに、最後の作業セッション（波形・グループ／無効化／追加マーカー／Fade・Exit Source At）を復元します（プロジェクト設定）。");
-        playlistToolTip.SetToolTip(
-            topMostCheckBox,
-            "ウィンドウを常に最前面へ表示します（アプリ設定）。");
-        playlistToolTip.SetToolTip(
-            clearButton,
-            "波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻します。"
-            + Environment.NewLine
-            + "Always on Top／Keep Target はアプリ設定のため変わりません。"
-            + Environment.NewLine
-            + "プロジェクト自体は削除しません。");
-        playlistToolTip.SetToolTip(
-            reloadButton,
-            "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
-            + Environment.NewLine
-            + "ログ・Playlist のグループ化・無効化・追加マーカーはリセットされます。");
-        playlistToolTip.SetToolTip(
-            exportButton,
-            "分割 WAV を書き出し、続けて Wwise へインポートします。"
-            + Environment.NewLine
-            + "無効化した Playlist は書き出し対象外です。");
+        playlistToolTip.SetToolTip(detailedLogCheckBox, UiStrings.TipDebugLog);
+        playlistToolTip.SetToolTip(languageFlagButton, UiStrings.IsJapanese
+            ? UiStrings.TipLanguageJapanese
+            : UiStrings.TipLanguageEnglish);
+        playlistToolTip.SetToolTip(compactFileNumbersCheckBox, UiStrings.TipCompactFileNumbers);
+        playlistToolTip.SetToolTip(keepLastSessionCheckBox, UiStrings.TipKeepLastSession);
+        playlistToolTip.SetToolTip(topMostCheckBox, UiStrings.TipAlwaysOnTop);
+        playlistToolTip.SetToolTip(clearButton, UiStrings.TipClear);
+        playlistToolTip.SetToolTip(reloadButton, UiStrings.TipReload);
+        playlistToolTip.SetToolTip(exportButton, UiStrings.TipExport);
+        playlistToolTip.SetToolTip(copyrightLinkLabel, UiStrings.TipCopyright);
+    }
+
+    private void ApplyProjectBarToolTips()
+    {
+        playlistToolTip.SetToolTip(projectNameComboBox, UiStrings.TipProjectName);
+        playlistToolTip.SetToolTip(projectOutputPathTextBox, UiStrings.TipProjectOutputPath);
+        playlistToolTip.SetToolTip(projectFolderButton, UiStrings.TipProjectFolder);
+        playlistToolTip.SetToolTip(projectDeleteButton, UiStrings.TipProjectDelete);
+        playlistToolTip.SetToolTip(projectSpectrumView, UiStrings.TipSpectrum);
+    }
+
+    private void ApplyLogAreaToolTips()
+    {
+        playlistToolTip.SetToolTip(editorTextBox, UiStrings.TipLogEditor);
+        playlistToolTip.SetToolTip(logClearButton, UiStrings.TipLogClear);
+        playlistToolTip.SetToolTip(logCopyButton, UiStrings.TipLogCopy);
+        playlistToolTip.SetToolTip(logDownloadButton, UiStrings.TipLogDownload);
+        playlistToolTip.SetToolTip(playlistHeaderLabel, UiStrings.TipPlaylistHeader);
+    }
+
+    private void ApplyTransitionToolTips()
+    {
+        playlistToolTip.SetToolTip(fadeInHeaderLabel, UiStrings.TipFadeInHeader);
+        playlistToolTip.SetToolTip(transitionTimeHeaderLabel, UiStrings.TipFadeOutHeader);
+        playlistToolTip.SetToolTip(exitSourceAtHeaderLabel, UiStrings.TipExitSourceHeader);
+        playlistToolTip.SetToolTip(fadeInGroupDividerLabel, UiStrings.TipGroupFadeHeader);
+        playlistToolTip.SetToolTip(fadeOutGroupDividerLabel, UiStrings.TipGroupFadeHeader);
+
+        FlatOptionRadioButton[] fadeRadios =
+        [
+            fadeInNoneRadio,
+            fadeInOneSecondRadio,
+            fadeInThreeSecondsRadio,
+            fadeInSixSecondsRadio,
+            fadeInNineSecondsRadio,
+            transitionTimeHalfSecondRadio,
+            transitionTimeOneSecondRadio,
+            transitionTimeThreeSecondsRadio,
+            transitionTimeSixSecondsRadio,
+            transitionTimeNineSecondsRadio,
+            fadeInGroupNoneRadio,
+            fadeInGroupOneSecondRadio,
+            fadeInGroupThreeSecondsRadio,
+            fadeInGroupSixSecondsRadio,
+            fadeInGroupNineSecondsRadio,
+            fadeOutGroupNoneRadio,
+            fadeOutGroupOneSecondRadio,
+            fadeOutGroupThreeSecondsRadio,
+            fadeOutGroupSixSecondsRadio,
+            fadeOutGroupNineSecondsRadio,
+        ];
+
+        foreach (var radio in fadeRadios)
+        {
+            ApplyFadeRadioTip(radio);
+        }
+
+        playlistToolTip.SetToolTip(exitSourceImmediateRadio, UiStrings.TipExitImmediate);
+        playlistToolTip.SetToolTip(exitSourceNextBarRadio, UiStrings.TipExitNextBar);
+        playlistToolTip.SetToolTip(exitSourceNextBeatRadio, UiStrings.TipExitNextBeat);
+        playlistToolTip.SetToolTip(exitSourceNextCueRadio, UiStrings.TipExitNextCue);
+        playlistToolTip.SetToolTip(exitSourceExitCueRadio, UiStrings.TipExitExitCue);
+    }
+
+    private void ApplyFadeRadioTip(RadioButton radio)
+    {
+        var seconds = radio.Tag is double value ? value : 0d;
+        var tip = seconds <= 0
+            ? UiStrings.TipFadeNone
+            : UiStrings.TipFadeSeconds(seconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+        playlistToolTip.SetToolTip(radio, tip);
     }
 
     /// <summary>
@@ -4892,8 +5016,8 @@ public partial class Form1 : Form
         {
             OwnerCenteredMessageBox.Show(
                 this,
-                "ファイル名として使用できる、拡張子なしの名前を入力してください。",
-                "名前を変更できません",
+                UiStrings.DialogRenameFailedBody,
+                UiStrings.DialogRenameFailedTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             waveformView.SetSourceDisplayName(
@@ -4986,7 +5110,7 @@ public partial class Form1 : Form
             OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
-                "Unable to open GitHub",
+                UiStrings.DialogOpenGithubFailed,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
@@ -5026,7 +5150,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            OwnerCenteredMessageBox.Show(this, ex.Message, "ログのコピーに失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            OwnerCenteredMessageBox.Show(this, ex.Message, UiStrings.DialogLogCopyFailedTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         ReleaseFocusToWaveform();
@@ -5041,7 +5165,7 @@ public partial class Form1 : Form
             FileName = $"MgaWwiseIMImporter-{DateTime.Now:yyyyMMdd-HHmmss}.log",
             Filter = "Log file (*.log)|*.log|Text file (*.txt)|*.txt|All files (*.*)|*.*",
             OverwritePrompt = true,
-            Title = "ログを保存",
+            Title = UiStrings.DialogLogSaveTitle,
         };
         if (OwnerCenteredMessageBox.ShowDialog(this, dialog) != DialogResult.OK)
         {
@@ -5057,7 +5181,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            OwnerCenteredMessageBox.Show(this, ex.Message, "ログの保存に失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            OwnerCenteredMessageBox.Show(this, ex.Message, UiStrings.DialogLogSaveFailedTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         ReleaseFocusToWaveform();
@@ -5789,7 +5913,7 @@ public partial class Form1 : Form
             OwnerCenteredMessageBox.Show(
                 this,
                 preflight.Reason,
-                "EXPORT",
+                UiStrings.DialogExportTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             ReleaseFocusToWaveform();

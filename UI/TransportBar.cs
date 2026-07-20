@@ -56,8 +56,9 @@ internal sealed class TransportBar : UserControl
 
         AutoScroll = true;
         BackColor = UiColors.ForControlBack(UiColors.TransportBack);
-        Height = 40;
-        Padding = new Padding(8, 5, 8, 5);
+        // ボタン 30 + 上下 Padding 3（正方形化後の余白過多を避ける）。
+        Height = 36;
+        Padding = new Padding(8, 3, 8, 3);
         TabStop = false;
 
         _groups.AutoSize = true;
@@ -75,39 +76,41 @@ internal sealed class TransportBar : UserControl
         _playButton = AddGroup(
             "TRANSPORT",
             repeatOnHold: false,
-            (TransportCommand.TogglePlayback, TransportIcon.PlayPause, "再生 / 一時停止  [Space]"),
-            (TransportCommand.JumpToBar, TransportIcon.JumpToBar, "小節番号を指定して移動  [G]"));
+            (TransportCommand.TogglePlayback, TransportIcon.PlayPause),
+            (TransportCommand.JumpToBar, TransportIcon.JumpToBar));
 
         AddGroup(
             "NAVIGATION",
             repeatOnHold: true,
-            (TransportCommand.GoToStart, TransportIcon.GoToStart, WithKeyRepeat("先頭へ移動  [Ctrl+Home]")),
-            (TransportCommand.PreviousPage, TransportIcon.PreviousPage, WithKeyRepeat("前の表示ページ  [Page Up]")),
-            (TransportCommand.PreviousPlaylist, TransportIcon.PreviousRegion, WithKeyRepeat("前の Music Playlist へ移動  [Ctrl+←]")),
-            (TransportCommand.PreviousBar, TransportIcon.PreviousBar, WithKeyRepeat("前の小節  [Home]")),
-            (TransportCommand.NextBar, TransportIcon.NextBar, WithKeyRepeat("次の小節  [End]")),
-            (TransportCommand.NextPlaylist, TransportIcon.NextRegion, WithKeyRepeat("次の Music Playlist へ移動  [Ctrl+→]")),
-            (TransportCommand.NextPage, TransportIcon.NextPage, WithKeyRepeat("次の表示ページ  [Page Down]")),
-            (TransportCommand.GoToEnd, TransportIcon.GoToEnd, WithKeyRepeat("末尾へ移動  [Ctrl+End]")));
+            (TransportCommand.GoToStart, TransportIcon.GoToStart),
+            (TransportCommand.PreviousPage, TransportIcon.PreviousPage),
+            (TransportCommand.PreviousPlaylist, TransportIcon.PreviousRegion),
+            (TransportCommand.PreviousBar, TransportIcon.PreviousBar),
+            (TransportCommand.NextBar, TransportIcon.NextBar),
+            (TransportCommand.NextPlaylist, TransportIcon.NextRegion),
+            (TransportCommand.NextPage, TransportIcon.NextPage),
+            (TransportCommand.GoToEnd, TransportIcon.GoToEnd));
 
         AddGroup(
             "TIME ZOOM",
             repeatOnHold: true,
-            (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn, WithKeyRepeat("時間軸を拡大  [↑]")),
-            (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut, WithKeyRepeat("時間軸を縮小  [↓]")),
-            (TransportCommand.TimeZoomMax, TransportIcon.TimeZoomMax, WithKeyRepeat("時間軸を最大拡大  [Ctrl+↑]")),
-            (TransportCommand.TimeZoomReset, TransportIcon.TimeZoomReset, WithKeyRepeat("時間軸を全体表示  [Ctrl+↓]")));
+            (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn),
+            (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut),
+            (TransportCommand.TimeZoomMax, TransportIcon.TimeZoomMax),
+            (TransportCommand.TimeZoomReset, TransportIcon.TimeZoomReset));
 
         AddGroup(
             "AMP ZOOM",
             repeatOnHold: true,
-            (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn, WithKeyRepeat("振幅を拡大  [Shift+↑]")),
-            (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut, WithKeyRepeat("振幅を縮小  [Shift+↓]")),
-            (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax, WithKeyRepeat("振幅を最大拡大  [Ctrl+Shift+↑]")),
-            (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset, WithKeyRepeat("振幅を既定に戻す  [Ctrl+Shift+↓]")));
+            (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn),
+            (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut),
+            (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax),
+            (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset));
 
         _commandRepeatTimer.Tick += (_, _) => RepeatHeldCommand();
         ApplyColors();
+        UiStrings.LanguageChanged += (_, _) => ApplyLocalizedToolTips();
+        TightenVerticalLayout();
     }
 
     public event EventHandler<TransportCommand>? CommandInvoked;
@@ -115,9 +118,6 @@ internal sealed class TransportBar : UserControl
 
     /// <summary>NAVIGATION / ZOOM ボタンがマウスで押下中か。</summary>
     public bool IsCommandHeld => _heldCommand.HasValue;
-
-    private static string WithKeyRepeat(string text) =>
-        text + Environment.NewLine + "長押しでキーリピート";
 
     /// <summary>
     /// 全グループを横スクロールなしで表示するために必要な幅。
@@ -138,6 +138,17 @@ internal sealed class TransportBar : UserControl
     public void SetPosition(TransportPositionInfo? position)
     {
         _positionDisplay.Position = position;
+    }
+
+    /// <summary>表示言語に合わせてツールチップを付け直す。</summary>
+    public void ApplyLocalizedToolTips()
+    {
+        foreach (var (command, button) in _commandButtons)
+        {
+            var tip = UiStrings.TipForTransportCommand(command);
+            button.AccessibleName = tip;
+            _toolTip.SetToolTip(button, tip);
+        }
     }
 
     /// <summary>キーボード操作中のボタンをマウスオーバーと同じ表示にする。</summary>
@@ -201,6 +212,66 @@ internal sealed class TransportBar : UserControl
         Invalidate();
     }
 
+    protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+    {
+        // 描画座標はピクセル基準なので、DPI拡大時も右側に空白を増やさない。
+        base.ScaleControl(factor, specified & ~BoundsSpecified.Width);
+        // アイコン正方形化で縦が短くなった分、バー高さとグループ高さを詰める。
+        TightenVerticalLayout();
+    }
+
+    /// <summary>
+    /// コマンドボタンの正方形辺に合わせて、グループ行・位置表示・バー全体の高さを揃える。
+    /// </summary>
+    private void TightenVerticalLayout()
+    {
+        var side = _playButton.Height;
+        if (side <= 0)
+        {
+            return;
+        }
+
+        foreach (Control group in _groups.Controls)
+        {
+            if (group is TransportPositionDisplay position)
+            {
+                if (position.Height != side)
+                {
+                    position.Height = side;
+                }
+
+                continue;
+            }
+
+            if (group is not Panel panel)
+            {
+                continue;
+            }
+
+            if (panel.Height != side)
+            {
+                panel.Height = side;
+            }
+
+            foreach (Control child in panel.Controls)
+            {
+                if (child.Height != side)
+                {
+                    child.Height = side;
+                }
+            }
+        }
+
+        _groups.MinimumSize = new Size(1, side);
+        var desiredHeight = Padding.Vertical + side;
+        if (Height != desiredHeight)
+        {
+            Height = desiredHeight;
+        }
+
+        _groups.Location = new Point(Padding.Left, Padding.Top);
+    }
+
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
@@ -212,7 +283,7 @@ internal sealed class TransportBar : UserControl
     private TransportIconButton AddGroup(
         string title,
         bool repeatOnHold,
-        params (TransportCommand Command, TransportIcon Icon, string ToolTip)[] definitions)
+        params (TransportCommand Command, TransportIcon Icon)[] definitions)
     {
         const int buttonHeight = 30;
         const int buttonPitch = 31;
@@ -257,9 +328,10 @@ internal sealed class TransportBar : UserControl
         TransportIconButton? first = null;
         foreach (var definition in definitions)
         {
+            var tip = UiStrings.TipForTransportCommand(definition.Command);
             var button = new TransportIconButton(definition.Icon)
             {
-                AccessibleName = definition.ToolTip,
+                AccessibleName = tip,
                 Margin = new Padding(0, 0, 1, 0),
                 Tag = definition.Command,
             };
@@ -293,7 +365,7 @@ internal sealed class TransportBar : UserControl
                 button.Click += (_, _) => CommandInvoked?.Invoke(this, definition.Command);
             }
 
-            _toolTip.SetToolTip(button, definition.ToolTip);
+            _toolTip.SetToolTip(button, tip);
             buttons.Controls.Add(button);
             _commandButtons[definition.Command] = button;
             first ??= button;
@@ -588,6 +660,21 @@ internal sealed class TransportIconButton : Button
         AccentColor = Color.Empty;
         ActiveForeColor = UiColors.ForControlBack(UiColors.SeekCyan);
         Invalidate();
+    }
+
+    /// <summary>
+    /// <see cref="AutoScaleMode.Font"/> はフォントの横／縦メトリクスで倍率が分かれ、
+    /// 正方形のアイコンボタンが長方形になる。元が正方形なら短い辺に揃える。
+    /// </summary>
+    protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+    {
+        var keepSquare = Width == Height;
+        base.ScaleControl(factor, specified);
+        if (keepSquare && Width != Height)
+        {
+            var side = Math.Min(Width, Height);
+            Size = new Size(side, side);
+        }
     }
 
     public void BeginShortcutFeedback()
