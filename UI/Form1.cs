@@ -502,7 +502,6 @@ public partial class Form1 : Form
                             new WaapiProbeResult
                             {
                                 Ok = false,
-                                Url = _waapiSettings.Url,
                                 Message = ex.Message,
                             },
                             logReport: true);
@@ -750,21 +749,18 @@ public partial class Form1 : Form
 
         try
         {
-            var (path, name, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings)
+            var (path, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings)
                 .ConfigureAwait(true);
             if (!IsDisposed && _waapiLastResult is { Ok: true })
             {
                 _waapiLastResult = new WaapiProbeResult
                 {
                     Ok = true,
-                    Url = _waapiLastResult.Url,
                     WwiseVersion = _waapiLastResult.WwiseVersion,
-                    ProcessPath = _waapiLastResult.ProcessPath,
                     Project = _waapiLastResult.Project,
                     ProjectName = _waapiLastResult.ProjectName,
                     ProjectFilePath = _waapiLastResult.ProjectFilePath,
                     SelectedPath = path,
-                    SelectedName = name,
                     SelectedType = type,
                 };
             }
@@ -811,7 +807,7 @@ public partial class Form1 : Form
     {
         try
         {
-            var (path, name, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings)
+            var (path, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings)
                 .ConfigureAwait(true);
             if (IsDisposed || _waapiLastResult is not { Ok: true })
             {
@@ -830,14 +826,11 @@ public partial class Form1 : Form
                 _waapiLastResult = new WaapiProbeResult
                 {
                     Ok = true,
-                    Url = _waapiLastResult.Url,
                     WwiseVersion = _waapiLastResult.WwiseVersion,
-                    ProcessPath = _waapiLastResult.ProcessPath,
                     Project = _waapiLastResult.Project,
                     ProjectName = _waapiLastResult.ProjectName,
                     ProjectFilePath = _waapiLastResult.ProjectFilePath,
                     SelectedPath = path,
-                    SelectedName = name,
                     SelectedType = type,
                 };
             }
@@ -879,7 +872,6 @@ public partial class Form1 : Form
                 new WaapiProbeResult
                 {
                     Ok = false,
-                    Url = _waapiSettings.Url,
                     Message = UiStrings.LogWaapiConnectFailed,
                 },
                 logReport: true);
@@ -2338,8 +2330,7 @@ public partial class Form1 : Form
 
     /// <summary>
     /// 波形・セッションを卸し、選択中プロジェクトの設定をアプリ既定へ戻して保存する。
-    /// Always on Top／Keep Target はアプリ設定のため変更しない。
-    /// プロジェクト名／一覧は消さない。
+    /// Always on Top（アプリ設定）は変更しない。プロジェクト名／一覧は消さない。
     /// </summary>
     private void ClearCurrentProjectToDefaults()
     {

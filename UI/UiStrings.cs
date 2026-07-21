@@ -24,11 +24,6 @@ internal static class UiStrings
         LanguageChanged?.Invoke(null, EventArgs.Empty);
     }
 
-    public static void SetLanguageFromIni(string? value)
-    {
-        SetLanguage(ParseLanguage(value));
-    }
-
     public static UiLanguage ParseLanguage(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -59,17 +54,7 @@ internal static class UiStrings
             Get(japaneseFormat, englishFormat),
             args);
 
-    // --- Dialog common ---
-    public static string DialogOk => Get("OK", "OK");
-    public static string DialogCancel => Get("キャンセル", "Cancel");
-    public static string DialogYes => Get("はい", "Yes");
-    public static string DialogNo => Get("いいえ", "No");
-
     // --- Language toggle ---
-    public static string TipLanguageToggle => Get(
-        "表示言語を切り替えます（日本語 / English）。アプリ設定に保存されます。",
-        "Switch display language (Japanese / English). Saved in app settings.");
-
     public static string TipLanguageJapanese => Get(
         "現在: 日本語。クリックで English に切り替えます。",
         "Current: Japanese. Click to switch to English.");
@@ -102,14 +87,10 @@ internal static class UiStrings
     public static string TipClear => Get(
         "波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻します。"
         + Environment.NewLine
-        + "Always on Top／Keep Target はアプリ設定のため変わりません。"
-        + Environment.NewLine
-        + "プロジェクト自体は削除しません。",
+        + "Always on Top（アプリ設定）は変わりません。プロジェクト自体は削除しません。",
         "Clear wave, session, and log, and reset the active project settings to app defaults."
         + Environment.NewLine
-        + "Always on Top / Keep Target (app settings) are unchanged."
-        + Environment.NewLine
-        + "The project itself is not deleted.");
+        + "Always on Top (app setting) is unchanged. The project itself is not deleted.");
 
     public static string TipReload => Get(
         "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
@@ -560,25 +541,13 @@ internal static class UiStrings
         "ファイル名として使用できる、拡張子なしの名前を入力してください。",
         "Enter a valid file name without extension.");
 
-    public static string DialogClearFailedTitle => Get(
-        "クリアに失敗",
-        "Clear failed");
-
     public static string DialogClearProjectFailedTitle => Get(
         "プロジェクトのクリアに失敗",
         "Failed to clear project");
 
-    public static string DialogSaveFailedTitle => Get(
-        "保存に失敗",
-        "Save failed");
-
     public static string DialogSaveProjectFailedTitle => Get(
         "プロジェクトの保存に失敗",
         "Failed to save project");
-
-    public static string DialogDeleteFailedTitle => Get(
-        "削除に失敗",
-        "Delete failed");
 
     public static string DialogLogCopyFailedTitle => Get(
         "ログのコピーに失敗",
@@ -755,13 +724,6 @@ internal static class UiStrings
         "Transition : Any → {0} の Destination を設定",
         "Transition : set Destination for Any → {0}",
         name);
-
-    public static string LogCueTrimmed(string segmentPath, int deleted, string cueLabel) => Format(
-        "Cue : {0} の余剰 {1} Cue を {2} 件削除",
-        "Cue : removed {2} extra {1} cue(s) on {0}",
-        segmentPath,
-        cueLabel,
-        deleted);
 
     // --- Status / empty UI ---
     public static string StatusChecking => Get("確認中…", "Checking…");
@@ -1209,11 +1171,6 @@ internal static class UiStrings
         "AudioFormat={0} is not supported for waveform display.",
         format);
 
-    public static string ErrAudioFormatNameUnsupported(string name) => Format(
-        "AudioFormat={0} は波形表示未対応です。",
-        "AudioFormat={0} is not supported for waveform display.",
-        name);
-
     // --- Labels / Buttons / Status / Log keys / Progress / Accessibility / ColorDev ---
 
     // Form1: action bar / checkboxes / buttons
@@ -1391,7 +1348,6 @@ internal static class UiStrings
     // ProjectSettingsStore
     public static string ProjectNewProjectMenuItem => Get("+ New Project", "+ New Project");
     public static string ProjectNewProjectBaseName => Get("New Project", "New Project");
-    public static string StatusProjectUnnamed => Get("(unnamed)", "(unnamed)");
 
     // Progress / busy overlay（元から英語固定）
     public static string OverlayExporting => Get("Exporting", "Exporting");
@@ -1426,15 +1382,12 @@ internal static class UiStrings
     public static string KeyMode => Get("Mode    :", "Mode    :");
     public static string KeyName => Get("Name    :", "Name    :");
     public static string KeyStateGrp => Get("StateGrp :", "StateGrp :");
-    public static string KeyLoudness => Get("Loudness:", "Loudness:");
-    public static string KeyAutoVolume => Get("Auto Volume:", "Auto Volume:");
     public static string KeySource => Get("Source :", "Source :");
     public static string KeyPeaks => Get("Peaks  :", "Peaks  :");
     public static string KeyRegions => Get("Regions:", "Regions:");
     public static string KeyOutputs => Get("Outputs:", "Outputs:");
     public static string KeyBars => Get("Bars   :", "Bars   :");
     public static string KeyTimeline => Get("Timeline:", "Timeline:");
-    public static string KeyAnacrusis => Get("Anacrusis :", "Anacrusis :");
     public static string KeyPath => Get("Path    :", "Path    :");
     public static string KeySlices => Get("Slices  :", "Slices  :");
     public static string KeyWavePpq => Get("WavePpq :", "WavePpq :");
@@ -1589,14 +1542,6 @@ internal static class UiStrings
         "{0:0} pulses / quarter note",
         pulsesPerQuarterNote);
 
-    // HTTP error（WaapiHttpClient）
-    public static string ErrWaapiHttpStatus(int statusCode, string? reasonPhrase, string bodySnippet) => Format(
-        "HTTP {0} {1}. {2}",
-        "HTTP {0} {1}. {2}",
-        statusCode,
-        reasonPhrase ?? string.Empty,
-        bodySnippet);
-
     // --- ColorDev panel ---
     public static string ColorDevTitle => Get("色調整（開発者）", "Color Adjustment (Developer)");
     public static string ColorDevClose => Get("閉じる", "Close");
@@ -1648,7 +1593,6 @@ internal static class UiStrings
         "LogHeader" => Get("ログ文字（ヘッダ）", "Log Text (Header)"),
         "LogWarning" => Get("ログ文字（警告）", "Log Text (Warning)"),
         "LogError" => Get("ログ文字（エラー）", "Log Text (Error)"),
-        "LogButtonHoverBack" => Get("ログボタン・ホバー背景", "Log Button - Hover Background"),
         "OptionGlyphCheckMark" => Get("オプション・チェック線", "Option - Check Mark"),
         "SectionHeaderBack" => Get("セクション見出し・背景", "Section Header - Background"),
         "PlaylistAutoBack" => Get("Playlist・自動再生開始フェード塗り", "Playlist - Auto Start Fade Fill"),

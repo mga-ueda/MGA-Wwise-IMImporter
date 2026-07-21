@@ -18,9 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- tools/・ローカル検証用ツリーを既定グロブから除外する -->
-    <Compile Remove="tools\**" />
-    <None Remove="tools\**" />
+    <!-- ローカル検証用スクラッチを既定グロブから除外する -->
     <Compile Remove="_probe\**" />
     <None Remove="_probe\**" />
   </ItemGroup>

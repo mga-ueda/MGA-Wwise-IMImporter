@@ -53,9 +53,9 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | Keep Last Session | `Always on Top` 左側のチェック（既定オン）。起動時およびこのプロジェクトへ戻ったときに、最後の作業セッションを復元（`[Project.*] KeepLastSession` / `LastWavePath`）。波形に加え、同プロジェクトのサイドカー JSON のグループ／無効化／追加マーカー／Fade In・Out（通常／Group）／Exit Source At（パート別）を復元 |
 | Always on Top | WAAPI ステータスバー直上の操作バーにあるチェック。ウィンドウを最前面に固定（`[App] AlwaysOnTop`。既定オフ） |
 | + New Project | プロジェクト名コンボ末尾。波形・セッション・ログをすべて卸し、アプリ既定設定の `New Project`（既存なら `New Project 2` …）を即時 INI 保存して切り替える。ログには作成メッセージだけを残す |
-| プロジェクト設定 | 変更時に `[Project.*]` へ常時オートセーブ（名前変更はコンボからフォーカスが外れたとき）。旧 SAVE ボタンは廃止 |
+| プロジェクト設定 | 変更時に `[Project.*]` へ常時オートセーブ（名前変更はコンボからフォーカスが外れたとき） |
 | Keep Target | ステータスバー末尾の鍵アイコン。表示は `Wwise v… - プロジェクト名 - 作成先パス`＋鍵＋`- Keep Target -` / `- Not Keep Target -`（省略なし）。クリックで作成先を**選択中プロジェクト**に固定／解除。固定中は黄色の施錠、未固定は白の開錠。未接続時は赤字のエラー表示（固定は外さない）。再接続できたら記憶パスを有効化。起動時／EXPORT 前は可能なら Wwise 上でも同パスを再選択（`[Project.*] KeepTarget` / `KeptTargetPath`。既定オフ） |
-| CLEAR | RELOAD 左の赤ボタン。波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻して保存する。`Always on Top`／`Keep Target` はアプリ設定のため変わらない。プロジェクト自体は削除しない |
+| CLEAR | RELOAD 左の赤ボタン。波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻して保存する（Keep Target 含む）。`Always on Top`（アプリ設定）は変わらない。プロジェクト自体は削除しない |
 | RELOAD | 最後にドロップまたは自動読み込みした WAV／XML を元ファイルから再読み込みする。ログ・Playlist のグループ化・無効化・Exit Source At 記憶・追加マーカーはリセット。再生は一時コピー経由のため、読み込み中も外部アプリは元 WAV を上書き可能 |
 | EXPORT | WAAPI ステータスバー直上の操作バーにある青ボタン。プロジェクト書き出し先へ分割 WAV を書き出し、続けて Wwise へ登録。Wwise 未接続／作成先未選択／書き出し先が未指定・不存在・Originals 外のときは無効 |
 | Ctrl+Shift+C | `色調整（開発者）` パネル（`[Colors]` INI。**DEBUG のみ**） |

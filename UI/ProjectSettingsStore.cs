@@ -230,7 +230,6 @@ internal sealed class ProjectSettingsStore
             ? store._names.First(n => string.Equals(n, active, StringComparison.OrdinalIgnoreCase))
             : store._names[0];
 
-        store.MigrateLegacyKeepTargetFromApp();
         return store;
     }
 
@@ -267,77 +266,6 @@ internal sealed class ProjectSettingsStore
         WriteIndex();
     }
 
-    public void SaveStreaming(
-        string name,
-        bool streamEnabled,
-        int lookAheadMs,
-        int prefetchLengthMs)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.StreamEnabled = streamEnabled;
-        profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
-        profile.PrefetchLengthMs = Math.Clamp(prefetchLengthMs, 0, 9999);
-        WriteProfile(name, profile);
-    }
-
-    public void SaveLoudness(
-        string name,
-        bool enabled,
-        double targetLkfs,
-        bool preserveGroupBalance,
-        bool autoVolumeEnabled = true,
-        AutoVolumeTarget autoVolumeTarget = AutoVolumeTarget.MakeUpGain)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.LoudnessNormalizeEnabled = enabled;
-        profile.LoudnessTargetLkfs = Math.Clamp(targetLkfs, -70.0, 0.0);
-        profile.LoudnessPreserveGroupBalance = preserveGroupBalance;
-        profile.AutoVolumeEnabled = autoVolumeEnabled;
-        profile.AutoVolumeTarget = autoVolumeTarget;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveMoreOptionsExpanded(string name, bool expanded)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.MoreOptionsExpanded = expanded;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveKeepLastSession(string name, bool enabled)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.KeepLastSession = enabled;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveLastWavePath(string name, string path)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.LastWavePath = path?.Trim() ?? string.Empty;
-        WriteProfile(name, profile);
-    }
-
     public void SaveKeepTarget(
         string name,
         bool enabled,
@@ -352,17 +280,6 @@ internal sealed class ProjectSettingsStore
         profile.KeepTarget = enabled;
         profile.KeptTargetPath = keptTargetPath?.Trim() ?? string.Empty;
         profile.KeptTargetProjectFilePath = keptTargetProjectFilePath?.Trim() ?? string.Empty;
-        WriteProfile(name, profile);
-    }
-
-    public void SaveMarkers(string name, MarkerSettings markers)
-    {
-        if (!_profiles.TryGetValue(name.Trim(), out var profile))
-        {
-            return;
-        }
-
-        profile.CopyMarkerFrom(markers);
         WriteProfile(name, profile);
     }
 
@@ -791,61 +708,6 @@ internal sealed class ProjectSettingsStore
         }
 
         return profile;
-    }
-
-    /// <summary>
-    /// 旧 [App] KeepTarget 系を Active プロジェクトへ一度だけ移し、[App] から除去する。
-    /// プロジェクト側に既に Keep Target がある場合は App 側だけ消す。
-    /// </summary>
-    private void MigrateLegacyKeepTargetFromApp()
-    {
-        var appValues = IniFile.ReadSection(AppSettings.Section);
-        var hasLegacy = appValues.ContainsKey("KeepTarget")
-            || appValues.ContainsKey("KeptTargetPath")
-            || appValues.ContainsKey("KeptTargetProjectFilePath");
-        if (!hasLegacy)
-        {
-            return;
-        }
-
-        if (_profiles.TryGetValue(ActiveName, out var profile)
-            && !profile.KeepTarget
-            && string.IsNullOrWhiteSpace(profile.KeptTargetPath)
-            && string.IsNullOrWhiteSpace(profile.KeptTargetProjectFilePath))
-        {
-            profile.KeepTarget = ReadBool(appValues, "KeepTarget", defaultValue: false);
-            if (appValues.TryGetValue("KeptTargetPath", out var keptPath))
-            {
-                profile.KeptTargetPath = keptPath.Trim().Trim('"');
-            }
-
-            if (appValues.TryGetValue("KeptTargetProjectFilePath", out var keptProject))
-            {
-                profile.KeptTargetProjectFilePath = keptProject.Trim().Trim('"');
-            }
-
-            WriteProfile(ActiveName, profile);
-        }
-
-        // [App] を Keep Target 無しで書き直し（他キーは AppSettings 経由で維持）。
-        var cleaned = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (appValues.TryGetValue("AlwaysOnTop", out var alwaysOnTop))
-        {
-            cleaned["AlwaysOnTop"] = alwaysOnTop;
-        }
-
-        if (appValues.TryGetValue("UiLanguage", out var language))
-        {
-            cleaned["UiLanguage"] = language;
-        }
-
-        if (cleaned.Count == 0)
-        {
-            cleaned["AlwaysOnTop"] = "0";
-            cleaned["UiLanguage"] = "ja";
-        }
-
-        IniFile.WriteSection(AppSettings.Section, cleaned);
     }
 
     private static IEnumerable<string> ParseNames(string text)

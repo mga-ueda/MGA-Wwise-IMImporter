@@ -20,8 +20,6 @@ internal sealed class WaapiSettings
     /// <summary>接続・RPC のタイムアウト（ミリ秒）。</summary>
     public int TimeoutMs { get; init; } = DefaultTimeoutMs;
 
-    public static WaapiSettings CreateDefault() => new();
-
     /// <summary>アプリ固定値を返す。</summary>
-    public static WaapiSettings Load() => CreateDefault();
+    public static WaapiSettings Load() => new();
 }

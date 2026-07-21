@@ -24,8 +24,6 @@ internal sealed class WaapiHttpClient : IDisposable
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
-    public string Url => _url;
-
     public async Task<JsonElement> CallAsync(
         string uri,
         object? args = null,

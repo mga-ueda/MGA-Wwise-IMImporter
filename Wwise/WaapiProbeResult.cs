@@ -6,9 +6,7 @@ namespace MgaWwiseIMImporter.Wwise;
 internal sealed class WaapiProbeResult
 {
     public bool Ok { get; init; }
-    public string Url { get; init; } = string.Empty;
     public string WwiseVersion { get; init; } = string.Empty;
-    public string ProcessPath { get; init; } = string.Empty;
     public string Project { get; init; } = string.Empty;
     public string ProjectName { get; init; } = string.Empty;
 
@@ -16,35 +14,11 @@ internal sealed class WaapiProbeResult
     public string ProjectFilePath { get; init; } = string.Empty;
 
     public string SelectedPath { get; init; } = string.Empty;
-    public string SelectedName { get; init; } = string.Empty;
     public string SelectedType { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
     public string Detail { get; init; } = string.Empty;
 
     public bool HasSelection => SelectedPath.Length > 0;
-
-    /// <summary>ステータスバー用（localhost / URL は含めない）。</summary>
-    public string FormatStatusDetail()
-    {
-        if (!Ok)
-        {
-            return Message.Length > 0 ? Message : UiStrings.StatusDisconnected;
-        }
-
-        var parts = new List<string>();
-        if (WwiseVersion.Length > 0)
-        {
-            parts.Add(WwiseVersion);
-        }
-
-        if (ProjectName.Length > 0)
-        {
-            parts.Add(ProjectName);
-        }
-
-        parts.Add(HasSelection ? SelectedPath : UiStrings.StatusNoneSelected);
-        return string.Join("  ·  ", parts);
-    }
 
     /// <summary>エディタログ用。</summary>
     public string FormatLogReport()

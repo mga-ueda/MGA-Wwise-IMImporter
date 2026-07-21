@@ -58,7 +58,6 @@ internal sealed class WaveformView : Control
     private TextBox? _sourceNameEditor;
     private bool _sourceNameHovered;
     private bool _endingSourceNameEdit;
-    private bool _interactionLocked;
     private int _infoLaneWidth = 120;
     private float _outputLevel;
     private WavPeakData? _detailPeaks;
@@ -1356,31 +1355,6 @@ internal sealed class WaveformView : Control
     public event EventHandler<SourceNameEditStateChangedEventArgs>? SourceNameEditStateChanged;
 
     /// <summary>
-    /// 書き出し中など、マウス操作を一時的に受け付けない。
-    /// Enabled=false にせず見た目を維持する。
-    /// </summary>
-    public bool InteractionLocked
-    {
-        get => _interactionLocked;
-        set
-        {
-            if (_interactionLocked == value)
-            {
-                return;
-            }
-
-            _interactionLocked = value;
-            if (value)
-            {
-                EndSourceNameEdit(commit: false);
-                SetSourceNameHovered(false);
-                _isDraggingSeek = false;
-                Capture = false;
-            }
-        }
-    }
-
-    /// <summary>
     /// ドラッグ付与時のスナップ単位。描画されるグリッド線には影響しない。
     /// </summary>
     public MarkerGridOverrideMode MarkerGridOverride { get; set; } =
@@ -1511,10 +1485,6 @@ internal sealed class WaveformView : Control
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (_interactionLocked)
-        {
-            return;
-        }
 
         UpdateMouseGuide(e.X);
         if (e.Button != MouseButtons.Left)
@@ -1545,7 +1515,7 @@ internal sealed class WaveformView : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        if (_interactionLocked || e.Button != MouseButtons.Left)
+        if (e.Button != MouseButtons.Left)
         {
             return;
         }
@@ -1594,7 +1564,7 @@ internal sealed class WaveformView : Control
         }
 
         _sourceNameHovered = hovered;
-        Cursor = hovered && !_interactionLocked ? Cursors.IBeam : Cursors.Default;
+        Cursor = hovered ? Cursors.IBeam : Cursors.Default;
         Invalidate();
     }
 
@@ -1629,7 +1599,7 @@ internal sealed class WaveformView : Control
 
     private void BeginSourceNameEdit()
     {
-        if (_interactionLocked || !TryGetSourceNameBounds(out var bounds))
+        if (!TryGetSourceNameBounds(out var bounds))
         {
             return;
         }
@@ -1747,10 +1717,6 @@ internal sealed class WaveformView : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (_interactionLocked)
-        {
-            return;
-        }
 
         UpdateMouseGuide(e.X);
         SetSourceNameHovered(IsSourceNamePoint(e.Location));
@@ -1789,10 +1755,6 @@ internal sealed class WaveformView : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (_interactionLocked)
-        {
-            return;
-        }
 
         UpdateMouseGuide(e.X);
         if (e.Button == MouseButtons.Left && _markerEditMode is not null)
@@ -2096,7 +2058,6 @@ internal sealed class WaveformView : Control
     {
         string? text = null;
         if (mouseLocation is { } sourceLocation
-            && !_interactionLocked
             && IsSourceNamePoint(sourceLocation))
         {
             text = UiStrings.TipWaveformEditSourceName;
@@ -2684,7 +2645,6 @@ internal sealed class WaveformView : Control
     private void DrawSourceNameHoverChrome(Graphics g)
     {
         if (!_sourceNameHovered
-            || _interactionLocked
             || _sourceNameEditor is { Visible: true }
             || !TryGetSourceNameBounds(out var available))
         {

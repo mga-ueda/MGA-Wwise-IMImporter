@@ -83,8 +83,6 @@ internal static class UiColors
     public static Color LogMuted => MutedFore;
     public static Color LogButtonBack => SurfaceBack;
     public static Color LogButtonFore => PrimaryFore;
-    public static Color LogButtonBorder => ChromeBorder;
-    public static Color LogButtonHoverBack { get; set; } = Color.FromArgb(39, 43, 63);
 
     // --- ツールチップ（共通トークンの別名） ---
     public static Color ToolTipBack => ChromeBack;
@@ -265,7 +263,6 @@ internal static class UiColors
         new("LogHeader", () => LogHeader, c => LogHeader = c),
         new("LogWarning", () => LogWarning, c => LogWarning = c),
         new("LogError", () => LogError, c => LogError = c),
-        new("LogButtonHoverBack", () => LogButtonHoverBack, c => LogButtonHoverBack = c),
 
         new("OptionGlyphCheckMark", () => OptionGlyphCheckMark, c => OptionGlyphCheckMark = c),
 
@@ -336,7 +333,7 @@ internal static class UiColors
         {
             if (values.TryGetValue(entry.Key, out var text) && TryParseColor(text, out var color))
             {
-                // アルファはコード既定を使う（INI / 旧パネルで A=0 になっても起動不能にしない）
+                // アルファはコード既定を使う（INI で A=0 になっても起動不能にしない）
                 var alpha = Defaults.TryGetValue(entry.Key, out var def) ? def.A : (byte)255;
                 entry.Set(Color.FromArgb(alpha, color.R, color.G, color.B));
             }
@@ -398,7 +395,7 @@ internal static class UiColors
             text = text[1..];
         }
 
-        // #RRGGBB / RRGGBB（および旧 #AARRGGBB）
+        // #RRGGBB / RRGGBB
         if (text.Length == 6
             && int.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
         {
@@ -407,17 +404,6 @@ internal static class UiColors
                 (rgb >> 16) & 0xFF,
                 (rgb >> 8) & 0xFF,
                 rgb & 0xFF);
-            return true;
-        }
-
-        if (text.Length == 8
-            && uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var argb))
-        {
-            color = Color.FromArgb(
-                (int)((argb >> 24) & 0xFF),
-                (int)((argb >> 16) & 0xFF),
-                (int)((argb >> 8) & 0xFF),
-                (int)(argb & 0xFF));
             return true;
         }
 

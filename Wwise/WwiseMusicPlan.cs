@@ -12,8 +12,6 @@ internal sealed class WwiseMusicPlan
     public required bool IsMultiPart { get; init; }
 
     public required IReadOnlyList<WwisePlaylistPlan> Playlists { get; init; }
-
-    public int TotalSegmentCount => Playlists.Sum(p => p.Segments.Count);
 }
 
 /// <summary>Music Playlist Container 1 つ分。</summary>

@@ -10,7 +10,7 @@ internal static class WaapiStartupProbe
 {
     private static readonly object SelectedReturnOptions = new Dictionary<string, object>
     {
-        ["return"] = new[] { "id", "name", "type", "path" },
+        ["return"] = new[] { "id", "type", "path" },
     };
 
     public static async Task<WaapiProbeResult> RunAsync(
@@ -43,43 +43,36 @@ internal static class WaapiStartupProbe
                 projectText = UiStrings.StatusNoProject;
             }
 
-            TryGetString(info, "processPath", out var processPath);
-            var (selectedPath, selectedName, selectedType) = await ReadSelectionAsync(client, cancellationToken)
+            var (selectedPath, selectedType) = await ReadSelectionAsync(client, cancellationToken)
                 .ConfigureAwait(false);
 
             return new WaapiProbeResult
             {
                 Ok = true,
-                Url = settings.Url,
                 WwiseVersion = FormatWwiseVersion(info),
-                ProcessPath = processPath,
                 Project = projectText,
                 ProjectName = projectName,
                 ProjectFilePath = projectFilePath,
                 SelectedPath = selectedPath,
-                SelectedName = selectedName,
                 SelectedType = selectedType,
             };
         }
         catch (TaskCanceledException)
         {
-            return Fail(settings.Url, UiStrings.LogWaapiTimeout);
+            return Fail(UiStrings.LogWaapiTimeout);
         }
         catch (HttpRequestException ex)
         {
-            return Fail(
-                settings.Url,
-                UiStrings.LogWaapiConnectFailed,
-                ex.Message);
+            return Fail(UiStrings.LogWaapiConnectFailed, ex.Message);
         }
         catch (Exception ex)
         {
-            return Fail(settings.Url, ex.Message);
+            return Fail(ex.Message);
         }
     }
 
     /// <summary>接続維持中に選択だけ更新する。</summary>
-    public static async Task<(string Path, string Name, string Type)> RefreshSelectionAsync(
+    public static async Task<(string Path, string Type)> RefreshSelectionAsync(
         WaapiSettings settings,
         CancellationToken cancellationToken = default)
     {
@@ -87,7 +80,7 @@ internal static class WaapiStartupProbe
         return await ReadSelectionAsync(client, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<(string Path, string Name, string Type)> ReadSelectionAsync(
+    private static async Task<(string Path, string Type)> ReadSelectionAsync(
         WaapiHttpClient client,
         CancellationToken cancellationToken)
     {
@@ -102,22 +95,20 @@ internal static class WaapiStartupProbe
             || objects.ValueKind != JsonValueKind.Array
             || objects.GetArrayLength() == 0)
         {
-            return (string.Empty, string.Empty, string.Empty);
+            return (string.Empty, string.Empty);
         }
 
         // 複数選択時は先頭を作成先として扱う
         var first = objects[0];
         TryGetString(first, "path", out var path);
-        TryGetString(first, "name", out var name);
         TryGetString(first, "type", out var type);
-        return (path, name, type);
+        return (path, type);
     }
 
-    private static WaapiProbeResult Fail(string url, string message, string detail = "") =>
+    private static WaapiProbeResult Fail(string message, string detail = "") =>
         new()
         {
             Ok = false,
-            Url = url,
             Message = message,
             Detail = detail,
         };
