@@ -33,22 +33,20 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- SIL Open Font License 1.1。フォント本体とライセンスを必ず一緒に配布する。 -->
-    <None Update="Assets\Fonts\UDEVGothic-Regular.ttf">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Fonts\UDEVGothic-Regular.ttf</TargetPath>
-    </None>
+    <!-- ブランディング／フォント本体は exe に埋め込む。ApplicationIcon は別途 PE リソースとしても埋め込まれる。 -->
+    <EmbeddedResource Include="Assets\Branding\MiyabiGameAudio.png">
+      <LogicalName>MgaWwiseIMImporter.Branding.MiyabiGameAudio.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\Branding\MgaWwiseIMImporter.ico">
+      <LogicalName>MgaWwiseIMImporter.Branding.MgaWwiseIMImporter.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets\Fonts\UDEVGothic-Regular.ttf">
+      <LogicalName>MgaWwiseIMImporter.Fonts.UDEVGothic-Regular.ttf</LogicalName>
+    </EmbeddedResource>
+    <!-- SIL OFL 1.1: 埋め込み可。著作権表示とライセンスはユーザーが容易に読める形で同梱する。 -->
     <None Update="Assets\Fonts\LICENSE-UDEV-GOTHIC.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Fonts\LICENSE-UDEV-GOTHIC.txt</TargetPath>
-    </None>
-    <None Update="Assets\Branding\MiyabiGameAudio.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Branding\MiyabiGameAudio.png</TargetPath>
-    </None>
-    <None Update="Assets\Branding\MgaWwiseIMImporter.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Branding\MgaWwiseIMImporter.ico</TargetPath>
+      <TargetPath>Licenses\LICENSE-UDEV-GOTHIC.txt</TargetPath>
     </None>
   </ItemGroup>
 

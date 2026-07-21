@@ -4651,21 +4651,22 @@ public partial class Form1 : Form
 
     /// <summary>
     /// タイトルバー／タスクバー用のウィンドウアイコンを設定する。
-    /// exe 埋め込みアイコン（ApplicationIcon）とは別に Form.Icon が必要なため、
-    /// 同梱の .ico から読み込む。
+    /// ApplicationIcon（Explorer 用）とは別に Form.Icon が必要なため、
+    /// 埋め込み .ico から読み込む。
     /// </summary>
     private void ApplyWindowIcon()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Branding", "MgaWwiseIMImporter.ico");
-        if (!File.Exists(path))
-        {
-            return;
-        }
-
         try
         {
-            using var stream = File.OpenRead(path);
-            Icon = new Icon(stream);
+            using var stream = AppEmbeddedResources.OpenWindowIcon();
+            if (stream is null)
+            {
+                return;
+            }
+
+            // Icon(Stream) はストリーム存続が必要なため、Clone で独立させる。
+            using var loaded = new Icon(stream);
+            Icon = (Icon)loaded.Clone();
         }
         catch (Exception)
         {
@@ -4675,14 +4676,22 @@ public partial class Form1 : Form
 
     private static Image? LoadBrandLogo()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Branding", "MiyabiGameAudio.png");
-        if (!File.Exists(path))
+        try
+        {
+            using var stream = AppEmbeddedResources.OpenLogo();
+            if (stream is null)
+            {
+                return null;
+            }
+
+            // Image.FromStream はストリーム存続が必要なため、Bitmap にコピーする。
+            using var source = Image.FromStream(stream);
+            return new Bitmap(source);
+        }
+        catch (Exception)
         {
             return null;
         }
-
-        using var source = Image.FromFile(path);
-        return new Bitmap(source);
     }
 
     private void ApplyLocalizedUiText()
