@@ -95,10 +95,10 @@ internal static class UiStrings
     public static string TipReload => Get(
         "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
         + Environment.NewLine
-        + "ログ・Playlist のグループ化・無効化・追加マーカーはリセットされます。",
+        + "ログは消去します。サイドカー JSON があれば、グループ／無効化／追加マーカー／Fade・Exit Source At を復元します。",
         "Reload the last dropped or auto-loaded WAV/XML from the original files."
         + Environment.NewLine
-        + "Log, playlist grouping, disables, and added markers are reset.");
+        + "The log is cleared. If a sidecar JSON exists, grouping, disables, added markers, and Fade / Exit Source At are restored.");
 
     public static string TipExport => Get(
         "分割 WAV を書き出し、続けて Wwise へインポートします。"

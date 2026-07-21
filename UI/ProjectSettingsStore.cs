@@ -58,7 +58,7 @@ internal sealed class ProjectProfile
     /// <summary>グループ内の相対バランスを保って正規化するか（既定オン）。</summary>
     public bool LoudnessPreserveGroupBalance { get; set; } = true;
 
-    /// <summary>正規化ゲインの逆を Music Playlist へ戻すか（既定オン）。</summary>
+    /// <summary>正規化ゲインの逆を Music Playlist へ戻すか（既定オフ）。</summary>
     public bool AutoVolumeEnabled { get; set; } = false;
 
     /// <summary>Auto Volume の書き戻し先（既定 Make-Up Gain）。</summary>
