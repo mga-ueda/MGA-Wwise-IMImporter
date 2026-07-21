@@ -87,10 +87,12 @@ internal static class UiStrings
     public static string TipClear => Get(
         "波形・セッション・ログをクリアし、選択中プロジェクトの設定をアプリ既定へ戻します。"
         + Environment.NewLine
-        + "Always on Top（アプリ設定）は変わりません。プロジェクト自体は削除しません。",
+        + "書き出し先フォルダ・WAAPI Keep Target・Always on Top は変わりません。"
+        + " プロジェクト自体は削除しません。",
         "Clear wave, session, and log, and reset the active project settings to app defaults."
         + Environment.NewLine
-        + "Always on Top (app setting) is unchanged. The project itself is not deleted.");
+        + "Export folder, WAAPI Keep Target, and Always on Top are unchanged."
+        + " The project itself is not deleted.");
 
     public static string TipReload => Get(
         "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
@@ -101,10 +103,10 @@ internal static class UiStrings
         + "The log is cleared. If a sidecar JSON exists, grouping, disables, added markers, and Fade / Exit Source At are restored.");
 
     public static string TipExport => Get(
-        "分割 WAV を書き出し、続けて Wwise へインポートします。"
+        "分割 WAV を書き出し、続けて Wwise へインポートします。  [Ctrl+Shift+E]"
         + Environment.NewLine
         + "無効化した Playlist は書き出し対象外です。",
-        "Export split WAVs and import them into Wwise."
+        "Export split WAVs and import them into Wwise.  [Ctrl+Shift+E]"
         + Environment.NewLine
         + "Disabled playlists are excluded.");
 
@@ -175,6 +177,63 @@ internal static class UiStrings
         "Shift + click/drag: add markers continuously"
         + Environment.NewLine
         + "Ctrl + click/drag: remove markers continuously");
+
+    public static string TipWaveformMarkerLaneSessionEdit => Get(
+        "▼ドラッグ: マーカーを移動"
+        + Environment.NewLine
+        + "Alt + ▼ドラッグ: 一つ前のマーカーも同量移動"
+        + Environment.NewLine
+        + "← / →: シークバーを 1px 移動"
+        + Environment.NewLine
+        + "Alt + ← / →: シーク位置のマーカーを 1px 移動（シークも連動）"
+        + Environment.NewLine
+        + "▼／コメントをダブルクリック: コメントを編集"
+        + Environment.NewLine
+        + "Ctrl+Shift+R: シーク位置のマーカーをリネーム"
+        + Environment.NewLine
+        + "選択して Delete / Ctrl+Shift+Del: マーカーを削除（アプリ上のみ）"
+        + Environment.NewLine
+        + "Insert: シーク位置にマーカー追加（コメントなし）"
+        + Environment.NewLine
+        + "Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Undo / Redo"
+        + Environment.NewLine
+        + "コメント -L: 無限ループ / -R: リムーブ / -E: Exit Cue 以降 / -A: Entry Cue 前"
+        + Environment.NewLine
+        + "数字キー／テンキー 0〜9: 表示中画面内の 0%〜90% へジャンプ"
+        + Environment.NewLine
+        + "C / .: シーク位置を変えずに表示を中央寄せ",
+        "Drag ▼: move marker"
+        + Environment.NewLine
+        + "Alt + drag ▼: also move previous marker by the same delta"
+        + Environment.NewLine
+        + "← / →: nudge seek bar by 1px"
+        + Environment.NewLine
+        + "Alt + ← / →: nudge marker at seek by 1px (seek follows)"
+        + Environment.NewLine
+        + "Double-click ▼ / comment: edit comment"
+        + Environment.NewLine
+        + "Ctrl+Shift+R: rename marker at seek"
+        + Environment.NewLine
+        + "Select + Delete / Ctrl+Shift+Del: remove marker (app session only)"
+        + Environment.NewLine
+        + "Insert: add marker at seek position (no comment)"
+        + Environment.NewLine
+        + "Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Undo / Redo"
+        + Environment.NewLine
+        + "Comment -L: loop / -R: remove / -E: after Exit Cue / -A: before Entry Cue"
+        + Environment.NewLine
+        + "Number keys 0–9: jump to 0%–90% within the current view"
+        + Environment.NewLine
+        + "C / .: center the view on the seek position (seek unchanged)");
+
+    /// <summary>全モード共通の波形シーク系ショートカット（タイムラインツールチップ用）。</summary>
+    public static string TipWaveformCommonKeys => Get(
+        "数字キー／テンキー 0〜9: 表示中画面内の 0%〜90% へジャンプ"
+        + Environment.NewLine
+        + "C / .: シーク位置を変えずに表示を中央寄せ",
+        "Number keys 0–9: jump to 0%–90% within the current view"
+        + Environment.NewLine
+        + "C / .: center the view on the seek position (seek unchanged)");
 
     public static string TipWaveformZoomFitAll => Get(
         "ダブルクリックでタイムライン全体を表示",
@@ -423,8 +482,16 @@ internal static class UiStrings
             english + Environment.NewLine + "Hold for key repeat");
 
     public static string TipTransportPlayPause => Get(
-        "再生 / 一時停止  [Space]",
-        "Play / Pause  [Space]");
+        "再生 / 一時停止  [Space]"
+        + Environment.NewLine
+        + "直前の開始位置から再生し直し  [Alt+Enter] / Alt+クリック"
+        + Environment.NewLine
+        + "3秒前から再生  [Ctrl+Space] / Ctrl+クリック",
+        "Play / Pause  [Space]"
+        + Environment.NewLine
+        + "Restart from last start  [Alt+Enter] / Alt+click"
+        + Environment.NewLine
+        + "Play from 3 seconds earlier  [Ctrl+Space] / Ctrl+click");
 
     public static string TipTransportJumpToBar => Get(
         "小節番号を指定して移動  [G]",
@@ -442,6 +509,10 @@ internal static class UiStrings
         "前の Music Playlist へ移動  [Ctrl+←]",
         "Previous Music Playlist  [Ctrl+←]");
 
+    public static string TipTransportPreviousMarker => WithKeyRepeat(
+        "前のマーカーへ移動  [Ctrl+←]",
+        "Previous marker  [Ctrl+←]");
+
     public static string TipTransportPreviousBar => WithKeyRepeat(
         "前の小節  [Home]",
         "Previous bar  [Home]");
@@ -450,9 +521,21 @@ internal static class UiStrings
         "次の小節  [End]",
         "Next bar  [End]");
 
+    public static string TipTransportPreviousViewStep => WithKeyRepeat(
+        "表示の約 5% 前へ移動  [Home]",
+        "Move back about 5% of the view  [Home]");
+
+    public static string TipTransportNextViewStep => WithKeyRepeat(
+        "表示の約 5% 先へ移動  [End]",
+        "Move forward about 5% of the view  [End]");
+
     public static string TipTransportNextPlaylist => WithKeyRepeat(
         "次の Music Playlist へ移動  [Ctrl+→]",
         "Next Music Playlist  [Ctrl+→]");
+
+    public static string TipTransportNextMarker => WithKeyRepeat(
+        "次のマーカーへ移動  [Ctrl+→]",
+        "Next marker  [Ctrl+→]");
 
     public static string TipTransportNextPage => WithKeyRepeat(
         "次の表示ページ  [Page Down]",
@@ -494,16 +577,26 @@ internal static class UiStrings
         "振幅を既定に戻す  [Ctrl+Shift+↓]",
         "Reset amplitude zoom  [Ctrl+Shift+↓]");
 
-    public static string TipForTransportCommand(TransportCommand command) => command switch
+    public static string TipForTransportCommand(
+        TransportCommand command,
+        bool waveOnlyViewStep = false) => command switch
     {
         TransportCommand.TogglePlayback => TipTransportPlayPause,
         TransportCommand.JumpToBar => TipTransportJumpToBar,
         TransportCommand.GoToStart => TipTransportGoToStart,
         TransportCommand.PreviousPage => TipTransportPreviousPage,
-        TransportCommand.PreviousPlaylist => TipTransportPreviousPlaylist,
-        TransportCommand.PreviousBar => TipTransportPreviousBar,
-        TransportCommand.NextBar => TipTransportNextBar,
-        TransportCommand.NextPlaylist => TipTransportNextPlaylist,
+        TransportCommand.PreviousPlaylist => waveOnlyViewStep
+            ? TipTransportPreviousMarker
+            : TipTransportPreviousPlaylist,
+        TransportCommand.PreviousBar => waveOnlyViewStep
+            ? TipTransportPreviousViewStep
+            : TipTransportPreviousBar,
+        TransportCommand.NextBar => waveOnlyViewStep
+            ? TipTransportNextViewStep
+            : TipTransportNextBar,
+        TransportCommand.NextPlaylist => waveOnlyViewStep
+            ? TipTransportNextMarker
+            : TipTransportNextPlaylist,
         TransportCommand.NextPage => TipTransportNextPage,
         TransportCommand.GoToEnd => TipTransportGoToEnd,
         TransportCommand.TimeZoomIn => TipTransportTimeZoomIn,
@@ -981,6 +1074,88 @@ internal static class UiStrings
         "Message : 同名 .xml が無いため小節線は表示しません。",
         "Message : No matching .xml; bar lines will not be shown.");
 
+    public static string LogXmlPairHeader => Get(
+        "=== Nuendo XML モード ===",
+        "=== Nuendo XML mode ===");
+
+    public static string LogXmlPairModeName => Get(
+        "Mode : WAV + 同名 XML（Nuendo トラックリスト）",
+        "Mode : WAV + matching XML (Nuendo tracklist)");
+
+    public static string LogWaveOnlyHeader => Get(
+        "=== Wave 単体モード ===",
+        "=== Wave-only mode ===");
+
+    public static string LogWaveOnlyModeName(WaveOnlyMode mode) => mode switch
+    {
+        WaveOnlyMode.MarkersOnly => Get(
+            "Mode : マーカーのみ／無し（cue + adtl）",
+            "Mode : Markers only / none (cue + adtl)"),
+        WaveOnlyMode.SmplLoop => Get(
+            "Mode : smpl ループ",
+            "Mode : smpl loop"),
+        WaveOnlyMode.Regions => Get(
+            "Mode : リージョン（cue + adtl）",
+            "Mode : Regions (cue + adtl)"),
+        _ => Get($"Mode : {mode}", $"Mode : {mode}"),
+    };
+
+    public static string LogWaveOnlyMarkersOnlySummary(int markerCount) => markerCount == 0
+        ? Get(
+            "Message : 埋め込みマーカーはありません（許容）。冒頭を Entry Cue、末尾を Exit Cue とします。",
+            "Message : No embedded markers (allowed). Using start as Entry Cue and end as Exit Cue.")
+        : Format(
+            "Message : 埋め込みマーカーを表示します（{0} 件）。",
+            "Message : Showing embedded markers ({0}).",
+            markerCount);
+
+    public static string LogWaveOnlyLoopRegions(int regionCount) => Format(
+        "Message : コメントが -L のみのマーカーから無限ループリージョンを {0} 区画構築しました。",
+        "Message : Built {0} infinite-loop region(s) from markers whose comment is only -L.",
+        regionCount);
+
+    public static string LogWaveOnlyMarkerDuplicate => Get(
+        "Message : 同じ位置にマーカーは置けません。",
+        "Message : A marker already exists at this position.");
+
+    public static string LogWaveOnlyMarkerRenamed(string fromName, string toName) => Format(
+        "Message : マーカー名を変更しました: 「{0}」→「{1}」",
+        "Message : Marker renamed: “{0}” → “{1}”.",
+        FormatMarkerNameForLog(fromName),
+        FormatMarkerNameForLog(toName));
+
+    private static string FormatMarkerNameForLog(string? name)
+    {
+        var trimmed = name?.Trim() ?? string.Empty;
+        return trimmed.Length == 0
+            ? Get("（空）", "(empty)")
+            : trimmed;
+    }
+
+    public static string LogWaveOnlyRemoveRegions(int regionCount) => Format(
+        "Message : コメントが -R のみのマーカーからリムーブ範囲を {0} 区画構築しました。",
+        "Message : Built {0} remove region(s) from markers whose comment is only -R.",
+        regionCount);
+
+    public static string LogWaveOnlyExitRegions(int regionCount) => Format(
+        "Message : コメントが -E のみのマーカーから Exit Cue 以降の範囲を {0} 区画構築しました。",
+        "Message : Built {0} after-Exit-Cue region(s) from markers whose comment is only -E.",
+        regionCount);
+
+    public static string LogWaveOnlyAnacrusisRegions(int regionCount) => Format(
+        "Message : コメントが -A のみのマーカーからアウフタクト（Entry Cue 前）範囲を {0} 区画構築しました。",
+        "Message : Built {0} anacrusis (pre-Entry-Cue) region(s) from markers whose comment is only -A.",
+        regionCount);
+
+    public static string LogWaveOnlyOutputParts(int partCount) => Format(
+        "Message : Music Playlist / Segment 名の判定が可能です（出力パート {0}）。",
+        "Message : Music Playlist / Segment names can be resolved ({0} output part(s)).",
+        partCount);
+
+    public static string LogWaveOnlyModeNotImplemented => Get(
+        "Message : このモードは未実装です（後続対応）。",
+        "Message : This mode is not implemented yet.");
+
     public static string LogOutsideWaveHeader => Get(
         "=== 波形範囲外（無視） ===",
         "=== Outside wave range (ignored) ===");
@@ -1255,9 +1430,39 @@ internal static class UiStrings
             index);
 
     // Form1: フォームタイトル・著作権表記
-    public static string FormTitle => Get(
-        "MGA Wwise IMImporter - Version 1.01 β",
-        "MGA Wwise IMImporter - Version 1.01 β");
+    public static string FormTitle => AppVersion.FormTitle;
+
+    public static string DialogUpdateAvailableTitle => Get(
+        "アップデートのお知らせ",
+        "Update available");
+
+    public static string DialogUpdateAvailableBody(
+        string localVersion,
+        string remoteVersion,
+        bool isPrerelease) => Format(
+        "新しいバージョンがあります。{0}{0}"
+        + "現在: {1}{0}"
+        + "最新: {2}{3}{0}{0}"
+        + "GitHub のリリースページを開きますか？{0}"
+        + "（自動ダウンロードは行いません）",
+        "A newer version is available.{0}{0}"
+        + "Current: {1}{0}"
+        + "Latest: {2}{3}{0}{0}"
+        + "Open the GitHub release page?{0}"
+        + "(This app does not download updates automatically.)",
+        Environment.NewLine,
+        localVersion,
+        remoteVersion,
+        isPrerelease
+            ? Get("（プレリリース）", " (pre-release)")
+            : string.Empty);
+
+    public static string LogUpdateAvailable(string localVersion, string remoteVersion) =>
+        Format(
+            "Message : 新しいバージョンがあります: {0} → {1}。",
+            "Message : Update available: {0} → {1}.",
+            localVersion,
+            remoteVersion);
 
     public static string CopyrightText => Get(
         "© 2026 MIYABI GAME AUDIO INC.  GitHub"
@@ -1575,7 +1780,8 @@ internal static class UiStrings
         "BeatLine" => Get("拍線", "Beat Line"),
         "TempoChangeLine" => Get("テンポ変更線", "Tempo Change Line"),
         "WaveFill" => Get("波形", "Waveform Fill"),
-        "WaveCenter" => Get("波形センター線", "Waveform Center Line"),
+        "WaveCenter" => Get("波形センター線（旧）", "Waveform Center Line (Legacy)"),
+        "WaveZeroDbLine" => Get("波形 0dB 線", "Waveform 0 dB Line"),
         "WaveformSourceMeterTrack" => Get("波形メーター・トラック", "Waveform Meter - Track"),
         "WaveformSourceMeterMinimum" => Get("波形メーター・最小", "Waveform Meter - Minimum"),
         "WaveformSourceMeterMaximum" => Get("波形メーター・最大", "Waveform Meter - Maximum"),

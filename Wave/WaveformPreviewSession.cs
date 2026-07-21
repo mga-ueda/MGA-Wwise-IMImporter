@@ -64,6 +64,15 @@ internal readonly record struct MarkerCommentRule(
 internal sealed class WaveformPreviewSession
 {
     private readonly List<UserWaveformMarker> _userMarkers = [];
+    private readonly List<WaveformMarkerMark>? _waveOnlyMarkers;
+    private IReadOnlyList<WaveformRegionMark>? _waveOnlyRegions;
+    private IReadOnlyList<WaveformOutputPart>? _waveOnlyOutputParts;
+    /// <summary>
+    /// マーカー 2 つ特例のコメント実体化を一度行ったら true。
+    /// 以降はユーザー編集を上書きしない。個数が 2 以外になったらクリア。
+    /// </summary>
+    private bool _twoMarkerLoopCommentsMaterialized;
+    private readonly List<WaveOnlyModeProcessor.MarkerCommentRename> _pendingWaveMarkerRenames = [];
     private readonly Dictionary<int, WaveformOutputPart> _markerShareAnchorByPartNumber = [];
     private readonly List<IReadOnlyList<WaveformOutputPart>> _markerShareGroups = [];
     private HashSet<int> _disabledPartNumbers = [];
@@ -74,9 +83,26 @@ internal sealed class WaveformPreviewSession
     public WaveformPreviewSession(WaveformPreviewData preview)
     {
         Preview = preview;
-        _effectiveMarkers = preview.Markers;
-        _wwiseMarkers = preview.Markers;
+        if (preview.AllowsSessionMarkerEdit)
+        {
+            _waveOnlyMarkers = preview.Markers.ToList();
+            _effectiveMarkers = _waveOnlyMarkers;
+            // Wave 単体モードのマーカーは表示・リージョン構築のみ。Wwise Custom Cue には出さない。
+            _wwiseMarkers = [];
+            RebuildWaveOnlyRegions();
+        }
+        else
+        {
+            _waveOnlyMarkers = null;
+            _waveOnlyRegions = null;
+            _waveOnlyOutputParts = null;
+            _effectiveMarkers = preview.Markers;
+            _wwiseMarkers = preview.Markers;
+        }
     }
+
+    /// <summary>Wave 単体モードでアプリ上のマーカー編集が可能なとき true。</summary>
+    public bool AllowsSessionMarkerEdit => _waveOnlyMarkers is not null;
 
     /// <summary>コメント生成ルールを差し替え、既存の追加マーカーへ再適用する。</summary>
     public void SetCommentRule(MarkerCommentRule rule)
@@ -98,6 +124,18 @@ internal sealed class WaveformPreviewSession
     public IReadOnlyList<WaveformMarkerMark> EffectiveMarkers => _effectiveMarkers;
 
     public IReadOnlyList<WaveformMarkerMark> WwiseMarkers => _wwiseMarkers;
+
+    /// <summary>
+    /// 有効なリージョン。Wave 単体モードではマーカーコメントから再構築したものを返す。
+    /// </summary>
+    public IReadOnlyList<WaveformRegionMark> EffectiveRegions =>
+        _waveOnlyRegions ?? Preview.Regions;
+
+    /// <summary>
+    /// 有効な出力パート。Wave 単体モードではリージョンから再構築したものを返す。
+    /// </summary>
+    public IReadOnlyList<WaveformOutputPart> EffectiveOutputParts =>
+        _waveOnlyOutputParts ?? Preview.OutputParts;
 
     /// <summary>
     /// アプリ追加マーカーのサンプル位置（投影は含まない実体のみ）。
@@ -287,6 +325,359 @@ internal sealed class WaveformPreviewSession
         return removed > 0;
     }
 
+    /// <summary>指定サンプル位置に Wave 単体マーカーがあるか。</summary>
+    public bool HasWaveOnlyMarkerAt(long sampleOffset) =>
+        _waveOnlyMarkers is not null
+        && _waveOnlyMarkers.Any(marker => marker.SampleOffset == sampleOffset);
+
+    /// <summary>
+    /// Wave 単体モードの埋め込みマーカーをアプリ上だけ追加する（WAV 非書き込み）。
+    /// </summary>
+    public bool TryAddWaveOnlyMarker(long sampleOffset, string comment = "")
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        if (sampleOffset < 0 || sampleOffset >= Preview.WavInfo.FrameCount)
+        {
+            return false;
+        }
+
+        if (_waveOnlyMarkers.Any(marker => marker.SampleOffset == sampleOffset))
+        {
+            return false;
+        }
+
+        _waveOnlyMarkers.Add(new WaveformMarkerMark(sampleOffset, comment.Trim()));
+        _waveOnlyMarkers.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードの埋め込みマーカーをアプリ上だけ移動する（WAV 非書き込み）。
+    /// </summary>
+    public bool TryMoveWaveOnlyMarker(long fromSampleOffset, long toSampleOffset)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        if (fromSampleOffset == toSampleOffset)
+        {
+            return false;
+        }
+
+        if (toSampleOffset < 0 || toSampleOffset >= Preview.WavInfo.FrameCount)
+        {
+            return false;
+        }
+
+        var index = _waveOnlyMarkers.FindIndex(marker => marker.SampleOffset == fromSampleOffset);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        if (_waveOnlyMarkers.Any(marker => marker.SampleOffset == toSampleOffset))
+        {
+            return false;
+        }
+
+        var existing = _waveOnlyMarkers[index];
+        _waveOnlyMarkers[index] = new WaveformMarkerMark(
+            toSampleOffset,
+            existing.Comment,
+            existing.IsSharedProjection,
+            existing.IsFromWaveEmbedded);
+        _waveOnlyMarkers.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    /// <summary>
+    /// 指定マーカーと、その一つ前のマーカーを同じサンプル差分だけ移動する。
+    /// 前マーカーが無い／範囲外／衝突するときは false。
+    /// </summary>
+    public bool TryMoveWaveOnlyMarkerWithPrevious(long fromSampleOffset, long toSampleOffset)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        var delta = toSampleOffset - fromSampleOffset;
+        if (delta == 0)
+        {
+            return false;
+        }
+
+        var frameCount = Preview.WavInfo.FrameCount;
+        if (toSampleOffset < 0 || toSampleOffset >= frameCount)
+        {
+            return false;
+        }
+
+        var fromIndex = _waveOnlyMarkers.FindIndex(marker => marker.SampleOffset == fromSampleOffset);
+        if (fromIndex < 0)
+        {
+            return false;
+        }
+
+        long? previousSample = null;
+        var previousIndex = -1;
+        for (var i = 0; i < _waveOnlyMarkers.Count; i++)
+        {
+            var sample = _waveOnlyMarkers[i].SampleOffset;
+            if (sample >= fromSampleOffset)
+            {
+                continue;
+            }
+
+            if (previousSample is null || sample > previousSample.Value)
+            {
+                previousSample = sample;
+                previousIndex = i;
+            }
+        }
+
+        if (previousSample is not { } prevFrom || previousIndex < 0)
+        {
+            return TryMoveWaveOnlyMarker(fromSampleOffset, toSampleOffset);
+        }
+
+        var prevTo = prevFrom + delta;
+        if (prevTo < 0 || prevTo >= frameCount)
+        {
+            return false;
+        }
+
+        if (_waveOnlyMarkers.Any(marker =>
+                marker.SampleOffset == toSampleOffset
+                && marker.SampleOffset != fromSampleOffset
+                && marker.SampleOffset != prevFrom))
+        {
+            return false;
+        }
+
+        if (_waveOnlyMarkers.Any(marker =>
+                marker.SampleOffset == prevTo
+                && marker.SampleOffset != fromSampleOffset
+                && marker.SampleOffset != prevFrom))
+        {
+            return false;
+        }
+
+        var fromMarker = _waveOnlyMarkers[fromIndex];
+        var prevMarker = _waveOnlyMarkers[previousIndex];
+        _waveOnlyMarkers[fromIndex] = new WaveformMarkerMark(
+            toSampleOffset,
+            fromMarker.Comment,
+            fromMarker.IsSharedProjection,
+            fromMarker.IsFromWaveEmbedded);
+        _waveOnlyMarkers[previousIndex] = new WaveformMarkerMark(
+            prevTo,
+            prevMarker.Comment,
+            prevMarker.IsSharedProjection,
+            prevMarker.IsFromWaveEmbedded);
+        _waveOnlyMarkers.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードの埋め込みマーカーコメントをアプリ上だけ更新する（WAV 非書き込み）。
+    /// </summary>
+    public bool TrySetWaveOnlyMarkerComment(long sampleOffset, string comment)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        var index = _waveOnlyMarkers.FindIndex(marker => marker.SampleOffset == sampleOffset);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var nextComment = comment.Trim();
+        if (string.Equals(_waveOnlyMarkers[index].Comment, nextComment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var existing = _waveOnlyMarkers[index];
+        _waveOnlyMarkers[index] = new WaveformMarkerMark(
+            sampleOffset,
+            nextComment,
+            existing.IsSharedProjection,
+            existing.IsFromWaveEmbedded);
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードの埋め込みマーカーをアプリ上だけ削除する（WAV 非書き込み）。
+    /// </summary>
+    public bool TryRemoveWaveOnlyMarker(long sampleOffset)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        var removed = _waveOnlyMarkers.RemoveAll(marker => marker.SampleOffset == sampleOffset);
+        if (removed <= 0)
+        {
+            return false;
+        }
+
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードの現在マーカー（サンプル位置＋コメント）。非対象時は null。
+    /// </summary>
+    public IReadOnlyList<WaveformMarkerMark>? GetWaveOnlySessionMarkers() =>
+        _waveOnlyMarkers is null ? null : _waveOnlyMarkers.ToArray();
+
+    /// <summary>
+    /// サイドカーから Wave 単体マーカー状態を復元する。リスト全体で置き換える。
+    /// </summary>
+    public bool TryReplaceWaveOnlySessionMarkers(IEnumerable<WaveformMarkerMark> markers)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        var next = markers
+            .Where(marker =>
+                marker.SampleOffset >= 0
+                && marker.SampleOffset < Preview.WavInfo.FrameCount)
+            .GroupBy(marker => marker.SampleOffset)
+            .Select(group =>
+            {
+                var last = group.Last();
+                return new WaveformMarkerMark(
+                    group.Key,
+                    last.Comment.Trim(),
+                    last.IsSharedProjection,
+                    last.IsFromWaveEmbedded);
+            })
+            .OrderBy(marker => marker.SampleOffset)
+            .ToList();
+
+        if (_waveOnlyMarkers.Count == next.Count
+            && _waveOnlyMarkers.Zip(next).All(pair =>
+                pair.First.SampleOffset == pair.Second.SampleOffset
+                && string.Equals(pair.First.Comment, pair.Second.Comment, StringComparison.Ordinal)
+                && pair.First.IsFromWaveEmbedded == pair.Second.IsFromWaveEmbedded))
+        {
+            return false;
+        }
+
+        _waveOnlyMarkers.Clear();
+        _waveOnlyMarkers.AddRange(next);
+        // サイドカー等からの復元コメントを、2 つ特例の再実体化で上書きしない。
+        _twoMarkerLoopCommentsMaterialized = next
+            .Where(marker =>
+                marker.SampleOffset >= 0
+                && marker.SampleOffset < Preview.WavInfo.FrameCount)
+            .Select(marker => marker.SampleOffset)
+            .Distinct()
+            .Count() == 2;
+        RebuildMarkerSnapshots();
+        RebuildWaveOnlyRegions();
+        return true;
+    }
+
+    private void RebuildWaveOnlyRegions()
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            _waveOnlyRegions = null;
+            _waveOnlyOutputParts = null;
+            return;
+        }
+
+        MaterializeImplicitLoopComments();
+
+        _waveOnlyRegions = WaveOnlyModeProcessor.BuildRegionsFromMarkers(
+            _waveOnlyMarkers,
+            Preview.WavInfo.FrameCount);
+        _waveOnlyOutputParts = _waveOnlyRegions.Count == 0
+            ? []
+            : WaveformRegionBuilder.BuildOutputParts(_waveOnlyRegions, Preview.SourcePath);
+    }
+
+    /// <summary>
+    /// 暗黙ループを <c>-L</c> / <c>-E</c> コメントへ実体化する（WAV 非書き込み）。
+    /// </summary>
+    private void MaterializeImplicitLoopComments()
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return;
+        }
+
+        _pendingWaveMarkerRenames.Clear();
+
+        var frameCount = Preview.WavInfo.FrameCount;
+        var orderedCount = _waveOnlyMarkers
+            .Where(marker => marker.SampleOffset >= 0 && marker.SampleOffset < frameCount)
+            .Select(marker => marker.SampleOffset)
+            .Distinct()
+            .Count();
+
+        if (orderedCount == 2)
+        {
+            if (!_twoMarkerLoopCommentsMaterialized)
+            {
+                WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+                    _waveOnlyMarkers,
+                    frameCount,
+                    allowTwoMarkerMaterialize: true,
+                    _pendingWaveMarkerRenames);
+                _twoMarkerLoopCommentsMaterialized = true;
+            }
+
+            return;
+        }
+
+        _twoMarkerLoopCommentsMaterialized = false;
+        WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+            _waveOnlyMarkers,
+            frameCount,
+            allowTwoMarkerMaterialize: false,
+            _pendingWaveMarkerRenames);
+    }
+
+    /// <summary>
+    /// 直近の暗黙リネーム（埋め込みマーカーの Loop→-L 等）を取り出し、キューを空にする。
+    /// </summary>
+    public IReadOnlyList<WaveOnlyModeProcessor.MarkerCommentRename> TakePendingWaveMarkerRenames()
+    {
+        if (_pendingWaveMarkerRenames.Count == 0)
+        {
+            return [];
+        }
+
+        var taken = _pendingWaveMarkerRenames.ToArray();
+        _pendingWaveMarkerRenames.Clear();
+        return taken;
+    }
+
     /// <summary>
     /// グループ内の編集位置を、最小 part 番号の基準 Playlist 上の同じ相対位置へ変換する。
     /// </summary>
@@ -384,7 +775,10 @@ internal sealed class WaveformPreviewSession
                 _commentRule.Format(number));
         }
 
-        var baseMarkers = Preview.Markers
+        var sourceMarkers = _waveOnlyMarkers is not null
+            ? _waveOnlyMarkers
+            : Preview.Markers;
+        var baseMarkers = sourceMarkers
             .Concat(userMarkerMarks)
             .Where(marker => !IsMarkerOnDisabledPart(marker.SampleOffset))
             .OrderBy(marker => marker.SampleOffset)
@@ -393,7 +787,8 @@ internal sealed class WaveformPreviewSession
         if (_markerShareGroups.Count == 0)
         {
             _effectiveMarkers = baseMarkers;
-            _wwiseMarkers = _effectiveMarkers;
+            // Wave 単体モードは Custom Cue に出さない（表示用 EffectiveMarkers のみ更新）。
+            _wwiseMarkers = _waveOnlyMarkers is not null ? [] : _effectiveMarkers;
             return;
         }
 
@@ -435,7 +830,8 @@ internal sealed class WaveformPreviewSession
                     sharedMarkers.Add(new WaveformMarkerMark(
                         member.StartSampleOffset + relativeSample,
                         marker.Comment,
-                        IsSharedProjection: member.Number != anchor.Number));
+                        IsSharedProjection: member.Number != anchor.Number,
+                        IsFromWaveEmbedded: marker.IsFromWaveEmbedded));
                 }
             }
         }
@@ -443,7 +839,7 @@ internal sealed class WaveformPreviewSession
         _effectiveMarkers = sharedMarkers
             .OrderBy(marker => marker.SampleOffset)
             .ToArray();
-        _wwiseMarkers = _effectiveMarkers;
+        _wwiseMarkers = _waveOnlyMarkers is not null ? [] : _effectiveMarkers;
     }
 
     private bool IsMarkerOnDisabledPart(long sampleOffset)

@@ -93,8 +93,13 @@ internal static class DroppedFilesProcessor
             IReadOnlyList<WaveformRegionMark> regions = [];
             IReadOnlyList<WaveformOutputPart> outputParts = [];
             WaveformBarOverlayResult? barOverlay = null;
+            var allowsSessionMarkerEdit = false;
             if (xmlExists)
             {
+                sb.AppendLine(UiStrings.LogXmlPairHeader);
+                sb.AppendLine(UiStrings.LogXmlPairModeName);
+                sb.AppendLine();
+
                 var tracklist = NuendoTracklistInfo.Read(xmlPath);
                 sb.AppendLine(tracklist.ToDisplayText());
                 barOverlay = WaveformBarOverlayBuilder.Build(tracklist, wavInfo);
@@ -113,6 +118,80 @@ internal static class DroppedFilesProcessor
             }
             else
             {
+                // Wave 単体モード（既存 XML 経路には混ぜない）
+                var embedded = WavEmbeddedMarkerInfo.Read(wavPath);
+                var waveOnlyMode = WaveOnlyModeProcessor.Resolve(embedded);
+                sb.AppendLine(UiStrings.LogWaveOnlyHeader);
+                sb.AppendLine(UiStrings.LogWaveOnlyModeName(waveOnlyMode));
+
+                if (waveOnlyMode == WaveOnlyMode.MarkersOnly)
+                {
+                    markers = WaveOnlyModeProcessor.BuildMarkersOnly(embedded, wavInfo.FrameCount);
+                    var sessionMarkers = markers.ToList();
+                    var materializeRenames = new List<WaveOnlyModeProcessor.MarkerCommentRename>();
+                    WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+                        sessionMarkers,
+                        wavInfo.FrameCount,
+                        renames: materializeRenames);
+                    markers = sessionMarkers;
+                    regions = WaveOnlyModeProcessor.BuildRegionsFromMarkers(
+                        markers,
+                        wavInfo.FrameCount);
+                    if (regions.Count > 0)
+                    {
+                        outputParts = WaveformRegionBuilder.BuildOutputParts(regions, wavPath);
+                    }
+
+                    allowsSessionMarkerEdit = true;
+                    sb.AppendLine(UiStrings.LogWaveOnlyMarkersOnlySummary(markers.Count));
+                    foreach (var rename in materializeRenames)
+                    {
+                        sb.AppendLine(
+                            UiStrings.LogWaveOnlyMarkerRenamed(
+                                rename.FromComment,
+                                rename.ToComment));
+                    }
+                    var loopRegionCount = markers.Count == 2
+                        ? 1
+                        : markers.Count(marker =>
+                            WaveOnlyModeProcessor.IsLoopRelatedComment(marker.Comment));
+                    if (loopRegionCount > 0)
+                    {
+                        sb.AppendLine(UiStrings.LogWaveOnlyLoopRegions(loopRegionCount));
+                    }
+
+                    var removeRegionCount = markers.Count(marker =>
+                        WaveOnlyModeProcessor.IsRemoveOnlyComment(marker.Comment));
+                    if (removeRegionCount > 0)
+                    {
+                        sb.AppendLine(UiStrings.LogWaveOnlyRemoveRegions(removeRegionCount));
+                    }
+
+                    var exitRegionCount = markers.Count(marker =>
+                        WaveOnlyModeProcessor.IsExitOnlyComment(marker.Comment));
+                    if (exitRegionCount > 0)
+                    {
+                        sb.AppendLine(UiStrings.LogWaveOnlyExitRegions(exitRegionCount));
+                    }
+
+                    var anacrusisRegionCount = markers.Count(marker =>
+                        WaveOnlyModeProcessor.IsAnacrusisOnlyComment(marker.Comment));
+                    if (anacrusisRegionCount > 0)
+                    {
+                        sb.AppendLine(UiStrings.LogWaveOnlyAnacrusisRegions(anacrusisRegionCount));
+                    }
+
+                    if (outputParts.Count > 0)
+                    {
+                        sb.AppendLine(UiStrings.LogWaveOnlyOutputParts(outputParts.Count));
+                    }
+                }
+                else
+                {
+                    sb.AppendLine(UiStrings.LogWaveOnlyModeNotImplemented);
+                }
+
+                sb.AppendLine();
                 sb.AppendLine(UiStrings.LogWarningHeader);
                 sb.AppendLine(UiStrings.LogXmlMissing(xmlPath));
                 sb.AppendLine(UiStrings.LogXmlMissingBars);
@@ -128,7 +207,8 @@ internal static class DroppedFilesProcessor
                 markers,
                 cycles,
                 regions,
-                outputParts));
+                outputParts,
+                allowsSessionMarkerEdit));
 
             sb.AppendLine(UiStrings.LogWaveformHeader);
             sb.AppendLine($"{UiStrings.KeySource} {wavPath}");

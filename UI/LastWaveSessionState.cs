@@ -26,6 +26,12 @@ internal sealed class LastWaveSessionState
 
     public List<long> UserMarkerSampleOffsets { get; set; } = [];
 
+    /// <summary>
+    /// Wave 単体モードのアプリ上マーカー（位置＋コメント）。null なら対象外／未保存。
+    /// 空リストは「全削除後」を表す。
+    /// </summary>
+    public List<LastWaveOnlyMarkerState>? WaveOnlySessionMarkers { get; set; }
+
     public List<int> DisabledPartNumbers { get; set; } = [];
 
     /// <summary>パート番号 → Exit Source At（列挙名）。</summary>
@@ -91,7 +97,8 @@ internal sealed class LastWaveSessionState
         IReadOnlyDictionary<int, double> partFadeInSeconds,
         IReadOnlyDictionary<int, double> partFadeOutSeconds,
         IReadOnlyDictionary<int, double> partGroupFadeInSeconds,
-        IReadOnlyDictionary<int, double> partGroupFadeOutSeconds)
+        IReadOnlyDictionary<int, double> partGroupFadeOutSeconds,
+        IReadOnlyList<WaveformMarkerMark>? waveOnlySessionMarkers = null)
     {
         return new LastWaveSessionState
         {
@@ -115,6 +122,17 @@ internal sealed class LastWaveSessionState
             NextGroupId = Math.Max(1, nextGroupId),
             NextColorIndex = Math.Max(0, nextColorIndex),
             UserMarkerSampleOffsets = userMarkerSampleOffsets.Distinct().OrderBy(x => x).ToList(),
+            WaveOnlySessionMarkers = waveOnlySessionMarkers is null
+                ? null
+                : waveOnlySessionMarkers
+                    .Select(marker => new LastWaveOnlyMarkerState
+                    {
+                        SampleOffset = marker.SampleOffset,
+                        Comment = marker.Comment ?? string.Empty,
+                        IsFromWaveEmbedded = marker.IsFromWaveEmbedded,
+                    })
+                    .OrderBy(marker => marker.SampleOffset)
+                    .ToList(),
             DisabledPartNumbers = disabledPartNumbers.Distinct().OrderBy(x => x).ToList(),
             PartExitSourceModes = partExitSourceModes.ToDictionary(
                 pair => pair.Key.ToString(),
@@ -282,4 +300,14 @@ internal sealed class LastWavePartSignature
         Number == part.Number
         && StartSampleOffset == part.StartSampleOffset
         && EndSampleOffset == part.EndSampleOffset;
+}
+
+internal sealed class LastWaveOnlyMarkerState
+{
+    public long SampleOffset { get; set; }
+
+    public string Comment { get; set; } = string.Empty;
+
+    /// <summary>WAV 埋め込み由来なら true（アプリ追加マーカーは false）。</summary>
+    public bool IsFromWaveEmbedded { get; set; }
 }

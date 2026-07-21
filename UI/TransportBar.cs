@@ -31,7 +31,8 @@ internal readonly record struct TransportPositionInfo(
     int Bar,
     int Beat,
     int Subdivision,
-    TimeSpan Time);
+    TimeSpan Time,
+    bool HasMusicalPosition = true);
 
 /// <summary>波形操作のショートカットをアイコンで実行するフラットなトランスポートバー。</summary>
 internal sealed class TransportBar : UserControl
@@ -46,6 +47,7 @@ internal sealed class TransportBar : UserControl
     private TransportCommand? _heldCommand;
     private TransportIconButton? _heldButton;
     private bool _repeatStarted;
+    private bool _waveOnlyViewStepTips;
 
     public TransportBar()
     {
@@ -141,13 +143,47 @@ internal sealed class TransportBar : UserControl
         _positionDisplay.Position = position;
     }
 
+    /// <summary>
+    /// 小節ジャンプ／小節または表示ステップ／Playlist ナビの有効状態。
+    /// 無効時は <see cref="UiColors.TransportDisabledFore"/> でグレーアウト。
+    /// </summary>
+    public void SetNavigationAvailability(
+        bool jumpToBarEnabled,
+        bool previousNextBarEnabled,
+        bool playlistNavigationEnabled,
+        bool waveOnlyViewStepTips = false)
+    {
+        SetCommandEnabled(TransportCommand.JumpToBar, jumpToBarEnabled);
+        SetCommandEnabled(TransportCommand.PreviousBar, previousNextBarEnabled);
+        SetCommandEnabled(TransportCommand.NextBar, previousNextBarEnabled);
+        SetCommandEnabled(TransportCommand.PreviousPlaylist, playlistNavigationEnabled);
+        SetCommandEnabled(TransportCommand.NextPlaylist, playlistNavigationEnabled);
+
+        if (_waveOnlyViewStepTips == waveOnlyViewStepTips)
+        {
+            return;
+        }
+
+        _waveOnlyViewStepTips = waveOnlyViewStepTips;
+        ApplyLocalizedToolTips();
+    }
+
+    private void SetCommandEnabled(TransportCommand command, bool enabled)
+    {
+        if (_commandButtons.TryGetValue(command, out var button)
+            && button.Enabled != enabled)
+        {
+            button.Enabled = enabled;
+        }
+    }
+
     /// <summary>表示言語に合わせてツールチップ・グループ見出し・アクセシビリティ名を付け直す。</summary>
     public void ApplyLocalizedToolTips()
     {
         _toolTip.ApplyTheme();
         foreach (var (command, button) in _commandButtons)
         {
-            var tip = UiStrings.TipForTransportCommand(command);
+            var tip = UiStrings.TipForTransportCommand(command, _waveOnlyViewStepTips);
             button.AccessibleName = tip;
             _toolTip.SetToolTip(button, tip);
         }
@@ -390,7 +426,7 @@ internal sealed class TransportBar : UserControl
         TransportIconButton? first = null;
         foreach (var definition in definitions)
         {
-            var tip = UiStrings.TipForTransportCommand(definition.Command);
+            var tip = UiStrings.TipForTransportCommand(definition.Command, _waveOnlyViewStepTips);
             var button = new TransportIconButton(definition.Icon)
             {
                 AccessibleName = tip,
@@ -549,33 +585,37 @@ internal sealed class TransportPositionDisplay : Control
         g.Clear(BackColor);
 
         var position = Position;
-        var bpm = position is { } p
+        var hasMusical = position is { HasMusicalPosition: true };
+        var musicalFore = hasMusical ? ForeColor : UiColors.TransportDisabledFore;
+        var timeFore = position is not null ? ForeColor : UiColors.TransportDisabledFore;
+
+        var bpm = hasMusical && position is { } p
             ? Math.Round(p.Bpm).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "---";
-        var signature = position is { } signaturePosition
+        var signature = hasMusical && position is { } signaturePosition
             ? $"{signaturePosition.Numerator}/{signaturePosition.Denominator}"
             : "--/--";
-        var musicalPosition = position is { } musical
+        var musicalPosition = hasMusical && position is { } musical
             ? $"{Math.Max(0, musical.Bar):000}:{musical.Beat}:{musical.Subdivision}"
             : "000:1:1";
         var elapsed = position?.Time ?? TimeSpan.Zero;
         var hours = Math.Max(0L, (long)elapsed.TotalHours);
         var time = $"{hours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00}.{elapsed.Milliseconds:000}";
 
-        using var iconPen = new Pen(ForeColor, 1.6f)
+        using var iconPen = new Pen(musicalFore, 1.6f)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
             LineJoin = LineJoin.Round,
         };
-        using var iconBrush = new SolidBrush(ForeColor);
+        using var iconBrush = new SolidBrush(musicalFore);
 
         var iconTop = Math.Max(0f, (Height - 30f) / 2f);
         DrawQuarterNote(g, iconPen, iconBrush, 5, iconTop + 7f);
-        DrawText(g, bpm, new Rectangle(22, 0, 32, Height));
-        DrawText(g, signature, new Rectangle(64, 0, 38, Height));
-        DrawText(g, musicalPosition, new Rectangle(107, 0, 74, Height));
-        DrawText(g, time, new Rectangle(186, 0, 124, Height));
+        DrawText(g, bpm, new Rectangle(22, 0, 32, Height), musicalFore);
+        DrawText(g, signature, new Rectangle(64, 0, 38, Height), musicalFore);
+        DrawText(g, musicalPosition, new Rectangle(107, 0, 74, Height), musicalFore);
+        DrawText(g, time, new Rectangle(186, 0, 124, Height), timeFore);
     }
 
     protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
@@ -584,14 +624,14 @@ internal sealed class TransportPositionDisplay : Control
         base.ScaleControl(factor, specified & ~BoundsSpecified.Width);
     }
 
-    private void DrawText(Graphics g, string text, Rectangle bounds)
+    private void DrawText(Graphics g, string text, Rectangle bounds, Color foreColor)
     {
         TextRenderer.DrawText(
             g,
             text,
             Font,
             bounds,
-            ForeColor,
+            foreColor,
             TextFormatFlags.Left
             | TextFormatFlags.VerticalCenter
             | TextFormatFlags.NoPadding

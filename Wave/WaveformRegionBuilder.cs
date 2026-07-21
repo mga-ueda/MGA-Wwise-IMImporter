@@ -205,7 +205,7 @@ internal static class WaveformRegionBuilder
     /// ユーザーが Exit 用サイクル（-E）を付け忘れた場合のフォロー。
     /// 既に接尾辞がある／除外リージョンなら触らない。
     /// </summary>
-    private static void ApplyAutoExitSuffixAfterLoop(List<WaveformRegionMark> regions)
+    internal static void ApplyAutoExitSuffixAfterLoop(List<WaveformRegionMark> regions)
     {
         for (var i = 0; i + 1 < regions.Count; i++)
         {

@@ -14,6 +14,12 @@ internal sealed class AppSettings
     /// <summary>UI／ログの表示言語（既定 ja）。</summary>
     public UiLanguage UiLanguage { get; set; } = UiLanguage.Japanese;
 
+    /// <summary>
+    /// アップデート案内をスキップしたリモート SemVer（空なら未スキップ）。
+    /// より新しい版が出たら再度案内する。
+    /// </summary>
+    public string SkippedUpdateVersion { get; set; } = string.Empty;
+
     public static AppSettings Load()
     {
         var values = IniFile.ReadSection(Section);
@@ -40,10 +46,17 @@ internal sealed class AppSettings
         Save();
     }
 
+    public void SaveSkippedUpdateVersion(string? semVer)
+    {
+        SkippedUpdateVersion = AppVersion.NormalizeTag(semVer);
+        Save();
+    }
+
     private Dictionary<string, string> ToDictionary() => new(StringComparer.OrdinalIgnoreCase)
     {
         ["AlwaysOnTop"] = AlwaysOnTop ? "1" : "0",
         ["UiLanguage"] = UiStrings.ToIniValue(UiLanguage),
+        ["SkippedUpdateVersion"] = SkippedUpdateVersion ?? string.Empty,
     };
 
     private static void WriteValues(Dictionary<string, string> values)
@@ -52,6 +65,9 @@ internal sealed class AppSettings
         {
             ["AlwaysOnTop"] = values.TryGetValue("AlwaysOnTop", out var alwaysOnTop) ? alwaysOnTop : "0",
             ["UiLanguage"] = values.TryGetValue("UiLanguage", out var language) ? language : "ja",
+            ["SkippedUpdateVersion"] = values.TryGetValue("SkippedUpdateVersion", out var skipped)
+                ? skipped
+                : string.Empty,
         });
     }
 
@@ -61,11 +77,15 @@ internal sealed class AppSettings
         UiLanguage = values.TryGetValue("UiLanguage", out var languageText)
             ? UiStrings.ParseLanguage(languageText)
             : UiLanguage.Japanese,
+        SkippedUpdateVersion = values.TryGetValue("SkippedUpdateVersion", out var skipped)
+            ? AppVersion.NormalizeTag(skipped)
+            : string.Empty,
     };
 
     private static bool HasKnownKeys(Dictionary<string, string> values) =>
         values.ContainsKey("AlwaysOnTop")
-        || values.ContainsKey("UiLanguage");
+        || values.ContainsKey("UiLanguage")
+        || values.ContainsKey("SkippedUpdateVersion");
 
     private static bool ReadBool(Dictionary<string, string> values, string key, bool defaultValue)
     {

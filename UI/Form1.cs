@@ -37,9 +37,10 @@ internal enum UiInteractionLock
     Export = 2,
     Load = 4,
     MarkerOptionsEdit = 8,
+    MarkerCommentEdit = 16,
 }
 
-public partial class Form1 : Form
+public partial class Form1 : Form, IMessageFilter
 {
     // Exact line height in twips (1 pt = 20 twips). Keeps JP + Latin rows uniform.
     private const int LogLineSpacingTwips = 200;
@@ -54,6 +55,9 @@ public partial class Form1 : Form
 
     [DllImport("user32.dll")]
     private static extern bool HideCaret(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     private const int EmSetRect = 0x00B3;
     private const int WmSetRedraw = 0x000B;
@@ -102,12 +106,15 @@ public partial class Form1 : Form
     private double _smoothProgress;
     private double _anchorProgress;
     private long _anchorTickMs;
+    /// <summary>直近の再生開始位置（0〜1）。Alt+Enter でここに戻る。</summary>
+    private double? _lastPlaybackStartProgress;
 #if DEBUG
     private ColorDevPanelForm? _colorDevPanel;
 #endif
     private int _exportGeneration;
     private WaveformPreviewData? _loadedPreview;
     private WaveformPreviewSession? _previewSession;
+    private readonly WaveOnlyMarkerHistory _waveOnlyMarkerHistory = new();
     private IReadOnlyList<string> _lastInputFiles = [];
     private string? _sourceBaseNameOverride;
     private bool _exportBusy;
@@ -386,6 +393,11 @@ public partial class Form1 : Form
         waveformView.SourceNameEditCommitted += (_, e) => ApplySourceBaseName(e.Name);
         waveformView.SourceNameEditStateChanged += (_, e) =>
             SetUiInteractionLocked(UiInteractionLock.SourceNameEdit, e.IsEditing);
+        waveformView.MarkerCommentEditCommitted += WaveformView_MarkerCommentEditCommitted;
+        waveformView.MarkerCommentEditStateChanged += (_, e) =>
+            SetUiInteractionLocked(UiInteractionLock.MarkerCommentEdit, e.IsEditing);
+        waveformView.MarkerSessionDeleteRequested += WaveformView_MarkerSessionDeleteRequested;
+        waveformView.MarkerSessionMoveRequested += WaveformView_MarkerSessionMoveRequested;
         waveformView.PlaylistHoverChanged += (_, partNumber) =>
         {
             _hoveredPlaylistPartNumber = partNumber;
@@ -399,12 +411,40 @@ public partial class Form1 : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Application.AddMessageFilter(this);
         ApplyDarkTitleBar();
         ApplyFixedLogLineSpacing();
         ApplyDarkEditorChrome();
         ApplyDarkScrollableChrome();
         // 非クライアント枠が確定したあとで縮小限界を再計算する。
         UpdateMinimumWindowSize();
+    }
+
+    bool IMessageFilter.PreFilterMessage(ref Message m)
+    {
+        const int wmKeyDown = 0x0100;
+        const int wmSysKeyDown = 0x0104;
+        if (m.Msg is not (wmKeyDown or wmSysKeyDown)
+            || IsDisposed
+            || !Visible
+            || !ContainsFocus)
+        {
+            return false;
+        }
+
+        if (_uiInteractionLocks != UiInteractionLock.None
+            || editorTextBox.ContainsFocus)
+        {
+            return false;
+        }
+
+        if ((ModifierKeys & (Keys.Control | Keys.Alt)) != 0)
+        {
+            return false;
+        }
+
+        var keyCode = (Keys)((int)m.WParam & 0xFFFF);
+        return TryNudgeSeekByArrowKey(keyCode);
     }
 
     protected override void OnShown(EventArgs e)
@@ -473,6 +513,7 @@ public partial class Form1 : Form
         });
 
         BeginInvoke(RunStartupSequenceAsync);
+        BeginInvoke(CheckForAppUpdateAsync);
     }
 
     /// <summary>起動直後: WAAPI 接続確認 → 自動波形読み込み。</summary>
@@ -525,6 +566,76 @@ public partial class Form1 : Form
             {
                 SetUiInteractionLocked(UiInteractionLock.Load, locked: false);
             }
+        }
+    }
+
+    /// <summary>
+    /// GitHub Releases と版を照合し、新しければログと確認ダイアログを出す（自動 DL なし）。
+    /// 失敗時は黙って続行する。
+    /// </summary>
+    private async void CheckForAppUpdateAsync()
+    {
+        try
+        {
+            var update = await GitHubUpdateChecker.TryGetNewerReleaseAsync().ConfigureAwait(true);
+            if (IsDisposed || update is null)
+            {
+                return;
+            }
+
+            var remoteSemVer = update.Value.RemoteSemVer;
+            var skipped = AppVersion.NormalizeTag(_appSettings.SkippedUpdateVersion);
+            if (skipped.Length > 0
+                && string.Equals(skipped, remoteSemVer, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            AppendReport(
+                UiStrings.LogUpdateAvailable(
+                    AppVersion.Current,
+                    remoteSemVer)
+                + Environment.NewLine);
+
+            var answer = OwnerCenteredMessageBox.Show(
+                this,
+                UiStrings.DialogUpdateAvailableBody(
+                    AppVersion.Current,
+                    remoteSemVer,
+                    update.Value.IsPrerelease),
+                UiStrings.DialogUpdateAvailableTitle,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information,
+                MessageBoxDefaultButton.Button1);
+
+            if (answer == DialogResult.Yes)
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo(update.Value.ReleaseUrl)
+                        {
+                            UseShellExecute = true,
+                        });
+                }
+                catch (Exception ex)
+                {
+                    OwnerCenteredMessageBox.Show(
+                        this,
+                        ex.Message,
+                        UiStrings.DialogOpenGithubFailed,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+            }
+            else
+            {
+                _appSettings.SaveSkippedUpdateVersion(remoteSemVer);
+            }
+        }
+        catch
+        {
+            // オフライン・API 制限などは起動を妨げない。
         }
     }
 
@@ -901,6 +1012,7 @@ public partial class Form1 : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        Application.RemoveMessageFilter(this);
         _waapiSelectionTimer.Stop();
         _playheadTimer.Stop();
         _playlistBlinkTimer.Stop();
@@ -950,12 +1062,105 @@ public partial class Form1 : Form
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
+        if (TrySeekByDigitPercentKey(keyData))
+        {
+            return true;
+        }
+
+        if (keyData == Keys.Delete
+            && TryDeleteSelectedWaveOnlyMarker())
+        {
+            return true;
+        }
+
+        if (keyData == Keys.Insert
+            && TryAddWaveOnlyMarkerAtPlayhead())
+        {
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.R)
+            && TryRenameWaveOnlyMarkerAtPlayhead())
+        {
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Delete)
+            && TryDeleteWaveOnlyMarkerAtPlayhead())
+        {
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.E))
+        {
+            if (exportButton.Enabled)
+            {
+                ExportButton_Click(exportButton, EventArgs.Empty);
+            }
+
+            return true;
+        }
+
+        var keyCode = keyData & Keys.KeyCode;
+        if (keyCode is Keys.Left or Keys.Right
+            && (keyData & Keys.Control) == 0
+            && (keyData & Keys.Alt) == Keys.Alt
+            && (keyData & Keys.Shift) == 0
+            && TryNudgeWaveOnlyMarkerAtPlayheadByPixel(keyCode))
+        {
+            return true;
+        }
+
+        if (keyCode is Keys.Left or Keys.Right
+            && (keyData & (Keys.Control | Keys.Alt)) == 0
+            && TryNudgeSeekByArrowKey(keyCode))
+        {
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Z)
+            && TryUndoWaveOnlyMarkerEdit())
+        {
+            return true;
+        }
+
+        if ((keyData == (Keys.Control | Keys.Shift | Keys.Z)
+                || keyData == (Keys.Control | Keys.Y))
+            && TryRedoWaveOnlyMarkerEdit())
+        {
+            return true;
+        }
+
         if (TryProcessWaveformShortcut(keyData))
         {
             return true;
         }
 
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    protected override bool ProcessDialogKey(Keys keyData)
+    {
+        if (_uiInteractionLocks == UiInteractionLock.None
+            && !editorTextBox.ContainsFocus)
+        {
+            if (TrySeekByDigitPercentKey(keyData))
+            {
+                return true;
+            }
+
+            if ((keyData & (Keys.Control | Keys.Alt)) == 0)
+            {
+                var keyCode = keyData & Keys.KeyCode;
+                if (keyCode is Keys.Left or Keys.Right
+                    && TryNudgeSeekByArrowKey(keyCode))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return base.ProcessDialogKey(keyData);
     }
 
     /// <summary>ESC からの終了。確認ダイアログで Yes のときだけ閉じる。</summary>
@@ -1016,7 +1221,8 @@ public partial class Form1 : Form
         }
 
         if (showUiFeedback
-            && TryGetTransportCommandForShortcut(keyData, out var feedbackCommand))
+            && TryGetTransportCommandForShortcut(keyData, out var feedbackCommand)
+            && IsTransportCommandAvailable(feedbackCommand))
         {
             if (_activeTransportShortcutCommand is { } activeCommand
                 && activeCommand != feedbackCommand)
@@ -1031,9 +1237,28 @@ public partial class Form1 : Form
 
         if (keyData == Keys.G)
         {
+            if (!HasTransportBarNavigation())
+            {
+                return true;
+            }
+
             // モーダル表示中にもフェードが進むよう、ダイアログ表示前に解放する。
             EndActiveTransportShortcutFeedback();
             ShowBarJumpDialog();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Space))
+        {
+            _resumePlaybackAfterBackwardSeek = false;
+            StartPrerollPlayback();
+            return true;
+        }
+
+        if (keyData == (Keys.Alt | Keys.Enter))
+        {
+            _resumePlaybackAfterBackwardSeek = false;
+            RestartFromLastPlaybackStart();
             return true;
         }
 
@@ -1042,6 +1267,16 @@ public partial class Form1 : Form
             // ホールド中の自動再開はキャンセル（Space のトグルに委ねる）
             _resumePlaybackAfterBackwardSeek = false;
             TogglePlayback();
+            return true;
+        }
+
+        if ((keyData == Keys.C
+                || keyData == Keys.OemPeriod
+                || keyData == Keys.Decimal)
+            && !IsTextEntryFocusActive())
+        {
+            // シーク位置はそのまま、表示だけ一瞬センターへ寄せる
+            waveformView.CenterViewOnPlayhead();
             return true;
         }
 
@@ -1087,6 +1322,18 @@ public partial class Form1 : Form
 
         if (keyData == (Keys.Control | Keys.Left))
         {
+            if (HasWaveOnlyMarkerNavigation())
+            {
+                PauseForBackwardSeekHold();
+                waveformView.SeekToPreviousMarker();
+                return true;
+            }
+
+            if (!HasTransportPlaylistNavigation())
+            {
+                return true;
+            }
+
             PauseForBackwardSeekHold();
             waveformView.SeekToPreviousPlaylist();
             return true;
@@ -1094,12 +1341,35 @@ public partial class Form1 : Form
 
         if (keyData == (Keys.Control | Keys.Right))
         {
+            if (HasWaveOnlyMarkerNavigation())
+            {
+                waveformView.SeekToNextMarker();
+                return true;
+            }
+
+            if (!HasTransportPlaylistNavigation())
+            {
+                return true;
+            }
+
             waveformView.SeekToNextPlaylist();
             return true;
         }
 
         if (keyData == Keys.Home)
         {
+            if (HasWaveOnlyViewStepNavigation())
+            {
+                PauseForBackwardSeekHold();
+                waveformView.SeekByVisibleFractionPrevious();
+                return true;
+            }
+
+            if (!HasTransportBarNavigation())
+            {
+                return true;
+            }
+
             PauseForBackwardSeekHold();
             waveformView.SeekToPreviousBar();
             return true;
@@ -1107,6 +1377,17 @@ public partial class Form1 : Form
 
         if (keyData == Keys.End)
         {
+            if (HasWaveOnlyViewStepNavigation())
+            {
+                waveformView.SeekByVisibleFractionNext();
+                return true;
+            }
+
+            if (!HasTransportBarNavigation())
+            {
+                return true;
+            }
+
             waveformView.SeekToNextBar();
             return true;
         }
@@ -1210,7 +1491,7 @@ public partial class Form1 : Form
 
         var keyData = command switch
         {
-            TransportCommand.TogglePlayback => Keys.Space,
+            TransportCommand.TogglePlayback => ResolveTogglePlaybackShortcut(),
             TransportCommand.JumpToBar => Keys.G,
             TransportCommand.GoToStart => Keys.Control | Keys.Home,
             TransportCommand.PreviousPlaylist => Keys.Control | Keys.Left,
@@ -1247,6 +1528,26 @@ public partial class Form1 : Form
         }
 
         UpdateTransportPlaybackState();
+    }
+
+    /// <summary>
+    /// 再生ボタン押下時の修飾キーをショートカット相当に変換する。
+    /// Alt → 直前開始位置から再生し直し、Ctrl → 3秒前から再生。
+    /// </summary>
+    private static Keys ResolveTogglePlaybackShortcut()
+    {
+        var modifiers = ModifierKeys;
+        if ((modifiers & Keys.Alt) != 0)
+        {
+            return Keys.Alt | Keys.Enter;
+        }
+
+        if ((modifiers & Keys.Control) != 0)
+        {
+            return Keys.Control | Keys.Space;
+        }
+
+        return Keys.Space;
     }
 
     private void TransportBar_CommandHoldEnded(object? sender, EventArgs e)
@@ -1303,6 +1604,70 @@ public partial class Form1 : Form
         }
 
         return current;
+    }
+
+    /// <summary>
+    /// エディタ・コンボなど文字入力可能なコントロールがフォーカスを持っているとき true。
+    /// </summary>
+    private bool IsTextEntryFocusActive()
+    {
+        if (editorTextBox.ContainsFocus || projectNameComboBox.ContainsFocus)
+        {
+            return true;
+        }
+
+        return GetDeepActiveControl() switch
+        {
+            TextBox { ReadOnly: true } => false,
+            TextBoxBase => true,
+            ComboBox => true,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// 数字キー／テンキー 0〜9 で、現在表示中のタイムライン内の 0%〜90% 位置へジャンプする。
+    /// 文字入力フォーカス中や修飾キー付きは対象外。
+    /// </summary>
+    private bool TrySeekByDigitPercentKey(Keys keyData)
+    {
+        if (!_audioPlayer.HasSource
+            || IsTextEntryFocusActive()
+            || (keyData & (Keys.Control | Keys.Alt | Keys.Shift)) != 0)
+        {
+            return false;
+        }
+
+        if (!TryGetPercentDigit(keyData & Keys.KeyCode, out var digit))
+        {
+            return false;
+        }
+
+        var progress = Math.Clamp(
+            waveformView.TimeViewStart + (digit / 10d) * waveformView.TimeViewSpan,
+            0d,
+            1d);
+        SeekPlayback(progress);
+        waveformView.SetPlayhead(progress, recordTrail: false, ensureVisible: false);
+        return true;
+    }
+
+    private static bool TryGetPercentDigit(Keys keyCode, out int digit)
+    {
+        if (keyCode is >= Keys.D0 and <= Keys.D9)
+        {
+            digit = keyCode - Keys.D0;
+            return true;
+        }
+
+        if (keyCode is >= Keys.NumPad0 and <= Keys.NumPad9)
+        {
+            digit = keyCode - Keys.NumPad0;
+            return true;
+        }
+
+        digit = 0;
+        return false;
     }
 
     /// <summary>
@@ -1852,7 +2217,7 @@ public partial class Form1 : Form
 
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
         if (_waapiLastResult is { Ok: true })
@@ -1924,12 +2289,57 @@ public partial class Form1 : Form
 
     private PlaylistExitSourceMode ResolveExitSourceMode(int partNumber)
     {
-        if (_playlistExitSourceModes.TryGetValue(partNumber, out var mode))
+        PlaylistExitSourceMode mode;
+        if (_playlistExitSourceModes.TryGetValue(partNumber, out var stored))
         {
-            return mode;
+            mode = stored;
+        }
+        else
+        {
+            mode = _playlistExitSourceMode;
         }
 
-        return _playlistExitSourceMode;
+        return NormalizeExitSourceModeForCurrentWave(mode);
+    }
+
+    /// <summary>
+    /// Wave 単体モードでは小節／拍情報がないため Next Bar / Next Beat を使わない。
+    /// </summary>
+    private PlaylistExitSourceMode NormalizeExitSourceModeForCurrentWave(
+        PlaylistExitSourceMode mode)
+    {
+        if (_previewSession?.AllowsSessionMarkerEdit == true
+            && mode is PlaylistExitSourceMode.NextBar or PlaylistExitSourceMode.NextBeat)
+        {
+            return PlaylistExitSourceMode.Immediate;
+        }
+
+        return mode;
+    }
+
+    private void UpdateWaveOnlyExitSourceOptionsEnabled()
+    {
+        var waveOnly = _previewSession?.AllowsSessionMarkerEdit == true;
+        exitSourceNextBarRadio.Enabled = !waveOnly;
+        exitSourceNextBeatRadio.Enabled = !waveOnly;
+
+        if (!waveOnly)
+        {
+            return;
+        }
+
+        if (exitSourceNextBarRadio.Checked || exitSourceNextBeatRadio.Checked)
+        {
+            SelectExitSourceRadio(PlaylistExitSourceMode.Immediate);
+            if (_transitionSettingsEditPartNumber is int partNumber)
+            {
+                StoreExitSourceMode(partNumber, PlaylistExitSourceMode.Immediate);
+            }
+            else
+            {
+                _playlistExitSourceMode = PlaylistExitSourceMode.Immediate;
+            }
+        }
     }
 
     private double ResolveFadeInSeconds(int partNumber)
@@ -2017,6 +2427,7 @@ public partial class Form1 : Form
 
     private void StoreExitSourceMode(int partNumber, PlaylistExitSourceMode mode)
     {
+        mode = NormalizeExitSourceModeForCurrentWave(mode);
         foreach (var scoped in EnumerateTransitionSettingsScope(partNumber))
         {
             _playlistExitSourceModes[scoped] = mode;
@@ -2098,6 +2509,7 @@ public partial class Form1 : Form
             ResolveGroupFadeOutSeconds(partNumber),
             FadeOutGroupTimeRadio_CheckedChanged);
         SelectExitSourceRadio(ResolveExitSourceMode(partNumber));
+        UpdateWaveOnlyExitSourceOptionsEnabled();
     }
 
     private void ClearPlaylistTransitionSettingsState()
@@ -2119,6 +2531,7 @@ public partial class Form1 : Form
             _playlistGroupFadeOutSeconds,
             FadeOutGroupTimeRadio_CheckedChanged);
         SelectExitSourceRadio(_playlistExitSourceMode);
+        UpdateWaveOnlyExitSourceOptionsEnabled();
         UpdateGroupFadeRadioEnabled();
     }
 
@@ -2322,9 +2735,13 @@ public partial class Form1 : Form
         waveformView.ClearPreview();
         _loadedPreview = null;
         _previewSession = null;
+        _waveOnlyMarkerHistory.Clear();
         _sourceBaseNameOverride = null;
+        _lastPlaybackStartProgress = null;
         _lastInputFiles = [];
         reloadButton.Enabled = false;
+        markerOptionsPanel.SetMarkerPlacementOptionsEnabled(true);
+        UpdateWaveOnlyExitSourceOptionsEnabled();
         ClearPendingPlaylistUiTransition();
         ClearPlaylistChoices(UiStrings.PlaylistNone);
         UpdateTransportPosition();
@@ -2336,7 +2753,8 @@ public partial class Form1 : Form
 
     /// <summary>
     /// 波形・セッションを卸し、選択中プロジェクトの設定をアプリ既定へ戻して保存する。
-    /// Always on Top（アプリ設定）は変更しない。プロジェクト名／一覧は消さない。
+    /// Always on Top（アプリ設定）、書き出し先フォルダ、WAAPI Keep Target は変更しない。
+    /// プロジェクト名／一覧は消さない。
     /// </summary>
     private void ClearCurrentProjectToDefaults()
     {
@@ -2347,7 +2765,18 @@ public partial class Form1 : Form
             : _loadedProjectName;
         _creatingNewProject = false;
 
+        // CLEAR でもパス系は現状を維持する（既定の空文字で潰さない）。
+        var preservedOutputDirectory = _projectOutputDirectory;
+        var preservedKeepTarget = _keepTarget;
+        var preservedKeptTargetPath = _keptTargetPath;
+        var preservedKeptTargetProjectFilePath = _keptTargetProjectFilePath;
+
         var profile = ProjectSettingsStore.CreateAppDefaults(name);
+        profile.OutputDirectory = preservedOutputDirectory;
+        profile.KeepTarget = preservedKeepTarget;
+        profile.KeptTargetPath = preservedKeptTargetPath;
+        profile.KeptTargetProjectFilePath = preservedKeptTargetProjectFilePath;
+
         if (_projectStore.ContainsName(name))
         {
             try
@@ -2526,9 +2955,9 @@ public partial class Form1 : Form
 
     private bool HasEnabledExportParts()
     {
-        return _loadedPreview is { OutputParts.Count: > 0 } preview
-            && preview.OutputParts.Any(part =>
-                !_disabledPlaylistPartNumbers.Contains(part.Number));
+        var parts = GetEffectiveOutputParts();
+        return parts.Count > 0
+            && parts.Any(part => !_disabledPlaylistPartNumbers.Contains(part.Number));
     }
 
     private ExportPreflightResult EvaluateExportPreflight() =>
@@ -2541,6 +2970,7 @@ public partial class Form1 : Form
 
     /// <summary>
     /// 事前検証の結果が変わったときだけログへ出す（ポーリングで連打しない）。
+    /// Wave 単体モードは条件達成／未達の両方を出す。それ以外は未達時のみ。
     /// </summary>
     private void LogExportPreflightIfChanged(ExportPreflightResult preflight)
     {
@@ -2552,7 +2982,9 @@ public partial class Form1 : Form
         }
 
         _lastLoggedPreflightKey = key;
-        if (!preflight.CanExport)
+
+        var waveOnly = _previewSession is { AllowsSessionMarkerEdit: true };
+        if (waveOnly || !preflight.CanExport)
         {
             AppendReport(preflight.FormatLogMessage());
         }
@@ -2810,7 +3242,7 @@ public partial class Form1 : Form
         waveformView.SetPlaylistGroupColors(BuildPlaylistGroupColorMap());
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts, updateWaveform: false);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts(), updateWaveform: false);
         }
     }
 
@@ -3096,7 +3528,7 @@ public partial class Form1 : Form
         }
         else
         {
-            _playlistExitSourceMode = mode;
+            _playlistExitSourceMode = NormalizeExitSourceModeForCurrentWave(mode);
             AutosaveCurrentProject();
         }
 
@@ -3456,7 +3888,7 @@ public partial class Form1 : Form
         // Sticky ID は Shift 押し続け中に残し、隙間を跨いだ再ドラッグでも同 ID を使う。
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
     }
 
@@ -3793,7 +4225,7 @@ public partial class Form1 : Form
         waveformView.SetDisabledPlaylistParts(_disabledPlaylistPartNumbers);
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
         ApplyPlaylistSelectorColors();
@@ -3909,7 +4341,7 @@ public partial class Form1 : Form
             Math.Floor(Math.Clamp(progress, 0d, 1d) * frameCount),
             0d,
             Math.Max(0L, frameCount - 1));
-        var partNumber = preview.OutputParts
+        var partNumber = GetEffectiveOutputParts()
             .Where(p => sample >= p.StartSampleOffset && sample < p.EndSampleOffset)
             .Select(p => (int?)p.Number)
             .FirstOrDefault();
@@ -3991,7 +4423,10 @@ public partial class Form1 : Form
             (long)Math.Floor(_smoothProgress * frameCount),
             0L,
             Math.Max(0L, frameCount - 1));
-        var currentPart = preview.OutputParts
+        var outputParts = GetEffectiveOutputParts();
+        var regions = GetEffectiveRegions();
+        var markers = _previewSession?.EffectiveMarkers ?? preview.Markers;
+        var currentPart = outputParts
             .Where(p => currentSample >= p.StartSampleOffset && currentSample < p.EndSampleOffset)
             .Select(p => (WaveformOutputPart?)p)
             .FirstOrDefault();
@@ -4014,12 +4449,13 @@ public partial class Form1 : Form
         var destinationSyncMode = ResolvePlaylistDestinationSyncMode(currentPart, target);
         var anacrusisFrames =
             destinationSyncMode == PlaylistDestinationSyncMode.EntryCue
-                ? GetLeadingAnacrusisFrameCount(preview, target)
+                ? GetLeadingAnacrusisFrameCount(regions, target)
                 : 0L;
         var exitSourceMode = ResolveExitSourceMode(target.Number);
         var boundaries = GetPlaylistExitBoundaries(
             preview,
-            _previewSession?.EffectiveMarkers ?? preview.Markers,
+            markers,
+            regions,
             exitSourceMode,
             currentSample,
             currentPartStart,
@@ -4250,6 +4686,7 @@ public partial class Form1 : Form
     private static IReadOnlyList<long> GetPlaylistExitBoundaries(
         WaveformPreviewData preview,
         IReadOnlyList<WaveformMarkerMark> markers,
+        IReadOnlyList<WaveformRegionMark> regions,
         PlaylistExitSourceMode mode,
         long currentSample,
         long currentPartStart,
@@ -4276,7 +4713,7 @@ public partial class Form1 : Form
             PlaylistExitSourceMode.ExitCue =>
             [
                 GetPlaylistExitCueSample(
-                    preview,
+                    regions,
                     currentPartStart,
                     currentPartEnd,
                     transitionLimit,
@@ -4336,13 +4773,13 @@ public partial class Form1 : Form
     }
 
     private static long GetPlaylistExitCueSample(
-        WaveformPreviewData preview,
+        IReadOnlyList<WaveformRegionMark> regions,
         long currentPartStart,
         long currentPartEnd,
         long transitionLimit,
         bool hasActiveLoop)
     {
-        var lastRegion = preview.Regions
+        var lastRegion = regions
             .Where(region =>
                 !region.IsExcluded
                 && region.StartSampleOffset < currentPartEnd
@@ -4362,11 +4799,11 @@ public partial class Form1 : Form
     }
 
     private static long GetLeadingAnacrusisFrameCount(
-        WaveformPreviewData preview,
+        IReadOnlyList<WaveformRegionMark> regions,
         WaveformOutputPart target)
     {
         var expectedStart = target.StartSampleOffset;
-        foreach (var region in preview.Regions.OrderBy(region => region.StartSampleOffset))
+        foreach (var region in regions.OrderBy(region => region.StartSampleOffset))
         {
             if (region.EndSampleOffset <= expectedStart)
             {
@@ -4451,7 +4888,7 @@ public partial class Form1 : Form
             ensureVisible: true);
         _activeAutomaticPlaylistPartNumber =
             _requestedPlaylistPartNumber
-            ?? preview.OutputParts
+            ?? GetEffectiveOutputParts()
                 .Where(part =>
                     _pendingPlaylistTargetSample >= part.StartSampleOffset
                     && _pendingPlaylistTargetSample < part.EndSampleOffset)
@@ -4720,7 +5157,7 @@ public partial class Form1 : Form
         markerOptionsPanel.ApplyLocalizedLabels();
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
         if (_waapiLastResult is { } last)
@@ -5071,7 +5508,7 @@ public partial class Form1 : Form
     {
         if (_loadedPreview is { } preview)
         {
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
         if (!_suppressProjectUiEvents)
@@ -5140,7 +5577,7 @@ public partial class Form1 : Form
         {
             _sourceBaseNameOverride = null;
             waveformView.SetSourceDisplayName(originalName);
-            UpdatePlaylistDisplayNames(preview.OutputParts);
+            UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
             return;
         }
 
@@ -5161,7 +5598,7 @@ public partial class Form1 : Form
 
         _sourceBaseNameOverride = name;
         waveformView.SetSourceDisplayName(name);
-        UpdatePlaylistDisplayNames(preview.OutputParts);
+        UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
     }
 
     private Dictionary<int, string> BuildPlaylistNameOverrides(
@@ -5190,7 +5627,7 @@ public partial class Form1 : Form
         IReadOnlyList<WaveformMarkerMark> markers)
     {
         var parts = BuildProjectedEnabledParts(
-            preview.OutputParts,
+            GetEffectiveOutputParts(),
             BuildNamingSourcePath(preview.SourcePath));
         var enabledNumbers = parts.Select(part => part.Number).ToHashSet();
         var groups = _playlistPartGroupIds
@@ -5231,7 +5668,7 @@ public partial class Form1 : Form
 
     private void CopyrightLinkLabel_LinkClicked(object? sender, LinkLabelLinkClickedEventArgs e)
     {
-        const string repositoryUrl = "https://github.com/mga-ueda/MGA-Wwise-IMImporter";
+        const string repositoryUrl = AppVersion.RepositoryUrl;
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(repositoryUrl)
@@ -5497,7 +5934,43 @@ public partial class Form1 : Form
             return;
         }
 
+        if (files.Any(IsWaveOrXmlDropPath))
+        {
+            ActivateMainWindow();
+        }
+
         ProcessDroppedFiles(files);
+    }
+
+    /// <summary>ドロップ／前面化の対象となる Wave / XML パスなら true。</summary>
+    private static bool IsWaveOrXmlDropPath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".wav", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".xml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>他アプリからドロップされたときにメインウィンドウを前面アクティブにする。</summary>
+    private void ActivateMainWindow()
+    {
+        if (IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        if (WindowState == FormWindowState.Minimized)
+        {
+            WindowState = FormWindowState.Normal;
+        }
+
+        if (!Visible)
+        {
+            Show();
+        }
+
+        Activate();
+        BringToFront();
+        _ = SetForegroundWindow(Handle);
     }
 
     /// <returns>読み込み処理を開始したら true（すりガラス解除は呼び出し側ではなく読み込み側が担当）。</returns>
@@ -5566,6 +6039,7 @@ public partial class Form1 : Form
             _sourceBaseNameOverride = null;
             _loadedPreview = null;
             _previewSession = null;
+            _waveOnlyMarkerHistory.Clear();
             _exportBusy = false;
             UpdateTransportPosition();
             ClearPendingPlaylistUiTransition();
@@ -5601,6 +6075,8 @@ public partial class Form1 : Form
                 waveformView.ClearPreview();
                 _loadedPreview = null;
                 _previewSession = null;
+                markerOptionsPanel.SetMarkerPlacementOptionsEnabled(true);
+                UpdateWaveOnlyExitSourceOptionsEnabled();
                 UpdateTransportPosition();
                 ClearPlaylistChoices(UiStrings.PlaylistFetchFailed);
                 UpdateExportButtonState();
@@ -5616,7 +6092,13 @@ public partial class Form1 : Form
                 await Task.Run(() =>
                 {
                     _audioPlayer.Load(preview.SourcePath);
-                    _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
+                    _audioPlayer.SetLoopPlans(
+                        WaveAudioPlayer.BuildLoopPlans(
+                            preview.AllowsSessionMarkerEdit
+                                ? WaveOnlyModeProcessor.BuildRegionsFromMarkers(
+                                    preview.Markers,
+                                    preview.WavInfo.FrameCount)
+                                : preview.Regions));
                 });
             }
             catch (Exception ex)
@@ -5649,17 +6131,25 @@ public partial class Form1 : Form
             preview.Bars,
             _previewSession.EffectiveMarkers,
             preview.Cycles,
-            preview.Regions,
-            preview.OutputParts);
+            _previewSession.EffectiveRegions,
+            _previewSession.EffectiveOutputParts,
+            preview.AllowsSessionMarkerEdit);
         waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
         _lastWavePath = Path.GetFullPath(preview.SourcePath);
         PersistLastWavePathToProject();
+        markerOptionsPanel.SetMarkerPlacementOptionsEnabled(!preview.AllowsSessionMarkerEdit);
+        UpdateWaveOnlyExitSourceOptionsEnabled();
 
         UpdateTransportPosition();
-        PopulatePlaylistChoices(preview.OutputParts);
+        PopulatePlaylistChoices(_previewSession.EffectiveOutputParts);
         TryRestoreLastWaveSession(preview);
+        if (_previewSession is { AllowsSessionMarkerEdit: true } waveOnlySession)
+        {
+            ApplyWaveOnlySessionPresentation(waveOnlySession);
+        }
+
         PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
             "source.loaded",
@@ -5669,8 +6159,8 @@ public partial class Form1 : Form
                 preview.WavInfo.FrameCount,
                 preview.WavInfo.SampleRate,
                 bars = preview.Bars.Count,
-                regions = preview.Regions.Count,
-                playlists = preview.OutputParts.Select(part => new
+                regions = _previewSession.EffectiveRegions.Count,
+                playlists = _previewSession.EffectiveOutputParts.Select(part => new
                 {
                     part.Number,
                     part.FileName,
@@ -5680,7 +6170,8 @@ public partial class Form1 : Form
             });
         UpdateExportButtonState();
 
-        if (preview.OutputParts.Count == 0)
+        var effectiveParts = _previewSession.EffectiveOutputParts;
+        if (effectiveParts.Count == 0)
         {
             return;
         }
@@ -5694,8 +6185,8 @@ public partial class Form1 : Form
         AppendReport(
             $"{UiStrings.LogExportHeader}{Environment.NewLine}"
             + (preflight.CanExport
-                ? UiStrings.LogExportReady(preview.OutputParts.Count) + Environment.NewLine
-                : UiStrings.LogExportBlocked(preview.OutputParts.Count, preflight.Reason)
+                ? UiStrings.LogExportReady(effectiveParts.Count) + Environment.NewLine
+                : UiStrings.LogExportBlocked(effectiveParts.Count, preflight.Reason)
                     + Environment.NewLine)
             + UiStrings.LogExportSaveTo(directory)
             + Environment.NewLine
@@ -5747,6 +6238,7 @@ public partial class Form1 : Form
             || savedGroups.Count > 0
             || state.DisabledPartNumbers.Count > 0
             || state.UserMarkerSampleOffsets.Count > 0
+            || state.WaveOnlySessionMarkers is not null
             || savedExitSources.Count > 0
             || savedFadeIns.Count > 0
             || savedFadeOuts.Count > 0
@@ -5757,7 +6249,24 @@ public partial class Form1 : Form
             return;
         }
 
-        var loadedByNumber = preview.OutputParts.ToDictionary(part => part.Number);
+        // Wave 単体: コメント編集でパート境界が変わるため、マーカーを先に復元してから照合する。
+        var waveOnlyMarkerRequested = 0;
+        var waveOnlyMarkerApplied = 0;
+        if (_previewSession is { AllowsSessionMarkerEdit: true } waveOnlySession
+            && state.WaveOnlySessionMarkers is { } savedWaveOnlyMarkers)
+        {
+            waveOnlyMarkerRequested = savedWaveOnlyMarkers.Count;
+            var restored = savedWaveOnlyMarkers
+                .Select(marker => new WaveformMarkerMark(
+                    marker.SampleOffset,
+                    marker.Comment ?? string.Empty,
+                    IsFromWaveEmbedded: marker.IsFromWaveEmbedded));
+            waveOnlySession.TryReplaceWaveOnlySessionMarkers(restored);
+            waveOnlyMarkerApplied = waveOnlySession.EffectiveMarkers.Count;
+        }
+
+        var partsForMatch = _previewSession?.EffectiveOutputParts ?? preview.OutputParts;
+        var loadedByNumber = partsForMatch.ToDictionary(part => part.Number);
         var matchingNumbers = new HashSet<int>();
         foreach (var signature in state.Parts)
         {
@@ -5768,6 +6277,35 @@ public partial class Form1 : Form
             }
         }
 
+        // 番号がずれてもサンプル範囲が一致すれば対応付けて復元する。
+        var savedToLoadedPartNumber = new Dictionary<int, int>();
+        if (matchingNumbers.Count == 0 && state.Parts.Count > 0)
+        {
+            foreach (var signature in state.Parts)
+            {
+                var matched = partsForMatch
+                    .Where(part =>
+                        part.StartSampleOffset == signature.StartSampleOffset
+                        && part.EndSampleOffset == signature.EndSampleOffset)
+                    .Select(part => (WaveformOutputPart?)part)
+                    .FirstOrDefault();
+                if (matched is not { } part)
+                {
+                    continue;
+                }
+
+                savedToLoadedPartNumber[signature.Number] = part.Number;
+                matchingNumbers.Add(part.Number);
+            }
+        }
+        else
+        {
+            foreach (var number in matchingNumbers)
+            {
+                savedToLoadedPartNumber[number] = number;
+            }
+        }
+
         if (state.Parts.Count > 0 && matchingNumbers.Count == 0)
         {
             AppendReport(
@@ -5775,13 +6313,26 @@ public partial class Form1 : Form
                 + UiStrings.LogLastSessionPartMismatch
                 + Environment.NewLine
                 + Environment.NewLine);
+
+            // パートは不一致でも Wave 単体マーカーは復元済みなので表示へ反映する。
+            if (_previewSession is { AllowsSessionMarkerEdit: true } sessionAfterMismatch)
+            {
+                ApplyWaveOnlySessionPresentation(sessionAfterMismatch);
+            }
+
             return;
         }
 
+        int MapPartNumber(int savedPartNumber) =>
+            savedToLoadedPartNumber.TryGetValue(savedPartNumber, out var loaded)
+                ? loaded
+                : savedPartNumber;
+
         var disabledRequested = state.DisabledPartNumbers.Count;
         var disabledApplied = 0;
-        foreach (var partNumber in state.DisabledPartNumbers)
+        foreach (var savedPartNumber in state.DisabledPartNumbers)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!matchingNumbers.Contains(partNumber))
             {
                 continue;
@@ -5795,8 +6346,9 @@ public partial class Form1 : Form
 
         var groupRequested = savedGroups.Count;
         var groupApplied = 0;
-        foreach (var (partNumber, groupId) in savedGroups)
+        foreach (var (savedPartNumber, groupId) in savedGroups)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!matchingNumbers.Contains(partNumber)
                 || _disabledPlaylistPartNumbers.Contains(partNumber))
             {
@@ -5831,19 +6383,22 @@ public partial class Form1 : Form
             Math.Max(0, state.NextColorIndex),
             maxColorIndex + 1);
 
-        var markerRequested = state.UserMarkerSampleOffsets.Count;
+        var markerRequested = state.UserMarkerSampleOffsets.Count + waveOnlyMarkerRequested;
         var markerApplied = 0;
-        if (_previewSession is { } session && markerRequested > 0)
+        if (_previewSession is { } session && state.UserMarkerSampleOffsets.Count > 0)
         {
             session.AddMarkers(state.UserMarkerSampleOffsets);
             var present = session.GetUserMarkerSampleOffsets().ToHashSet();
             markerApplied = state.UserMarkerSampleOffsets.Count(sample => present.Contains(sample));
         }
 
+        markerApplied += waveOnlyMarkerApplied;
+
         var exitRequested = savedExitSources.Count;
         var exitApplied = 0;
-        foreach (var (partNumber, mode) in savedExitSources)
+        foreach (var (savedPartNumber, mode) in savedExitSources)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!loadedByNumber.ContainsKey(partNumber))
             {
                 continue;
@@ -5859,8 +6414,9 @@ public partial class Form1 : Form
         }
 
         var fadeInApplied = 0;
-        foreach (var (partNumber, seconds) in savedFadeIns)
+        foreach (var (savedPartNumber, seconds) in savedFadeIns)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!loadedByNumber.ContainsKey(partNumber))
             {
                 continue;
@@ -5876,8 +6432,9 @@ public partial class Form1 : Form
         }
 
         var fadeOutApplied = 0;
-        foreach (var (partNumber, seconds) in savedFadeOuts)
+        foreach (var (savedPartNumber, seconds) in savedFadeOuts)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!loadedByNumber.ContainsKey(partNumber))
             {
                 continue;
@@ -5893,8 +6450,9 @@ public partial class Form1 : Form
         }
 
         var groupFadeInApplied = 0;
-        foreach (var (partNumber, seconds) in savedGroupFadeIns)
+        foreach (var (savedPartNumber, seconds) in savedGroupFadeIns)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!loadedByNumber.ContainsKey(partNumber))
             {
                 continue;
@@ -5910,8 +6468,9 @@ public partial class Form1 : Form
         }
 
         var groupFadeOutApplied = 0;
-        foreach (var (partNumber, seconds) in savedGroupFadeOuts)
+        foreach (var (savedPartNumber, seconds) in savedGroupFadeOuts)
         {
+            var partNumber = MapPartNumber(savedPartNumber);
             if (!loadedByNumber.ContainsKey(partNumber))
             {
                 continue;
@@ -5985,7 +6544,7 @@ public partial class Form1 : Form
 
         var state = LastWaveSessionState.Capture(
             _lastWavePath,
-            preview.OutputParts,
+            session.EffectiveOutputParts,
             _playlistPartGroupIds,
             _playlistGroupColorIndexes,
             _nextPlaylistGroupId,
@@ -5996,7 +6555,8 @@ public partial class Form1 : Form
             _playlistFadeInSecondsByPart,
             _playlistFadeOutSecondsByPart,
             _playlistGroupFadeInSecondsByPart,
-            _playlistGroupFadeOutSecondsByPart);
+            _playlistGroupFadeOutSecondsByPart,
+            session.GetWaveOnlySessionMarkers());
         _projectStore.SaveLastWaveSession(_loadedProjectName, state);
     }
 
@@ -6020,7 +6580,12 @@ public partial class Form1 : Form
 
     private async void ExportButton_Click(object? sender, EventArgs e)
     {
-        if (_exportBusy || _loadedPreview is not { OutputParts.Count: > 0 } preview)
+        if (_exportBusy || _loadedPreview is not { } preview)
+        {
+            return;
+        }
+
+        if (GetEffectiveOutputParts().Count == 0)
         {
             return;
         }
@@ -6075,7 +6640,11 @@ public partial class Form1 : Form
         var targetPath = preflight.TargetPath;
 
         var exportGeneration = _exportGeneration;
-        var wwiseMarkers = (_previewSession?.WwiseMarkers ?? preview.Markers).ToArray();
+        var wwiseMarkers = _previewSession is { } session
+            ? session.WwiseMarkers.ToArray()
+            : preview.AllowsSessionMarkerEdit
+                ? []
+                : preview.Markers.ToArray();
         var wwiseSnapshot = BuildPlaylistExportSnapshot(preview, wwiseMarkers);
         if (wwiseSnapshot.Parts.Count == 0)
         {
@@ -6153,7 +6722,7 @@ public partial class Form1 : Form
                 BuildNamingSourcePath(preview.SourcePath),
                 preview.WavInfo.SampleRate,
                 snapshot.Parts,
-                preview.Regions,
+                _previewSession?.EffectiveRegions ?? preview.Regions,
                 preview.Bars,
                 snapshot.Markers,
                 snapshot.PartGroupIds,
@@ -6248,6 +6817,11 @@ public partial class Form1 : Form
 
     private void ShowBarJumpDialog()
     {
+        if (!HasTransportBarNavigation())
+        {
+            return;
+        }
+
         // 初回は現在位置の最近傍小節。一度ジャンプしたあとはその値を初期表示する。
         using var dialog = new BarJumpDialogForm(
             _lastJumpedBarNumber ?? waveformView.GetNearestBarNumber())
@@ -6312,6 +6886,7 @@ public partial class Form1 : Form
         UpdatePlayhead();
         if (!wasPlaying && _audioPlayer.IsPlaying)
         {
+            _lastPlaybackStartProgress = _smoothProgress;
             StartPlaylistTransitionGlow();
         }
         else
@@ -6324,6 +6899,83 @@ public partial class Form1 : Form
             new { isPlaying = _audioPlayer.IsPlaying });
     }
 
+    /// <summary>直近の再生開始位置へシークし、そこから再生し直す。</summary>
+    private void RestartFromLastPlaybackStart()
+    {
+        if (!_audioPlayer.HasSource)
+        {
+            return;
+        }
+
+        StartPlaybackAt(_lastPlaybackStartProgress ?? _smoothProgress);
+    }
+
+    /// <summary>現在位置の指定秒数前から再生する（冒頭より前には出ない）。</summary>
+    private void StartPrerollPlayback(double prerollSeconds = 3d)
+    {
+        if (!_audioPlayer.HasSource)
+        {
+            return;
+        }
+
+        var durationSec = _audioPlayer.Duration.TotalSeconds;
+        if (durationSec <= 0)
+        {
+            return;
+        }
+
+        var start = Math.Max(0d, _smoothProgress - (prerollSeconds / durationSec));
+        StartPlaybackAt(start);
+    }
+
+    /// <summary>指定進捗へシークして再生開始（または再生中ならその位置から続行）。</summary>
+    private void StartPlaybackAt(double progress)
+    {
+        if (!_audioPlayer.HasSource)
+        {
+            return;
+        }
+
+        _resumePlaybackAfterBackwardSeek = false;
+        var wasPlaying = _audioPlayer.IsPlaying;
+        var clamped = Math.Clamp(progress, 0d, 1d);
+        WritePlaybackDiagnostic(
+            "transport.start-at-requested",
+            new { progress = clamped, wasPlaying });
+
+        if (!_automaticPlaylistPlayback)
+        {
+            SetManualPlaylistHighlight(clamped);
+        }
+
+        SeekPlayback(clamped);
+        _lastPlaybackStartProgress = clamped;
+
+        if (!wasPlaying)
+        {
+            _audioPlayer.Play();
+        }
+
+        AnchorPlayhead(clamped);
+        _audioPlayer.ArmLoopAtProgress(clamped);
+        _playheadTimer.Start();
+        UpdatePlayhead();
+
+        if (!wasPlaying && _audioPlayer.IsPlaying)
+        {
+            StartPlaylistTransitionGlow();
+        }
+        else
+        {
+            ApplyPlaylistSelectorColors();
+        }
+
+        UpdateTransportPlaybackState();
+        WritePlaybackDiagnostic(
+            "transport.start-at-completed",
+            new { progress = clamped, isPlaying = _audioPlayer.IsPlaying });
+    }
+
     private void UpdateTransportPlaybackState()
     {
         transportBar.IsPlaying = _audioPlayer.IsPlaying;
@@ -6333,16 +6985,34 @@ public partial class Form1 : Form
     {
         if (_loadedPreview is not { } preview
             || preview.WavInfo.FrameCount <= 0
-            || preview.WavInfo.SampleRate == 0
-            || preview.Bars.Count == 0)
+            || preview.WavInfo.SampleRate == 0)
         {
             transportBar.SetPosition(null);
+            UpdateTransportNavigationAvailability();
             return;
         }
 
         var frameCount = preview.WavInfo.FrameCount;
         var timeSample = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
         timeSample = Math.Clamp(timeSample, 0L, frameCount);
+        var elapsed = TimeSpan.FromSeconds(timeSample / (double)preview.WavInfo.SampleRate);
+
+        if (preview.Bars.Count == 0)
+        {
+            // Wave 単体など小節情報が無いときもタイムコードだけ更新する。
+            transportBar.SetPosition(new TransportPositionInfo(
+                Bpm: 120,
+                Numerator: 4,
+                Denominator: 4,
+                Bar: 0,
+                Beat: 1,
+                Subdivision: 1,
+                Time: elapsed,
+                HasMusicalPosition: false));
+            UpdateTransportNavigationAvailability();
+            return;
+        }
+
         var positionSample = Math.Min(timeSample, frameCount - 1);
 
         WaveformBarMark? activeBar = null;
@@ -6371,7 +7041,16 @@ public partial class Form1 : Form
         activeState ??= activeBar;
         if (activeBar is not { } bar || activeState is not { } state)
         {
-            transportBar.SetPosition(null);
+            transportBar.SetPosition(new TransportPositionInfo(
+                Bpm: 120,
+                Numerator: 4,
+                Denominator: 4,
+                Bar: 0,
+                Beat: 1,
+                Subdivision: 1,
+                Time: elapsed,
+                HasMusicalPosition: false));
+            UpdateTransportNavigationAvailability();
             return;
         }
 
@@ -6402,8 +7081,49 @@ public partial class Form1 : Form
             Math.Max(0, bar.BarNumber),
             beatZeroBased + 1,
             subdivision,
-            TimeSpan.FromSeconds(timeSample / (double)preview.WavInfo.SampleRate)));
+            elapsed,
+            HasMusicalPosition: true));
+        UpdateTransportNavigationAvailability();
     }
+
+    private void UpdateTransportNavigationAvailability()
+    {
+        var barNavigation = HasTransportBarNavigation();
+        var waveOnlyNav = HasWaveOnlyViewStepNavigation();
+        transportBar.SetNavigationAvailability(
+            jumpToBarEnabled: barNavigation,
+            previousNextBarEnabled: barNavigation || waveOnlyNav,
+            playlistNavigationEnabled:
+                HasTransportPlaylistNavigation() || HasWaveOnlyMarkerNavigation(),
+            waveOnlyViewStepTips: waveOnlyNav);
+    }
+
+    private bool HasTransportBarNavigation() =>
+        _loadedPreview is { Bars.Count: > 0 };
+
+    /// <summary>Wave 単体モードで Home/End を表示幅の約 5% シークにする。</summary>
+    private bool HasWaveOnlyViewStepNavigation() =>
+        _previewSession is { AllowsSessionMarkerEdit: true }
+        && _audioPlayer.HasSource;
+
+    /// <summary>Wave 単体モードで Ctrl+←/→ を前後マーカーへシークにする。</summary>
+    private bool HasWaveOnlyMarkerNavigation() =>
+        HasWaveOnlyViewStepNavigation();
+
+    private bool HasTransportPlaylistNavigation() =>
+        GetEffectiveOutputParts().Count > 0;
+
+    private bool IsTransportCommandAvailable(TransportCommand command) => command switch
+    {
+        TransportCommand.JumpToBar => HasTransportBarNavigation(),
+        TransportCommand.PreviousBar
+            or TransportCommand.NextBar =>
+            HasTransportBarNavigation() || HasWaveOnlyViewStepNavigation(),
+        TransportCommand.PreviousPlaylist
+            or TransportCommand.NextPlaylist =>
+            HasTransportPlaylistNavigation() || HasWaveOnlyMarkerNavigation(),
+        _ => true,
+    };
 
     private void WaveformView_MarkerEditRequested(
         object? sender,
@@ -6435,6 +7155,507 @@ public partial class Form1 : Form
                 effectiveCount = session.EffectiveMarkers.Count,
             });
     }
+
+    private void WaveformView_MarkerCommentEditCommitted(
+        object? sender,
+        MarkerCommentEditCommittedEventArgs e)
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return;
+        }
+
+        var previousComment = string.Empty;
+        var fromWaveEmbedded = false;
+        var sessionMarkers = session.GetWaveOnlySessionMarkers();
+        if (sessionMarkers is not null)
+        {
+            foreach (var marker in sessionMarkers)
+            {
+                if (marker.SampleOffset != e.SampleOffset)
+                {
+                    continue;
+                }
+
+                previousComment = marker.Comment;
+                fromWaveEmbedded = marker.IsFromWaveEmbedded;
+                break;
+            }
+        }
+
+        if (!TryMutateWaveOnlyMarkers(
+                current => current.TrySetWaveOnlyMarkerComment(e.SampleOffset, e.Comment)))
+        {
+            return;
+        }
+
+        if (fromWaveEmbedded)
+        {
+            AppendReport(
+                UiStrings.LogWaveOnlyMarkerRenamed(previousComment, e.Comment.Trim())
+                + Environment.NewLine);
+        }
+
+        WritePlaybackDiagnostic(
+            "marker.comment-edited",
+            new
+            {
+                sample = e.SampleOffset,
+                comment = e.Comment,
+                previousComment,
+                fromWaveEmbedded,
+                effectiveCount = session.EffectiveMarkers.Count,
+                loopRegions = session.EffectiveRegions.Count(region =>
+                    region.NameSuffix.Equals(
+                        WaveformRegionBuilder.LoopLeftSuffix,
+                        StringComparison.OrdinalIgnoreCase)),
+            });
+    }
+
+    private void WaveformView_MarkerSessionDeleteRequested(
+        object? sender,
+        MarkerSessionDeleteRequestedEventArgs e)
+    {
+        TryDeleteWaveOnlyMarker(e.SampleOffset);
+    }
+
+    private void WaveformView_MarkerSessionMoveRequested(
+        object? sender,
+        MarkerSessionMoveRequestedEventArgs e)
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return;
+        }
+
+        if (e.ShiftPreviousMarker)
+        {
+            if (!TryMutateWaveOnlyMarkers(
+                    current => current.TryMoveWaveOnlyMarkerWithPrevious(
+                        e.FromSampleOffset,
+                        e.ToSampleOffset)))
+            {
+                if (session.HasWaveOnlyMarkerAt(e.ToSampleOffset))
+                {
+                    AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+                }
+
+                waveformView.Invalidate();
+                return;
+            }
+        }
+        else
+        {
+            if (session.HasWaveOnlyMarkerAt(e.ToSampleOffset))
+            {
+                AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+                waveformView.Invalidate();
+                return;
+            }
+
+            if (!TryMutateWaveOnlyMarkers(
+                    current => current.TryMoveWaveOnlyMarker(
+                        e.FromSampleOffset,
+                        e.ToSampleOffset)))
+            {
+                waveformView.Invalidate();
+                return;
+            }
+        }
+
+        waveformView.SetSelectedMarkerSampleOffset(e.ToSampleOffset);
+        WritePlaybackDiagnostic(
+            "marker.session-moved",
+            new
+            {
+                from = e.FromSampleOffset,
+                to = e.ToSampleOffset,
+                shiftPrevious = e.ShiftPreviousMarker,
+                effectiveCount = session.EffectiveMarkers.Count,
+                loopRegions = session.EffectiveRegions.Count(region =>
+                    region.NameSuffix.Equals(
+                        WaveformRegionBuilder.LoopLeftSuffix,
+                        StringComparison.OrdinalIgnoreCase)),
+            });
+    }
+
+    private bool TryDeleteSelectedWaveOnlyMarker()
+    {
+        if (waveformView.SelectedMarkerSampleOffset is not { } sampleOffset)
+        {
+            return false;
+        }
+
+        return TryDeleteWaveOnlyMarker(sampleOffset);
+    }
+
+    private bool TryDeleteWaveOnlyMarker(long sampleOffset)
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return false;
+        }
+
+        if (!TryMutateWaveOnlyMarkers(current => current.TryRemoveWaveOnlyMarker(sampleOffset)))
+        {
+            return false;
+        }
+
+        waveformView.SetSelectedMarkerSampleOffset(null);
+        WritePlaybackDiagnostic(
+            "marker.session-removed",
+            new
+            {
+                sample = sampleOffset,
+                effectiveCount = session.EffectiveMarkers.Count,
+                loopRegions = session.EffectiveRegions.Count(region =>
+                    region.NameSuffix.Equals(
+                        WaveformRegionBuilder.LoopLeftSuffix,
+                        StringComparison.OrdinalIgnoreCase)),
+            });
+        return true;
+    }
+
+    private bool TryAddWaveOnlyMarkerAtPlayhead()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session
+            || _loadedPreview is null)
+        {
+            return false;
+        }
+
+        var frameCount = _loadedPreview.WavInfo.FrameCount;
+        if (frameCount <= 0)
+        {
+            return false;
+        }
+
+        var sampleOffset = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
+        sampleOffset = Math.Clamp(sampleOffset, 0L, frameCount - 1);
+
+        if (session.HasWaveOnlyMarkerAt(sampleOffset))
+        {
+            AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+            return true;
+        }
+
+        if (!TryMutateWaveOnlyMarkers(
+                current => current.TryAddWaveOnlyMarker(sampleOffset, comment: string.Empty)))
+        {
+            return false;
+        }
+
+        waveformView.SetSelectedMarkerSampleOffset(sampleOffset);
+        WritePlaybackDiagnostic(
+            "marker.session-added",
+            new
+            {
+                sample = sampleOffset,
+                effectiveCount = session.EffectiveMarkers.Count,
+                loopRegions = session.EffectiveRegions.Count(region =>
+                    region.NameSuffix.Equals(
+                        WaveformRegionBuilder.LoopLeftSuffix,
+                        StringComparison.OrdinalIgnoreCase)),
+            });
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードで、再生位置にちょうどマーカーがあるときコメント編集を開始する。
+    /// </summary>
+    private bool TryRenameWaveOnlyMarkerAtPlayhead()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true }
+            || _loadedPreview is null)
+        {
+            return false;
+        }
+
+        var frameCount = _loadedPreview.WavInfo.FrameCount;
+        if (frameCount <= 0)
+        {
+            return false;
+        }
+
+        var sampleOffset = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
+        sampleOffset = Math.Clamp(sampleOffset, 0L, frameCount - 1);
+        return waveformView.TryBeginMarkerCommentEditAtSample(sampleOffset);
+    }
+
+    /// <summary>
+    /// Wave 単体モードで、再生位置にちょうどマーカーがあるとき削除する。
+    /// </summary>
+    private bool TryDeleteWaveOnlyMarkerAtPlayhead()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session
+            || _loadedPreview is null)
+        {
+            return false;
+        }
+
+        var frameCount = _loadedPreview.WavInfo.FrameCount;
+        if (frameCount <= 0)
+        {
+            return false;
+        }
+
+        var sampleOffset = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
+        sampleOffset = Math.Clamp(sampleOffset, 0L, frameCount - 1);
+        if (!session.HasWaveOnlyMarkerAt(sampleOffset))
+        {
+            return false;
+        }
+
+        return TryDeleteWaveOnlyMarker(sampleOffset);
+    }
+
+    /// <summary>
+    /// ←/→ でシークバーを波形上 1px 分だけ移動する。
+    /// </summary>
+    private bool TryNudgeSeekByArrowKey(Keys keyCode)
+    {
+        if (keyCode is not (Keys.Left or Keys.Right))
+        {
+            return false;
+        }
+
+        if (!_audioPlayer.HasSource || _loadedPreview is null)
+        {
+            return false;
+        }
+
+        var timelineWidth = Math.Max(1, waveformView.TimelineContentWidth);
+        var progressDelta = (keyCode == Keys.Left ? -1 : 1)
+            * (waveformView.TimeViewSpan / timelineWidth);
+        var next = Math.Clamp(_smoothProgress + progressDelta, 0d, 1d);
+        if (Math.Abs(next - _smoothProgress) < 1e-15)
+        {
+            return true;
+        }
+
+        SeekPlayback(next);
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体モードで、再生位置にちょうどマーカーがあるとき Alt+←/→ で 1px 移動する。
+    /// シークバーも同じだけ動かし、連続移動できるようにする。
+    /// </summary>
+    private bool TryNudgeWaveOnlyMarkerAtPlayheadByPixel(Keys keyCode)
+    {
+        if (keyCode is not (Keys.Left or Keys.Right))
+        {
+            return false;
+        }
+
+        if (_uiInteractionLocks != UiInteractionLock.None
+            || _previewSession is not { AllowsSessionMarkerEdit: true } session
+            || _loadedPreview is null
+            || !_audioPlayer.HasSource)
+        {
+            return false;
+        }
+
+        var frameCount = _loadedPreview.WavInfo.FrameCount;
+        if (frameCount <= 0)
+        {
+            return false;
+        }
+
+        var fromSample = (long)Math.Round(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount);
+        fromSample = Math.Clamp(fromSample, 0L, frameCount - 1);
+        if (!session.HasWaveOnlyMarkerAt(fromSample))
+        {
+            return false;
+        }
+
+        var timelineWidth = Math.Max(1, waveformView.TimelineContentWidth);
+        var progressDelta = (keyCode == Keys.Left ? -1 : 1)
+            * (waveformView.TimeViewSpan / timelineWidth);
+        var nextProgress = Math.Clamp(_smoothProgress + progressDelta, 0d, 1d);
+        var toSample = (long)Math.Round(nextProgress * frameCount);
+        toSample = Math.Clamp(toSample, 0L, frameCount - 1);
+
+        // ズームインで 1px が 1 サンプル未満のときは最低 1 サンプル動かす。
+        if (toSample == fromSample)
+        {
+            var step = keyCode == Keys.Left ? -1L : 1L;
+            toSample = Math.Clamp(fromSample + step, 0L, frameCount - 1);
+            if (toSample == fromSample)
+            {
+                return true;
+            }
+        }
+
+        if (session.HasWaveOnlyMarkerAt(toSample))
+        {
+            AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+            return true;
+        }
+
+        if (!TryMutateWaveOnlyMarkers(
+                current => current.TryMoveWaveOnlyMarker(fromSample, toSample)))
+        {
+            return true;
+        }
+
+        waveformView.SetSelectedMarkerSampleOffset(toSample);
+        // 次のキー入力でも「ちょうどマーカー上」と判定できるようサンプル位置へ合わせる。
+        SeekPlayback((double)toSample / frameCount);
+        return true;
+    }
+
+    private static bool AreOutputPartsEquivalent(
+        IReadOnlyList<WaveformOutputPart> left,
+        IReadOnlyList<WaveformOutputPart> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (left[i].Number != right[i].Number
+                || left[i].StartSampleOffset != right[i].StartSampleOffset
+                || left[i].EndSampleOffset != right[i].EndSampleOffset)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryUndoWaveOnlyMarkerEdit()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return false;
+        }
+
+        var current = session.GetWaveOnlySessionMarkers();
+        if (current is null
+            || !_waveOnlyMarkerHistory.TryUndo(current, out var restored))
+        {
+            return false;
+        }
+
+        if (!session.TryReplaceWaveOnlySessionMarkers(restored))
+        {
+            return false;
+        }
+
+        ApplyWaveOnlySessionPresentation(session);
+        waveformView.SetSelectedMarkerSampleOffset(null);
+        PersistLastWaveSessionIfPossible();
+        WritePlaybackDiagnostic(
+            "marker.session-undo",
+            new { effectiveCount = session.EffectiveMarkers.Count });
+        return true;
+    }
+
+    private bool TryRedoWaveOnlyMarkerEdit()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return false;
+        }
+
+        var current = session.GetWaveOnlySessionMarkers();
+        if (current is null
+            || !_waveOnlyMarkerHistory.TryRedo(current, out var restored))
+        {
+            return false;
+        }
+
+        if (!session.TryReplaceWaveOnlySessionMarkers(restored))
+        {
+            return false;
+        }
+
+        ApplyWaveOnlySessionPresentation(session);
+        waveformView.SetSelectedMarkerSampleOffset(null);
+        PersistLastWaveSessionIfPossible();
+        WritePlaybackDiagnostic(
+            "marker.session-redo",
+            new { effectiveCount = session.EffectiveMarkers.Count });
+        return true;
+    }
+
+    /// <summary>
+    /// Wave 単体マーカーを変更し、成功時だけ Undo 履歴へ積む。
+    /// パート構成が変わらないときは Playlist を再生成せず、キーリピート中のフォーカス崩れを防ぐ。
+    /// </summary>
+    private bool TryMutateWaveOnlyMarkers(Func<WaveformPreviewSession, bool> mutate)
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return false;
+        }
+
+        var before = session.GetWaveOnlySessionMarkers();
+        if (before is null)
+        {
+            return false;
+        }
+
+        var beforeParts = session.EffectiveOutputParts.ToArray();
+        if (!mutate(session))
+        {
+            return false;
+        }
+
+        _waveOnlyMarkerHistory.PushBeforeChange(before);
+        ApplyWaveOnlySessionPresentation(
+            session,
+            refreshPlaylists: !AreOutputPartsEquivalent(beforeParts, session.EffectiveOutputParts));
+        PersistLastWaveSessionIfPossible();
+        return true;
+    }
+
+    private void ApplyWaveOnlySessionPresentation(
+        WaveformPreviewSession session,
+        bool refreshPlaylists = true)
+    {
+        waveformView.SetMarkers(session.EffectiveMarkers);
+        waveformView.SetRegions(session.EffectiveRegions);
+        waveformView.SetOutputParts(session.EffectiveOutputParts);
+        _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(session.EffectiveRegions));
+        if (refreshPlaylists)
+        {
+            PopulatePlaylistChoices(session.EffectiveOutputParts);
+        }
+
+        UpdateExportButtonState();
+        UpdateTransportNavigationAvailability();
+        AppendPendingWaveOnlyMarkerRenameLogs(session);
+    }
+
+    /// <summary>
+    /// Loop→-L や 2 マーカー特例の -L/-E 実体化など、埋め込みマーカーの自動リネームをログへ出す。
+    /// </summary>
+    private void AppendPendingWaveOnlyMarkerRenameLogs(WaveformPreviewSession session)
+    {
+        foreach (var rename in session.TakePendingWaveMarkerRenames())
+        {
+            AppendReport(
+                UiStrings.LogWaveOnlyMarkerRenamed(rename.FromComment, rename.ToComment)
+                + Environment.NewLine);
+        }
+    }
+
+    /// <summary>Wave 単体編集中はセッション再構築のパート、それ以外は読み込み時パート。</summary>
+    private IReadOnlyList<WaveformOutputPart> GetEffectiveOutputParts() =>
+        _previewSession?.EffectiveOutputParts
+        ?? _loadedPreview?.OutputParts
+        ?? [];
+
+    /// <summary>Wave 単体編集中はセッション再構築のリージョン、それ以外は読み込み時リージョン。</summary>
+    private IReadOnlyList<WaveformRegionMark> GetEffectiveRegions() =>
+        _previewSession?.EffectiveRegions
+        ?? _loadedPreview?.Regions
+        ?? [];
 
     private void SeekPlayback(double progress)
     {
@@ -6470,6 +7691,7 @@ public partial class Form1 : Form
         {
             waveformView.SetPlayhead(null);
             transportBar.SetPosition(null);
+            UpdateTransportNavigationAvailability();
             UpdateSourceLevelMeter();
             return;
         }
@@ -6826,6 +8048,14 @@ public partial class Form1 : Form
         if (t.StartsWith("Status  : OK", StringComparison.Ordinal))
         {
             return UiColors.SeekCyan;
+        }
+
+        if (t.StartsWith("Message : マーカー名を変更しました:", StringComparison.Ordinal)
+            || t.StartsWith("Message : Marker renamed:", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("Message : 新しいバージョンがあります:", StringComparison.Ordinal)
+            || t.StartsWith("Message : Update available:", StringComparison.OrdinalIgnoreCase))
+        {
+            return UiColors.LogWarning;
         }
 
         if (t.StartsWith("[警告]", StringComparison.Ordinal)

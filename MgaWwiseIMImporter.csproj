@@ -11,21 +11,24 @@
     <Product>MGA Wwise IMImporter</Product>
     <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
     <ApplicationIcon>Assets\Branding\MgaWwiseIMImporter.ico</ApplicationIcon>
-    <Version>1.0.1-beta</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
-    <FileVersion>1.0.1.0</FileVersion>
-    <InformationalVersion>1.01 β</InformationalVersion>
+    <!-- 表示・比較・GitHub タグ共通の SemVer（例: 1.0.2-beta ↔ tag v1.0.2-beta） -->
+    <Version>1.0.2-beta</Version>
+    <AssemblyVersion>1.0.2.0</AssemblyVersion>
+    <FileVersion>1.0.2.0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- ローカル検証用スクラッチを既定グロブから除外する -->
-    <Compile Remove="_probe\**" />
-    <None Remove="_probe\**" />
+    <!-- 実行時比較用に Version をアセンブリへ埋め込む -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>AppVersion</_Parameter1>
+      <_Parameter2>$(Version)</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
-  <!-- 色調整パネルは開発ビルド専用。Release バイナリには含めない。 -->
-  <ItemGroup Condition="'$(Configuration)' == 'Release'">
-    <Compile Remove="UI\ColorDevPanelForm.cs" />
+  <ItemGroup>
+    <!-- 色調整パネルは開発ビルド専用。Release バイナリには含めない。 -->
+    <Compile Remove="UI\ColorDevPanelForm.cs" Condition="'$(Configuration)' == 'Release'" />
   </ItemGroup>
 
   <ItemGroup>

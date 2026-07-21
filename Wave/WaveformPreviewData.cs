@@ -10,7 +10,8 @@ internal sealed class WaveformPreviewData
         IReadOnlyList<WaveformMarkerMark>? markers = null,
         IReadOnlyList<WaveformCycleMark>? cycles = null,
         IReadOnlyList<WaveformRegionMark>? regions = null,
-        IReadOnlyList<WaveformOutputPart>? outputParts = null)
+        IReadOnlyList<WaveformOutputPart>? outputParts = null,
+        bool allowsSessionMarkerEdit = false)
     {
         Peaks = peaks;
         SourcePath = sourcePath;
@@ -20,6 +21,7 @@ internal sealed class WaveformPreviewData
         Cycles = cycles ?? [];
         Regions = regions ?? [];
         OutputParts = outputParts ?? [];
+        AllowsSessionMarkerEdit = allowsSessionMarkerEdit;
     }
 
     public WavPeakData Peaks { get; }
@@ -30,4 +32,10 @@ internal sealed class WaveformPreviewData
     public IReadOnlyList<WaveformCycleMark> Cycles { get; }
     public IReadOnlyList<WaveformRegionMark> Regions { get; }
     public IReadOnlyList<WaveformOutputPart> OutputParts { get; }
+
+    /// <summary>
+    /// Wave 単体・マーカーのみ／無しモードで、アプリ上のマーカー編集（コメント／削除）を許す。
+    /// WAV ファイル自体は書き換えない。
+    /// </summary>
+    public bool AllowsSessionMarkerEdit { get; }
 }

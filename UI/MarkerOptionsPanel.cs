@@ -73,6 +73,7 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private MarkerSettings? _settings;
     private bool _updating;
+    private bool _markerPlacementOptionsEnabled = true;
     private bool _streamEnabled = true;
     private int _lookAheadMs = StreamMsDefault;
     private int _prefetchLengthMs = StreamMsDefault;
@@ -588,6 +589,21 @@ internal sealed class MarkerOptionsPanel : UserControl
     /// <summary>More Options が開いているか。</summary>
     public bool MoreOptionsExpanded => _moreOptionsExpanded;
 
+    /// <summary>
+    /// Marker Grid / Marker Comment（Shift 付与用）を有効にするか。
+    /// Wave 単体モードでは無効化する。
+    /// </summary>
+    public void SetMarkerPlacementOptionsEnabled(bool enabled)
+    {
+        if (_markerPlacementOptionsEnabled == enabled)
+        {
+            return;
+        }
+
+        _markerPlacementOptionsEnabled = enabled;
+        UpdateDependentStates();
+    }
+
     /// <summary>DPI スケール（96dpi 基準）を適用する。</summary>
     private int S(int value) => (int)Math.Round(value * DeviceDpi / 96f);
 
@@ -790,7 +806,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             textBox.BackColor = inputBack;
         }
 
-        ApplyDependentColors();
+        UpdateDependentStates();
         UpdatePreview();
     }
 
@@ -993,7 +1009,14 @@ internal sealed class MarkerOptionsPanel : UserControl
     {
         // Enabled=false だと OS の無効色（暗い背景で黒）になるため、
         // ReadOnly＋色で見た目の無効状態を表す。
-        _digitsTextBox.ReadOnly = false;
+        var placementEnabled = _markerPlacementOptionsEnabled;
+        _gridDefaultRadio.Enabled = placementEnabled;
+        _gridBarRadio.Enabled = placementEnabled;
+        _gridBeatRadio.Enabled = placementEnabled;
+        _zeroPadCheckBox.Enabled = placementEnabled;
+        _resetPerPartCheckBox.Enabled = placementEnabled;
+
+        _digitsTextBox.ReadOnly = !placementEnabled;
         _lookAheadTextBox.ReadOnly = !_streamEnabled;
         _prefetchTextBox.ReadOnly = !_streamEnabled;
         _loudnessTargetTextBox.ReadOnly = !_loudnessNormalizeEnabled;
@@ -1002,9 +1025,9 @@ internal sealed class MarkerOptionsPanel : UserControl
         var autoVolumeRadiosEnabled = _loudnessNormalizeEnabled && _autoVolumeEnabled;
         _autoVolumeMakeUpGainRadio.Enabled = autoVolumeRadiosEnabled;
         _autoVolumeVoiceVolumeRadio.Enabled = autoVolumeRadiosEnabled;
-        _prefixTextBox.ReadOnly = false;
-        _suffixTextBox.ReadOnly = false;
-        _joinerTextBox.ReadOnly = false;
+        _prefixTextBox.ReadOnly = !placementEnabled;
+        _suffixTextBox.ReadOnly = !placementEnabled;
+        _joinerTextBox.ReadOnly = !placementEnabled;
         ApplyDependentColors();
     }
 
@@ -1013,8 +1036,23 @@ internal sealed class MarkerOptionsPanel : UserControl
         var optionFore = UiColors.PlaylistOptionFore;
         var disabledFore = UiColors.OptionGlyphDisabled;
         var inputBack = UiColors.ForControlBack(UiColors.DialogInputBack);
+        var placementEnabled = _markerPlacementOptionsEnabled;
 
-        _digitsLabel.ForeColor = optionFore;
+        _gridHeaderLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
+        _commentHeaderLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
+        foreach (var radio in new[] { _gridDefaultRadio, _gridBarRadio, _gridBeatRadio })
+        {
+            radio.ForeColor = placementEnabled ? optionFore : disabledFore;
+            radio.ApplyColors();
+        }
+
+        _zeroPadCheckBox.ForeColor = placementEnabled ? optionFore : disabledFore;
+        _resetPerPartCheckBox.ForeColor = placementEnabled ? optionFore : disabledFore;
+        _zeroPadCheckBox.ApplyColors();
+        _resetPerPartCheckBox.ApplyColors();
+        _previewLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
+
+        _digitsLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
         _lookAheadLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
         _prefetchLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
         _loudnessTargetLabel.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
@@ -1028,9 +1066,9 @@ internal sealed class MarkerOptionsPanel : UserControl
         _autoVolumeVoiceVolumeRadio.ForeColor = autoVolumeRadiosEnabled ? optionFore : disabledFore;
         _autoVolumeMakeUpGainRadio.ApplyColors();
         _autoVolumeVoiceVolumeRadio.ApplyColors();
-        _prefixLabel.ForeColor = optionFore;
-        _suffixLabel.ForeColor = optionFore;
-        _joinerLabel.ForeColor = optionFore;
+        _prefixLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
+        _suffixLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
+        _joinerLabel.ForeColor = placementEnabled ? optionFore : disabledFore;
         ApplyInputAppearance(_lookAheadTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(_prefetchTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(
@@ -1039,10 +1077,10 @@ internal sealed class MarkerOptionsPanel : UserControl
             optionFore,
             disabledFore,
             inputBack);
-        ApplyInputAppearance(_digitsTextBox, enabled: true, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_prefixTextBox, enabled: true, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_suffixTextBox, enabled: true, optionFore, disabledFore, inputBack);
-        ApplyInputAppearance(_joinerTextBox, enabled: true, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_digitsTextBox, enabled: placementEnabled, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_prefixTextBox, enabled: placementEnabled, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_suffixTextBox, enabled: placementEnabled, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(_joinerTextBox, enabled: placementEnabled, optionFore, disabledFore, inputBack);
     }
 
     private static void ApplyInputAppearance(

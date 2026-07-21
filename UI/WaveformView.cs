@@ -24,6 +24,34 @@ internal sealed class SourceNameEditStateChangedEventArgs(bool isEditing) : Even
     public bool IsEditing { get; } = isEditing;
 }
 
+internal sealed class MarkerCommentEditCommittedEventArgs(long sampleOffset, string comment) : EventArgs
+{
+    public long SampleOffset { get; } = sampleOffset;
+    public string Comment { get; } = comment;
+}
+
+internal sealed class MarkerCommentEditStateChangedEventArgs(bool isEditing) : EventArgs
+{
+    public bool IsEditing { get; } = isEditing;
+}
+
+internal sealed class MarkerSessionDeleteRequestedEventArgs(long sampleOffset) : EventArgs
+{
+    public long SampleOffset { get; } = sampleOffset;
+}
+
+internal sealed class MarkerSessionMoveRequestedEventArgs(
+    long fromSampleOffset,
+    long toSampleOffset,
+    bool shiftPreviousMarker = false) : EventArgs
+{
+    public long FromSampleOffset { get; } = fromSampleOffset;
+    public long ToSampleOffset { get; } = toSampleOffset;
+
+    /// <summary>true のとき、一つ前のマーカーも同じサンプル差分だけ移動する。</summary>
+    public bool ShiftPreviousMarker { get; } = shiftPreviousMarker;
+}
+
 /// <summary>
 /// 読み込んだ Wave のピーク波形と再生位置（シークバー）を描画する。
 /// </summary>
@@ -58,6 +86,17 @@ internal sealed class WaveformView : Control
     private TextBox? _sourceNameEditor;
     private bool _sourceNameHovered;
     private bool _endingSourceNameEdit;
+    private TextBox? _markerCommentEditor;
+    private bool _endingMarkerCommentEdit;
+    private long? _markerCommentEditSampleOffset;
+    private long? _selectedMarkerSampleOffset;
+    private bool _allowsSessionMarkerEdit;
+    private bool _isDraggingMarker;
+    private long _markerDragFromSample;
+    private long? _markerDragPreviewSample;
+    private int _markerDragStartX;
+    private bool _markerDragMoved;
+    private readonly List<MarkerHitRegion> _markerHitRegions = [];
     private int _infoLaneWidth = 120;
     private float _outputLevel;
     private WavPeakData? _detailPeaks;
@@ -171,7 +210,8 @@ internal sealed class WaveformView : Control
         IReadOnlyList<WaveformMarkerMark>? markers = null,
         IReadOnlyList<WaveformCycleMark>? cycles = null,
         IReadOnlyList<WaveformRegionMark>? regions = null,
-        IReadOnlyList<WaveformOutputPart>? outputParts = null)
+        IReadOnlyList<WaveformOutputPart>? outputParts = null,
+        bool allowsSessionMarkerEdit = false)
     {
         _peaks = peaks;
         _wavInfo = wavInfo;
@@ -187,6 +227,9 @@ internal sealed class WaveformView : Control
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        _allowsSessionMarkerEdit = allowsSessionMarkerEdit;
+        ClearMarkerSessionEditState();
+        TabStop = allowsSessionMarkerEdit;
         _playlistDisplayNames = new Dictionary<int, string>();
         _playlistPartGroupIds = new Dictionary<int, int>();
         _playlistGroupColors = new Dictionary<int, Color>();
@@ -220,6 +263,32 @@ internal sealed class WaveformView : Control
     public void SetMarkers(IReadOnlyList<WaveformMarkerMark> markers)
     {
         _markers = markers;
+        if (_selectedMarkerSampleOffset is { } selected
+            && !_markers.Any(marker => marker.SampleOffset == selected))
+        {
+            _selectedMarkerSampleOffset = null;
+        }
+
+        if (_markerCommentEditSampleOffset is { } editing
+            && !_markers.Any(marker => marker.SampleOffset == editing))
+        {
+            EndMarkerCommentEdit(commit: false);
+        }
+
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    public void SetRegions(IReadOnlyList<WaveformRegionMark> regions)
+    {
+        _regions = regions ?? [];
+        RebuildSegmentNameMarks();
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    public void SetOutputParts(IReadOnlyList<WaveformOutputPart> outputParts)
+    {
+        _outputParts = outputParts ?? [];
+        RebuildSegmentNameMarks();
         RebuildPresentationLayers(clearDetailPeaks: false);
     }
 
@@ -337,6 +406,7 @@ internal sealed class WaveformView : Control
         _sourcePath = string.Empty;
         _sourceDisplayName = string.Empty;
         EndSourceNameEdit(commit: false);
+        ClearMarkerSessionEditState();
         _outputLevel = 0f;
         ClearDetailPeaks();
         _peakPyramid = null;
@@ -346,6 +416,8 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        _allowsSessionMarkerEdit = false;
+        TabStop = false;
         _playlistDisplayNames = new Dictionary<int, string>();
         _playlistPartGroupIds = new Dictionary<int, int>();
         _playlistGroupColors = new Dictionary<int, Color>();
@@ -360,6 +432,7 @@ internal sealed class WaveformView : Control
         _isDraggingSeek = false;
         _seekMovedDuringDrag = false;
         _lastMouseSeekProgress = double.NaN;
+        ClearMarkerDragState();
         _markerEditMode = null;
         _mouseGuideX = null;
         ClearPlayhead();
@@ -674,7 +747,29 @@ internal sealed class WaveformView : Control
     /// <summary>再生位置を現在の表示幅 1 画面分だけ次へ。成功したら true。</summary>
     public bool SeekToNextPage() => TrySeekByVisiblePage(previous: false);
 
+    /// <summary>再生位置を現在の表示幅の約 5% だけ前へ。成功したら true。</summary>
+    public bool SeekByVisibleFractionPrevious() => TrySeekByVisibleFraction(-0.05d);
+
+    /// <summary>再生位置を現在の表示幅の約 5% だけ次へ。成功したら true。</summary>
+    public bool SeekByVisibleFractionNext() => TrySeekByVisibleFraction(0.05d);
+
     private bool TrySeekByVisiblePage(bool previous)
+    {
+        var delta = previous ? -ViewSpan : ViewSpan;
+        return TrySeekByAbsoluteDelta(delta);
+    }
+
+    private bool TrySeekByVisibleFraction(double fractionOfView)
+    {
+        if (!double.IsFinite(fractionOfView) || Math.Abs(fractionOfView) < 1e-12)
+        {
+            return false;
+        }
+
+        return TrySeekByAbsoluteDelta(ViewSpan * fractionOfView);
+    }
+
+    private bool TrySeekByAbsoluteDelta(double absoluteDelta)
     {
         if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
         {
@@ -682,8 +777,7 @@ internal sealed class WaveformView : Control
         }
 
         var current = Math.Clamp(_playheadProgress ?? 0d, 0d, 1d);
-        var delta = previous ? -ViewSpan : ViewSpan;
-        var target = Math.Clamp(current + delta, 0d, 1d);
+        var target = Math.Clamp(current + absoluteDelta, 0d, 1d);
         if (Math.Abs(target - current) < 1e-12)
         {
             return false;
@@ -757,6 +851,12 @@ internal sealed class WaveformView : Control
         return best;
     }
 
+    /// <summary>再生位置を直前のマーカーへ。成功したら true。</summary>
+    public bool SeekToPreviousMarker() => TrySeekAlongSamples(CollectMarkerSamples(), previous: true);
+
+    /// <summary>再生位置を直後のマーカーへ。成功したら true。</summary>
+    public bool SeekToNextMarker() => TrySeekAlongSamples(CollectMarkerSamples(), previous: false);
+
     /// <summary>現在の Music Playlist の1つ前にある有効な Playlist の先頭へ。</summary>
     public bool SeekToPreviousPlaylist() => TrySeekToAdjacentPlaylist(previous: true);
 
@@ -781,6 +881,33 @@ internal sealed class WaveformView : Control
             }
 
             var sample = Math.Clamp(bar.SampleOffset, 0L, frameCount);
+            if (seen.Add(sample))
+            {
+                result.Add(sample);
+            }
+        }
+
+        return result;
+    }
+
+    private List<long> CollectMarkerSamples()
+    {
+        var result = new List<long>();
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
+        {
+            return result;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var seen = new HashSet<long>();
+        foreach (var marker in _markers)
+        {
+            if (marker.IsSharedProjection)
+            {
+                continue;
+            }
+
+            var sample = Math.Clamp(marker.SampleOffset, 0L, frameCount);
             if (seen.Add(sample))
             {
                 result.Add(sample);
@@ -913,6 +1040,33 @@ internal sealed class WaveformView : Control
     }
 
     /// <summary>
+    /// 再生位置（シーク）は動かさず、表示窓だけ再生位置が中央になるようパンする。
+    /// 全体表示時や再生位置が無いときは何もしない。
+    /// </summary>
+    public bool CenterViewOnPlayhead()
+    {
+        if (_peaks is null
+            || _peaks.IsEmpty
+            || _timeZoom <= TimeZoomMin + 1e-9
+            || _playheadProgress is not { } playhead)
+        {
+            return false;
+        }
+
+        var absoluteProgress = Math.Clamp(playhead, 0d, 1d);
+        var previous = _viewStart;
+        _viewStart = absoluteProgress - ViewSpan * 0.5d;
+        ClampTimeViewWindow();
+        if (Math.Abs(_viewStart - previous) < 1e-12)
+        {
+            return false;
+        }
+
+        NotifyTimeViewChanged();
+        return true;
+    }
+
+    /// <summary>
     /// マウスホイールによる時間軸ズーム。
     /// <paramref name="mouseX"/> は本コントロール座標系。アンカーはその X の絶対進捗。
     /// </summary>
@@ -1020,12 +1174,82 @@ internal sealed class WaveformView : Control
 
     private void ResetTimeZoom(bool refresh)
     {
+        if (_peaks is not null
+            && !_peaks.IsEmpty
+            && TryGetNonExcludedContentAbsoluteRange(out var start, out var end))
+        {
+            // -R で隠している区間は「全体」に含めず、可視内容だけを表示幅いっぱいに収める。
+            ApplyAbsoluteRangeFit(start, end, fillRatio: 1.0);
+            if (refresh)
+            {
+                NotifyTimeViewChanged();
+            }
+
+            return;
+        }
+
         _timeZoom = TimeZoomMin;
         _viewStart = 0;
         if (refresh)
         {
             NotifyTimeViewChanged();
         }
+    }
+
+    /// <summary>
+    /// -R 以外のリージョンが覆うサンプル範囲を絶対進捗で返す。
+    /// 除外が無いか可視範囲が取れないときは false。
+    /// </summary>
+    private bool TryGetNonExcludedContentAbsoluteRange(
+        out double absoluteStart,
+        out double absoluteEnd)
+    {
+        absoluteStart = 0d;
+        absoluteEnd = 1d;
+        if (_peaks is null || _peaks.FrameCount <= 0 || _regions.Count == 0)
+        {
+            return false;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        long? minStart = null;
+        long? maxEnd = null;
+        var hasExcluded = false;
+        foreach (var region in _regions)
+        {
+            if (region.IsExcluded)
+            {
+                hasExcluded = true;
+                continue;
+            }
+
+            if (region.EndSampleOffset <= region.StartSampleOffset)
+            {
+                continue;
+            }
+
+            if (minStart is null || region.StartSampleOffset < minStart.Value)
+            {
+                minStart = region.StartSampleOffset;
+            }
+
+            if (maxEnd is null || region.EndSampleOffset > maxEnd.Value)
+            {
+                maxEnd = region.EndSampleOffset;
+            }
+        }
+
+        if (!hasExcluded
+            || minStart is not { } startSample
+            || maxEnd is not { } endSample
+            || endSample <= startSample)
+        {
+            return false;
+        }
+
+        absoluteStart = SampleToAbsolute(startSample, frameCount);
+        absoluteEnd = SampleToAbsolute(endSample, frameCount);
+        return absoluteEnd > absoluteStart + 1e-12;
     }
 
     private void ResetAmpZoom(bool refresh)
@@ -1152,6 +1376,12 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        ApplyAbsoluteRangeFit(absoluteStart, absoluteEnd, fillRatio);
+        NotifyTimeViewChanged();
+    }
+
+    private void ApplyAbsoluteRangeFit(double absoluteStart, double absoluteEnd, double fillRatio)
+    {
         if (absoluteEnd < absoluteStart)
         {
             (absoluteStart, absoluteEnd) = (absoluteEnd, absoluteStart);
@@ -1169,7 +1399,6 @@ internal sealed class WaveformView : Control
         var mid = (absoluteStart + absoluteEnd) * 0.5d;
         _viewStart = mid - ViewSpan * 0.5d;
         ClampTimeViewWindow();
-        NotifyTimeViewChanged();
     }
 
     private void SetAmpZoomAbsolute(double zoom)
@@ -1354,6 +1583,114 @@ internal sealed class WaveformView : Control
 
     public event EventHandler<SourceNameEditStateChangedEventArgs>? SourceNameEditStateChanged;
 
+    /// <summary>Wave 単体モードでマーカーコメントが確定された。</summary>
+    public event EventHandler<MarkerCommentEditCommittedEventArgs>? MarkerCommentEditCommitted;
+
+    public event EventHandler<MarkerCommentEditStateChangedEventArgs>? MarkerCommentEditStateChanged;
+
+    /// <summary>Wave 単体モードで選択マーカーの削除が要求された。</summary>
+    public event EventHandler<MarkerSessionDeleteRequestedEventArgs>? MarkerSessionDeleteRequested;
+
+    /// <summary>Wave 単体モードでマーカーのドラッグ移動が要求された。</summary>
+    public event EventHandler<MarkerSessionMoveRequestedEventArgs>? MarkerSessionMoveRequested;
+
+    /// <summary>Wave 単体モードで選択中のマーカー位置。未選択は null。</summary>
+    public long? SelectedMarkerSampleOffset => _selectedMarkerSampleOffset;
+
+    /// <summary>Wave 単体モードの選択マーカーを設定する。</summary>
+    public void SetSelectedMarkerSampleOffset(long? sampleOffset) => SetSelectedMarker(sampleOffset);
+
+    /// <summary>
+    /// Wave 単体モードで、指定サンプル位置にちょうどあるマーカーのコメント編集を開始する。
+    /// マーカーが無ければ false。
+    /// </summary>
+    public bool TryBeginMarkerCommentEditAtSample(long sampleOffset)
+    {
+        if (!_allowsSessionMarkerEdit
+            || _peaks is null
+            || _peaks.IsEmpty
+            || _peaks.FrameCount <= 0)
+        {
+            return false;
+        }
+
+        WaveformMarkerMark? target = null;
+        foreach (var marker in _markers)
+        {
+            if (marker.IsSharedProjection || marker.SampleOffset != sampleOffset)
+            {
+                continue;
+            }
+
+            target = marker;
+            break;
+        }
+
+        if (target is not { } markerAtSample)
+        {
+            return false;
+        }
+
+        SetSelectedMarker(sampleOffset);
+        var progress = Math.Clamp(sampleOffset / (double)_peaks.FrameCount, 0d, 1d);
+        EnsureAbsoluteVisible(progress);
+        Invalidate();
+        Update();
+
+        foreach (var hit in _markerHitRegions)
+        {
+            if (hit.SampleOffset != sampleOffset)
+            {
+                continue;
+            }
+
+            BeginMarkerCommentEdit(hit);
+            return true;
+        }
+
+        // 表示外などでヒット領域が無い場合でも、三角付近にエディタを出す。
+        BeginMarkerCommentEdit(CreateSyntheticMarkerHit(markerAtSample));
+        return true;
+    }
+
+    private MarkerHitRegion CreateSyntheticMarkerHit(WaveformMarkerMark marker)
+    {
+        var content = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var labels = new Rectangle(
+            content.Left + _infoLaneWidth + 6,
+            content.Top,
+            Math.Max(1, content.Width - _infoLaneWidth - 6),
+            Math.Max(1, content.Height));
+        var rowHeight = Math.Max(14f, Font.Height + 2f);
+        var markerRowTop = labels.Top + rowHeight * 3f;
+        var tipY = markerRowTop + rowHeight - 1f;
+        var triHalfW = Math.Min(5f, rowHeight * 0.35f);
+        var triH = Math.Min(rowHeight - 3f, 9f);
+        var frameCount = _peaks!.FrameCount;
+        var abs = SampleToAbsolute(marker.SampleOffset, frameCount);
+        var x = AbsoluteToX(abs, labels);
+        var triangleBounds = RectangleF.FromLTRB(
+            x - triHalfW - 2f,
+            tipY - triH - 2f,
+            x + triHalfW + 2f,
+            tipY + 2f);
+        var commentBounds = string.IsNullOrEmpty(marker.Comment)
+            ? RectangleF.Empty
+            : new RectangleF(
+                x + triHalfW + 2f,
+                markerRowTop,
+                Math.Max(80f, marker.Comment.Length * Font.Size * 0.6f),
+                rowHeight);
+        return new MarkerHitRegion(
+            marker.SampleOffset,
+            marker.Comment,
+            triangleBounds,
+            commentBounds);
+    }
+
+    /// <summary>タイムライン描画領域の幅（マーカー 1px 移動の換算用）。</summary>
+    public int TimelineContentWidth => Math.Max(0, GetTimelineContentRect().Width);
+
     /// <summary>
     /// ドラッグ付与時のスナップ単位。描画されるグリッド線には影響しない。
     /// </summary>
@@ -1497,6 +1834,27 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        if (_allowsSessionMarkerEdit
+            && TryHitSessionMarker(e.Location, out var hit, out _))
+        {
+            EndMarkerCommentEdit(commit: true);
+            SetSelectedMarker(hit.SampleOffset);
+            Focus();
+            _isDraggingMarker = true;
+            _markerDragFromSample = hit.SampleOffset;
+            _markerDragPreviewSample = hit.SampleOffset;
+            _markerDragStartX = e.X;
+            _markerDragMoved = false;
+            Capture = true;
+            Cursor = Cursors.SizeWE;
+            return;
+        }
+
+        if (_allowsSessionMarkerEdit && _selectedMarkerSampleOffset is not null)
+        {
+            SetSelectedMarker(null);
+        }
+
         if (!TryGetProgressFromX(e.X, out var progress))
         {
             return;
@@ -1525,15 +1883,25 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        // 2回目の MouseDown で始まったシークドラッグを打ち切り、
+        // 2回目の MouseDown で始まったシーク／マーカードラッグを打ち切り、
         // ズーム後の MouseUp が別の絶対位置へシークしないようにする
         _isDraggingSeek = false;
         _seekMovedDuringDrag = false;
+        ClearMarkerDragState();
         Capture = false;
+        Cursor = Cursors.Default;
 
         if (IsSourceNamePoint(e.Location))
         {
             BeginSourceNameEdit();
+            return;
+        }
+
+        if (_allowsSessionMarkerEdit
+            && TryHitSessionMarker(e.Location, out var hit, out _))
+        {
+            SetSelectedMarker(hit.SampleOffset);
+            BeginMarkerCommentEdit(hit);
             return;
         }
 
@@ -1548,6 +1916,62 @@ internal sealed class WaveformView : Control
             TransportFeedbackRequested?.Invoke(this, TransportCommand.TimeZoomOut);
         }
         UpdateTimelineToolTip(e.Location);
+    }
+
+    protected override bool IsInputKey(Keys keyData)
+    {
+        var keyCode = keyData & Keys.KeyCode;
+        if (_peaks is not null
+            && !_peaks.IsEmpty
+            && (keyData & (Keys.Control | Keys.Alt)) == 0
+            && keyCode is Keys.Left or Keys.Right)
+        {
+            return true;
+        }
+
+        if (_allowsSessionMarkerEdit
+            && _selectedMarkerSampleOffset is not null
+            && keyCode == Keys.Delete)
+        {
+            return true;
+        }
+
+        return base.IsInputKey(keyData);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (_isDraggingMarker
+            && e.KeyCode is Keys.Menu or Keys.LMenu or Keys.RMenu)
+        {
+            RebuildPresentationLayers(clearDetailPeaks: false);
+        }
+
+        if (_allowsSessionMarkerEdit
+            && e.KeyCode == Keys.Delete
+            && _selectedMarkerSampleOffset is { } sampleOffset
+            && _markerCommentEditor is not { Visible: true })
+        {
+            MarkerSessionDeleteRequested?.Invoke(
+                this,
+                new MarkerSessionDeleteRequestedEventArgs(sampleOffset));
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            return;
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        if (_isDraggingMarker
+            && e.KeyCode is Keys.Menu or Keys.LMenu or Keys.RMenu)
+        {
+            RebuildPresentationLayers(clearDetailPeaks: false);
+        }
+
+        base.OnKeyUp(e);
     }
 
     private bool IsSourceNamePoint(Point location)
@@ -1714,6 +2138,254 @@ internal sealed class WaveformView : Control
         }
     }
 
+    private void ClearMarkerSessionEditState()
+    {
+        EndMarkerCommentEdit(commit: false);
+        ClearMarkerDragState();
+        _selectedMarkerSampleOffset = null;
+        _markerHitRegions.Clear();
+    }
+
+    private void ClearMarkerDragState()
+    {
+        _isDraggingMarker = false;
+        _markerDragPreviewSample = null;
+        _markerDragMoved = false;
+    }
+
+    private long GetDisplayedMarkerSample(long sampleOffset)
+    {
+        if (!_isDraggingMarker || _markerDragPreviewSample is not { } preview)
+        {
+            return sampleOffset;
+        }
+
+        if (sampleOffset == _markerDragFromSample)
+        {
+            return preview;
+        }
+
+        // Alt+ドラッグ: 一つ前のマーカーも同じ差分だけプレビュー移動する。
+        if ((ModifierKeys & Keys.Alt) != 0
+            && TryGetPreviousMarkerSample(_markerDragFromSample, out var previousSample)
+            && sampleOffset == previousSample)
+        {
+            var delta = preview - _markerDragFromSample;
+            return ClampMarkerSample(previousSample + delta);
+        }
+
+        return sampleOffset;
+    }
+
+    private bool TryGetPreviousMarkerSample(long sampleOffset, out long previousSample)
+    {
+        previousSample = 0;
+        long? best = null;
+        foreach (var marker in _markers)
+        {
+            if (marker.IsSharedProjection || marker.SampleOffset >= sampleOffset)
+            {
+                continue;
+            }
+
+            if (best is null || marker.SampleOffset > best.Value)
+            {
+                best = marker.SampleOffset;
+            }
+        }
+
+        if (best is not { } found)
+        {
+            return false;
+        }
+
+        previousSample = found;
+        return true;
+    }
+
+    private long ClampMarkerSample(long sampleOffset)
+    {
+        if (_peaks is null || _peaks.FrameCount <= 0)
+        {
+            return Math.Max(0L, sampleOffset);
+        }
+
+        return Math.Clamp(sampleOffset, 0L, _peaks.FrameCount - 1);
+    }
+
+    private bool TryGetSampleFromX(int mouseX, out long sampleOffset)
+    {
+        sampleOffset = 0;
+        if (_wavInfo is null || _wavInfo.FrameCount <= 0)
+        {
+            return false;
+        }
+
+        if (!TryGetProgressFromX(mouseX, out var progress))
+        {
+            return false;
+        }
+
+        sampleOffset = (long)Math.Round(progress * _wavInfo.FrameCount);
+        sampleOffset = Math.Clamp(sampleOffset, 0L, _wavInfo.FrameCount - 1);
+        return true;
+    }
+
+    private void SetSelectedMarker(long? sampleOffset)
+    {
+        if (_selectedMarkerSampleOffset == sampleOffset)
+        {
+            return;
+        }
+
+        _selectedMarkerSampleOffset = sampleOffset;
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    private bool TryHitSessionMarker(
+        Point location,
+        out MarkerHitRegion hit,
+        out bool hitTriangle)
+    {
+        hit = default;
+        hitTriangle = false;
+        for (var i = _markerHitRegions.Count - 1; i >= 0; i--)
+        {
+            var candidate = _markerHitRegions[i];
+            if (candidate.TriangleBounds.Contains(location))
+            {
+                hit = candidate;
+                hitTriangle = true;
+                return true;
+            }
+
+            if (candidate.CommentBounds.Width > 0
+                && candidate.CommentBounds.Contains(location))
+            {
+                hit = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void BeginMarkerCommentEdit(MarkerHitRegion hit)
+    {
+        if (!_allowsSessionMarkerEdit)
+        {
+            return;
+        }
+
+        EndSourceNameEdit(commit: false);
+        _markerCommentEditor ??= CreateMarkerCommentEditor();
+        var editBounds = GetMarkerCommentEditorBounds(hit);
+        _markerCommentEditor.Bounds = editBounds;
+        _markerCommentEditSampleOffset = hit.SampleOffset;
+        _markerCommentEditor.Text = hit.Comment;
+        _markerCommentEditor.Visible = true;
+        _markerCommentEditor.BringToFront();
+        _markerCommentEditor.Focus();
+        _markerCommentEditor.SelectAll();
+        MarkerCommentEditStateChanged?.Invoke(
+            this,
+            new MarkerCommentEditStateChangedEventArgs(isEditing: true));
+    }
+
+    private Rectangle GetMarkerCommentEditorBounds(MarkerHitRegion hit)
+    {
+        var left = hit.CommentBounds.Width > 0
+            ? (int)Math.Floor(hit.CommentBounds.Left)
+            : (int)Math.Floor(hit.TriangleBounds.Right + 2f);
+        var top = hit.CommentBounds.Width > 0
+            ? (int)Math.Floor(hit.CommentBounds.Top) - 1
+            : (int)Math.Floor(hit.TriangleBounds.Top) - 1;
+        var width = hit.CommentBounds.Width > 0
+            ? Math.Max(80, (int)Math.Ceiling(hit.CommentBounds.Width) + 16)
+            : 120;
+        var height = Math.Max(
+            22,
+            hit.CommentBounds.Width > 0
+                ? (int)Math.Ceiling(hit.CommentBounds.Height) + 4
+                : (int)Math.Ceiling(hit.TriangleBounds.Height) + 6);
+        width = Math.Min(width, Math.Max(40, ClientSize.Width - left - 4));
+        return new Rectangle(left, top, width, height);
+    }
+
+    private TextBox CreateMarkerCommentEditor()
+    {
+        var editor = new TextBox
+        {
+            AutoSize = false,
+            BackColor = UiColors.ForControlBack(UiColors.DialogInputBack),
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = Font,
+            ForeColor = UiColors.DialogFore,
+            TextAlign = HorizontalAlignment.Left,
+            Visible = false,
+        };
+        editor.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                EndMarkerCommentEdit(commit: true);
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                EndMarkerCommentEdit(commit: false);
+            }
+        };
+        editor.LostFocus += (_, _) => EndMarkerCommentEdit(commit: true);
+        Controls.Add(editor);
+        return editor;
+    }
+
+    private void EndMarkerCommentEdit(bool commit)
+    {
+        if (_endingMarkerCommentEdit
+            || _markerCommentEditor is not { Visible: true } editor
+            || _markerCommentEditSampleOffset is not { } sampleOffset)
+        {
+            return;
+        }
+
+        _endingMarkerCommentEdit = true;
+        try
+        {
+            var comment = editor.Text.Trim();
+            editor.Visible = false;
+            _markerCommentEditSampleOffset = null;
+            if (IsHandleCreated && CanFocus)
+            {
+                Focus();
+            }
+
+            if (commit)
+            {
+                MarkerCommentEditCommitted?.Invoke(
+                    this,
+                    new MarkerCommentEditCommittedEventArgs(sampleOffset, comment));
+            }
+        }
+        finally
+        {
+            _endingMarkerCommentEdit = false;
+            MarkerCommentEditStateChanged?.Invoke(
+                this,
+                new MarkerCommentEditStateChangedEventArgs(isEditing: false));
+        }
+    }
+
+    private readonly record struct MarkerHitRegion(
+        long SampleOffset,
+        string Comment,
+        RectangleF TriangleBounds,
+        RectangleF CommentBounds);
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -1726,6 +2398,30 @@ internal sealed class WaveformView : Control
         {
             ApplyMarkerStroke(_markerStrokeLastX, e.X, includeNearest: true);
             _markerStrokeLastX = e.X;
+            return;
+        }
+
+        if (_isDraggingMarker)
+        {
+            if (!_markerDragMoved
+                && Math.Abs(e.X - _markerDragStartX) < 3)
+            {
+                return;
+            }
+
+            _markerDragMoved = true;
+            if (!TryGetSampleFromX(e.X, out var sampleOffset))
+            {
+                return;
+            }
+
+            if (_markerDragPreviewSample == sampleOffset)
+            {
+                return;
+            }
+
+            _markerDragPreviewSample = sampleOffset;
+            RebuildPresentationLayers(clearDetailPeaks: false);
             return;
         }
 
@@ -1765,6 +2461,32 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        if (e.Button == MouseButtons.Left && _isDraggingMarker)
+        {
+            var markerMoved = _markerDragMoved;
+            var fromSample = _markerDragFromSample;
+            var toSample = _markerDragPreviewSample ?? fromSample;
+            ClearMarkerDragState();
+            Capture = false;
+            Cursor = Cursors.Default;
+
+            if (markerMoved && toSample != fromSample)
+            {
+                MarkerSessionMoveRequested?.Invoke(
+                    this,
+                    new MarkerSessionMoveRequestedEventArgs(
+                        fromSample,
+                        toSample,
+                        shiftPreviousMarker: (ModifierKeys & Keys.Alt) != 0));
+            }
+            else
+            {
+                Invalidate();
+            }
+
+            return;
+        }
+
         if (e.Button != MouseButtons.Left || !_isDraggingSeek)
         {
             return;
@@ -1791,7 +2513,7 @@ internal sealed class WaveformView : Control
         UpdateTimelineToolTip(null);
         SetSourceNameHovered(false);
         SetHoveredPlaylistPart(null);
-        if (_isDraggingSeek || _markerEditMode is not null)
+        if (_isDraggingSeek || _isDraggingMarker || _markerEditMode is not null)
         {
             return;
         }
@@ -1812,6 +2534,7 @@ internal sealed class WaveformView : Control
                 ? MarkerEditMode.Add
                 : (MarkerEditMode?)null;
         if (editMode is null
+            || _allowsSessionMarkerEdit
             || _peaks is null
             || _peaks.IsEmpty
             || !TryGetMarkerLane(out var markerLane, out _)
@@ -2064,20 +2787,35 @@ internal sealed class WaveformView : Control
         }
         else if (mouseLocation is { } location
             && !_isDraggingSeek
+            && !_isDraggingMarker
+            && _markerEditMode is null
+            && TryGetMarkerLane(out var markerLane, out _)
+            && markerLane.Contains(location)
+            && _allowsSessionMarkerEdit)
+        {
+            text = UiStrings.TipWaveformMarkerLaneSessionEdit;
+        }
+        else if (mouseLocation is { } zoomLocation
+            && !_isDraggingSeek
+            && !_isDraggingMarker
             && _markerEditMode is null
             && _outputParts.Count > 0
-            && GetTimelineContentRect().Contains(location))
+            && GetTimelineContentRect().Contains(zoomLocation))
         {
-            if (TryGetMarkerLane(out var markerLane, out _)
-                && markerLane.Contains(location))
+            if (TryGetMarkerLane(out var addMarkerLane, out _)
+                && addMarkerLane.Contains(zoomLocation))
             {
-                text = UiStrings.TipWaveformMarkerLane;
+                text = UiStrings.TipWaveformMarkerLane
+                    + Environment.NewLine
+                    + UiStrings.TipWaveformCommonKeys;
             }
             else
             {
-                text = CountPlaylistsIntersectingView() == 1
-                    ? UiStrings.TipWaveformZoomFitAll
-                    : UiStrings.TipWaveformZoomPlaylist;
+                text = (CountPlaylistsIntersectingView() == 1
+                        ? UiStrings.TipWaveformZoomFitAll
+                        : UiStrings.TipWaveformZoomPlaylist)
+                    + Environment.NewLine
+                    + UiStrings.TipWaveformCommonKeys;
             }
         }
 
@@ -2207,8 +2945,57 @@ internal sealed class WaveformView : Control
             _anacrusisPlayheadProgress,
             _anacrusisTrailSamples,
             UiColors.SeekAnacrusis);
+        DrawAltMarkerPairDragGuides(g, timeline);
         DrawMouseGuide(g, timeline);
         DrawPlaylistGroupNameLaneOverlays(g);
+    }
+
+    /// <summary>
+    /// Alt+マーカードラッグ中、移動ペア（ドラッグ中／一つ前）の位置に薄い縦ガイドを出す。
+    /// </summary>
+    private void DrawAltMarkerPairDragGuides(Graphics g, Rectangle timeline)
+    {
+        if (!_isDraggingMarker
+            || !_allowsSessionMarkerEdit
+            || (ModifierKeys & Keys.Alt) == 0
+            || _markerDragPreviewSample is not { } preview
+            || _peaks is null
+            || _peaks.FrameCount <= 0
+            || timeline.Width <= 0)
+        {
+            return;
+        }
+
+        if (!TryGetPreviousMarkerSample(_markerDragFromSample, out var previousSample))
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var delta = preview - _markerDragFromSample;
+        var draggedSample = ClampMarkerSample(preview);
+        var pairedSample = ClampMarkerSample(previousSample + delta);
+
+        using var pen = new Pen(Color.FromArgb(150, UiColors.MarkerTriangle), 1f);
+        DrawMarkerPositionGuideLine(g, timeline, draggedSample, frameCount, pen);
+        DrawMarkerPositionGuideLine(g, timeline, pairedSample, frameCount, pen);
+    }
+
+    private void DrawMarkerPositionGuideLine(
+        Graphics g,
+        Rectangle timeline,
+        long sampleOffset,
+        long frameCount,
+        Pen pen)
+    {
+        var absolute = SampleToAbsolute(sampleOffset, frameCount);
+        if (absolute < _viewStart - 1e-9 || absolute > ViewEnd + 1e-9)
+        {
+            return;
+        }
+
+        var x = AbsoluteToX(absolute, timeline);
+        g.DrawLine(pen, x, timeline.Top, x, timeline.Bottom);
     }
 
     /// <summary>
@@ -2548,6 +3335,7 @@ internal sealed class WaveformView : Control
         ];
 
         using var textBrush = new SolidBrush(UiColors.WaveformInfoFg);
+        using var disabledTextBrush = new SolidBrush(UiColors.TransportDisabledFore);
         using var infoFont = new Font(Font, FontStyle.Bold);
         using var format = new StringFormat
         {
@@ -2557,16 +3345,21 @@ internal sealed class WaveformView : Control
             FormatFlags = StringFormatFlags.NoWrap,
         };
 
+        // 小節情報がないとき（Wave 単体など）は Measure / Tempo / Signature をグレーアウト。
+        var musicalEnabled = _bars.Count > 0;
         var count = Math.Min(visibleRowCount, InfoRowLabels.Count);
         for (var i = 0; i < count; i++)
         {
             var top = labels.Top + i * rowHeight;
             using var bg = new SolidBrush(rowColors[i]);
             g.FillRectangle(bg, info.Left, top, info.Width, rowHeight);
+            var labelBrush = !musicalEnabled && i < 3
+                ? disabledTextBrush
+                : textBrush;
             g.DrawString(
                 InfoRowLabels[i],
                 infoFont,
-                textBrush,
+                labelBrush,
                 new RectangleF(
                     info.Left + InfoLanePadX,
                     top,
@@ -2810,9 +3603,9 @@ internal sealed class WaveformView : Control
 
         var peaks = _peaks!;
         var midY = wave.Top + wave.Height / 2f;
-        using (var centerPen = new Pen(UiColors.WaveCenter))
+        using (var zeroDbPen = new Pen(UiColors.WaveZeroDbLine, 1f))
         {
-            g.DrawLine(centerPen, wave.Left, midY, wave.Right, midY);
+            g.DrawLine(zeroDbPen, wave.Left, midY, wave.Right, midY);
         }
 
         if (peaks.Mins.Length == 0)
@@ -4066,6 +4859,7 @@ internal sealed class WaveformView : Control
 
     private void DrawMarkers(Graphics g, Rectangle labels, float rowHeight)
     {
+        _markerHitRegions.Clear();
         if (_peaks is null || _peaks.FrameCount <= 0 || _markers.Count == 0 || labels.Width <= 0)
         {
             return;
@@ -4080,19 +4874,25 @@ internal sealed class WaveformView : Control
         var triH = Math.Min(rowHeight - 3f, 9f);
 
         using var triangleBrush = new SolidBrush(UiColors.MarkerTriangle);
+        using var selectedTriangleBrush = new SolidBrush(UiColors.MarkerTriangleSelected);
         using var sharedTriangleBrush = new SolidBrush(Color.FromArgb(64, UiColors.MarkerTriangle));
+        using var selectedTriangleOutlinePen = new Pen(Color.White, 1.5f);
         using var textBrush = new SolidBrush(UiColors.WaveformInfoFg);
+        using var selectedTextBrush = new SolidBrush(UiColors.MarkerCommentSelected);
 
         // 三角は時刻順に描画
         foreach (var marker in _markers)
         {
-            var abs = SampleToAbsolute(marker.SampleOffset, frameCount);
+            var displaySample = GetDisplayedMarkerSample(marker.SampleOffset);
+            var abs = SampleToAbsolute(displaySample, frameCount);
             if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
             {
                 continue;
             }
 
             var x = AbsoluteToX(abs, labels);
+            var selected = _allowsSessionMarkerEdit
+                && _selectedMarkerSampleOffset == marker.SampleOffset;
 
             PointF[] triangle =
             [
@@ -4100,41 +4900,101 @@ internal sealed class WaveformView : Control
                 new(x - triHalfW, tipY - triH),
                 new(x + triHalfW, tipY - triH),
             ];
-            g.FillPolygon(
-                marker.IsSharedProjection ? sharedTriangleBrush : triangleBrush,
-                triangle);
+            var brush = marker.IsSharedProjection
+                ? sharedTriangleBrush
+                : selected
+                    ? selectedTriangleBrush
+                    : triangleBrush;
+            g.FillPolygon(brush, triangle);
+            if (selected && !marker.IsSharedProjection)
+            {
+                g.DrawPolygon(selectedTriangleOutlinePen, triangle);
+            }
+
+            if (_allowsSessionMarkerEdit && !marker.IsSharedProjection)
+            {
+                var triangleBounds = RectangleF.FromLTRB(
+                    x - triHalfW - 2f,
+                    tipY - triH - 2f,
+                    x + triHalfW + 2f,
+                    tipY + 2f);
+                _markerHitRegions.Add(new MarkerHitRegion(
+                    marker.SampleOffset,
+                    marker.Comment,
+                    triangleBounds,
+                    RectangleF.Empty));
+            }
         }
 
         // コメントは左から配置。好みの位置に収まらない／前の文字と重なる場合は描かない
         // （ズームで間隔が広がれば表示される）。
         const float commentGapPx = 2f;
         var lastOccupiedRight = (float)labels.Left;
-        foreach (var marker in _markers.OrderBy(m => m.SampleOffset))
+        foreach (var marker in _markers.OrderBy(m => GetDisplayedMarkerSample(m.SampleOffset)))
         {
-            if (marker.IsSharedProjection || string.IsNullOrEmpty(marker.Comment))
+            if (marker.IsSharedProjection)
             {
                 continue;
             }
 
-            var abs = SampleToAbsolute(marker.SampleOffset, frameCount);
+            var displaySample = GetDisplayedMarkerSample(marker.SampleOffset);
+            var abs = SampleToAbsolute(displaySample, frameCount);
             if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
             {
                 continue;
             }
 
             var x = AbsoluteToX(abs, labels);
-            var size = g.MeasureString(marker.Comment, Font);
+            var selected = _allowsSessionMarkerEdit
+                && _selectedMarkerSampleOffset == marker.SampleOffset;
+            var comment = marker.Comment;
+            if (string.IsNullOrEmpty(comment) && !selected)
+            {
+                continue;
+            }
+
+            var displayComment = string.IsNullOrEmpty(comment) ? " " : comment;
+            var size = g.MeasureString(displayComment, Font);
             var textX = x + triHalfW + commentGapPx;
             var textRight = textX + size.Width;
-            if (textX < lastOccupiedRight + commentGapPx
-                || textRight > labels.Right + 1e-3f)
+            if (!selected
+                && (textX < lastOccupiedRight + commentGapPx
+                    || textRight > labels.Right + 1e-3f))
             {
                 continue;
             }
 
             var textY = markerRowTop + Math.Max(0f, (rowHeight - size.Height) * 0.5f);
-            g.DrawString(marker.Comment, Font, textBrush, textX, textY);
-            lastOccupiedRight = textRight;
+            if (!string.IsNullOrEmpty(comment))
+            {
+                g.DrawString(
+                    comment,
+                    Font,
+                    selected ? selectedTextBrush : textBrush,
+                    textX,
+                    textY);
+                lastOccupiedRight = textRight;
+            }
+
+            if (_allowsSessionMarkerEdit)
+            {
+                var commentBounds = string.IsNullOrEmpty(comment)
+                    ? new RectangleF(textX, markerRowTop, Math.Max(24f, triHalfW * 4f), rowHeight)
+                    : new RectangleF(textX, textY, size.Width, size.Height);
+                for (var i = 0; i < _markerHitRegions.Count; i++)
+                {
+                    if (_markerHitRegions[i].SampleOffset != marker.SampleOffset)
+                    {
+                        continue;
+                    }
+
+                    _markerHitRegions[i] = _markerHitRegions[i] with
+                    {
+                        CommentBounds = commentBounds,
+                    };
+                    break;
+                }
+            }
         }
     }
 
