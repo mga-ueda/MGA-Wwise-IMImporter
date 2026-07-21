@@ -3,26 +3,12 @@ using System.Runtime.InteropServices;
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// ProcessCmdKey を親フォームに先渡しする RichTextBox。
-/// 既定の RTF は Ctrl+Home/End などを自己消費するため、ショートカットがフォームまで届かない。
-/// 左にスクロールバー幅の半分の余白を付け、右端のバーとバランスを取る。
+/// 左にスクロールバー幅の半分の余白を付け、右端のバーとバランスを取る RichTextBox。
 /// </summary>
 internal sealed class ShortcutForwardingRichTextBox : RichTextBox
 {
     private const int EmGetRect = 0x00B2;
     private const int EmSetRect = 0x00B3;
-
-    public Func<Keys, bool>? ShortcutHandler { get; set; }
-
-    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
-    {
-        if (ShortcutHandler?.Invoke(keyData) == true)
-        {
-            return true;
-        }
-
-        return base.ProcessCmdKey(ref msg, keyData);
-    }
 
     protected override void OnHandleCreated(EventArgs e)
     {

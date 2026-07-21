@@ -42,7 +42,7 @@ internal enum UiInteractionLock
 public partial class Form1 : Form
 {
     // Exact line height in twips (1 pt = 20 twips). Keeps JP + Latin rows uniform.
-    private const int LogLineSpacingTwips = 280;
+    private const int LogLineSpacingTwips = 200;
 
     private const int DwmwaUseImmersiveDarkMode = 20;
     private const int EmSetParaFormat = 0x0447;
@@ -391,7 +391,6 @@ public partial class Form1 : Form
             _hoveredPlaylistPartNumber = partNumber;
             ApplyPlaylistSelectorColors();
         };
-        editorTextBox.ShortcutHandler = keyData => TryProcessWaveformShortcut(keyData);
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
         playlistScrollPanel.HandleCreated += (_, _) => ApplyDarkScrollChrome(playlistScrollPanel);
         transportBar.HandleCreated += (_, _) => ApplyDarkScrollChrome(transportBar);
@@ -945,6 +944,12 @@ public partial class Form1 : Form
             return true;
         }
 
+        // ログ欄をクリックしてフォーカスがある間は再生／波形ショートカットを無効にする。
+        if (editorTextBox.ContainsFocus)
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         if (TryProcessWaveformShortcut(keyData))
         {
             return true;
@@ -1002,9 +1007,7 @@ public partial class Form1 : Form
     private static bool IsBackwardSeekKey(Keys keyCode) =>
         keyCode is Keys.Home or Keys.Left or Keys.PageUp;
 
-    /// <summary>
-    /// 波形ビュー操作用ショートカット。ログ欄フォーカス時も <see cref="ShortcutForwardingRichTextBox"/> 経由で呼ばれる。
-    /// </summary>
+    /// <summary>波形ビュー操作用ショートカット。</summary>
     private bool TryProcessWaveformShortcut(Keys keyData, bool showUiFeedback = true)
     {
         if (_uiInteractionLocks != UiInteractionLock.None)

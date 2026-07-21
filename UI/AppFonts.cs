@@ -3,21 +3,27 @@ using System.Runtime.InteropServices;
 
 namespace MgaWwiseIMImporter.UI;
 
-/// <summary>埋め込みフォントを、このアプリのプロセス内だけで利用可能にする。</summary>
+/// <summary>
+/// 埋め込みフォントをプロセス内で利用可能にする。
+/// ログは RichTextBox（RichEdit）のため AddMemoryFont だけでは実描画に使われず、
+/// プロポーショナルへ落ちることがある。一時ファイルへ展開して AddFontResourceEx する。
+/// </summary>
 internal static class AppFonts
 {
+    private const uint FrPrivate = 0x10;
+    private static string? _registeredPath;
+
+    // AddFontResourceEx(FR_PRIVATE) だけでは GDI+ の new Font(名前, ...) から
+    // フォントが見つからず既定フォントへ化けるため、GDI+ 用に別途保持する。
     private static PrivateFontCollection? _privateFonts;
-    private static GCHandle _fontHandle;
-    private static bool _registered;
 
     public static void EnsureRegistered()
     {
-        if (_registered)
+        if (_registeredPath is not null)
         {
             return;
         }
 
-        _registered = true;
         try
         {
             using var stream = AppEmbeddedResources.OpenLogFont();
@@ -29,16 +35,21 @@ internal static class AppFonts
             var fontData = new byte[stream.Length];
             stream.ReadExactly(fontData);
 
-            // AddMemoryFont はピン留めメモリをフォント破棄まで解放してはならない。
-            _fontHandle = GCHandle.Alloc(fontData, GCHandleType.Pinned);
+            var path = EnsureExtractedFontFile(fontData);
+            if (AddFontResourceEx(path, FrPrivate, IntPtr.Zero) <= 0)
+            {
+                return;
+            }
+
+            _registeredPath = path;
             var collection = new PrivateFontCollection();
-            collection.AddMemoryFont(_fontHandle.AddrOfPinnedObject(), fontData.Length);
+            collection.AddFontFile(path);
             _privateFonts = collection;
         }
         catch (Exception)
         {
-            ReleaseFontHandle();
             _privateFonts = null;
+            _registeredPath = null;
         }
 
         Application.ApplicationExit += (_, _) => Unregister();
@@ -53,18 +64,42 @@ internal static class AppFonts
             : new Font("Consolas", sizePt, FontStyle.Regular, GraphicsUnit.Point);
     }
 
-    private static void Unregister()
+    private static string EnsureExtractedFontFile(byte[] fontData)
     {
-        _privateFonts?.Dispose();
-        _privateFonts = null;
-        ReleaseFontHandle();
+        var dir = Path.Combine(Path.GetTempPath(), "MgaWwiseIMImporter");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "UDEVGothic-Regular.ttf");
+
+        if (File.Exists(path))
+        {
+            var existing = File.ReadAllBytes(path);
+            if (existing.AsSpan().SequenceEqual(fontData))
+            {
+                return path;
+            }
+        }
+
+        File.WriteAllBytes(path, fontData);
+        return path;
     }
 
-    private static void ReleaseFontHandle()
+    private static void Unregister()
     {
-        if (_fontHandle.IsAllocated)
+        if (_registeredPath is not { } path)
         {
-            _fontHandle.Free();
+            return;
         }
+
+        _privateFonts?.Dispose();
+        _privateFonts = null;
+        RemoveFontResourceEx(path, FrPrivate, IntPtr.Zero);
+        _registeredPath = null;
     }
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int AddFontResourceEx(string fileName, uint flags, IntPtr reserved);
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RemoveFontResourceEx(string fileName, uint flags, IntPtr reserved);
 }
