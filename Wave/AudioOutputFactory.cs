@@ -1,0 +1,173 @@
+using System.Globalization;
+using NAudio.CoreAudioApi;
+using NAudio.Wave;
+using NAudio.Wave.Asio;
+
+namespace MgaWwiseIMImporter.Wave;
+
+/// <summary>
+/// WaveOut / WASAPI / ASIO のデバイス列挙と <see cref="IWavePlayer"/> 生成。
+/// </summary>
+internal static class AudioOutputFactory
+{
+    private const int WasapiLatencyMs = 100;
+
+    public static IReadOnlyList<AudioOutputDeviceInfo> EnumerateDevices(AudioOutputApi api) =>
+        api switch
+        {
+            AudioOutputApi.Wasapi => EnumerateWasapiDevices(),
+            AudioOutputApi.Asio => EnumerateAsioDevices(),
+            _ => EnumerateWaveOutDevices(),
+        };
+
+    public static IWavePlayer Create(AudioOutputSettings settings, out string? fallbackMessage)
+    {
+        fallbackMessage = null;
+        try
+        {
+            return CreateCore(settings);
+        }
+        catch (Exception ex) when (settings.Api != AudioOutputApi.WaveOut
+            || !string.IsNullOrWhiteSpace(settings.DeviceId))
+        {
+            fallbackMessage =
+                $"Requested {AudioOutputSettings.ToIniValue(settings.Api)}"
+                + $" device '{settings.DeviceId}' failed ({ex.Message}); falling back to WaveOut default.";
+            return CreateWaveOut(deviceNumber: -1);
+        }
+    }
+
+    private static IWavePlayer CreateCore(AudioOutputSettings settings) =>
+        settings.Api switch
+        {
+            AudioOutputApi.Wasapi => CreateWasapi(settings.DeviceId),
+            AudioOutputApi.Asio => CreateAsio(settings.DeviceId),
+            _ => CreateWaveOut(ParseWaveOutDeviceNumber(settings.DeviceId)),
+        };
+
+    private static IWavePlayer CreateWaveOut(int deviceNumber)
+    {
+        var output = new WaveOutEvent
+        {
+            DeviceNumber = deviceNumber,
+        };
+        return output;
+    }
+
+    private static IWavePlayer CreateWasapi(string? deviceId)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        MMDevice device;
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        }
+        else
+        {
+            device = enumerator.GetDevice(deviceId);
+        }
+
+        return new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: false, WasapiLatencyMs);
+    }
+
+    private static IWavePlayer CreateAsio(string? driverName)
+    {
+        var names = AsioDriver.GetAsioDriverNames();
+        if (names.Length == 0)
+        {
+            throw new InvalidOperationException("No ASIO drivers are installed.");
+        }
+
+        var selected = string.IsNullOrWhiteSpace(driverName)
+            ? names[0]
+            : names.FirstOrDefault(n => n.Equals(driverName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"ASIO driver '{driverName}' was not found.");
+
+        return new AsioOut(selected)
+        {
+            // バッファコールバック内の Stop() は ASIO でデッドロックし得る（NAudio も注意書きあり）。
+            // 終端は UI 側で検知して停止する。
+            AutoStop = false,
+        };
+    }
+
+    private static List<AudioOutputDeviceInfo> EnumerateWaveOutDevices()
+    {
+        var list = new List<AudioOutputDeviceInfo>
+        {
+            new("-1", "Wave Mapper (Default)"),
+        };
+
+        for (var i = 0; i < WaveOut.DeviceCount; i++)
+        {
+            var caps = WaveOut.GetCapabilities(i);
+            list.Add(new(
+                i.ToString(CultureInfo.InvariantCulture),
+                string.IsNullOrWhiteSpace(caps.ProductName)
+                    ? $"Device {i}"
+                    : caps.ProductName));
+        }
+
+        return list;
+    }
+
+    private static List<AudioOutputDeviceInfo> EnumerateWasapiDevices()
+    {
+        var list = new List<AudioOutputDeviceInfo>();
+        using var enumerator = new MMDeviceEnumerator();
+        string? defaultId = null;
+        try
+        {
+            defaultId = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID;
+        }
+        catch (Exception)
+        {
+            // 既定デバイスが取れなくても列挙は続行する。
+        }
+
+        list.Add(new(string.Empty, "Default"));
+
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        {
+            using (device)
+            {
+                var name = device.FriendlyName;
+                if (!string.IsNullOrEmpty(defaultId)
+                    && string.Equals(device.ID, defaultId, StringComparison.OrdinalIgnoreCase))
+                {
+                    name += " (Default)";
+                }
+
+                list.Add(new(device.ID, name));
+            }
+        }
+
+        return list;
+    }
+
+    private static List<AudioOutputDeviceInfo> EnumerateAsioDevices()
+    {
+        try
+        {
+            return AsioDriver.GetAsioDriverNames()
+                .Select(name => new AudioOutputDeviceInfo(name, name))
+                .ToList();
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    private static int ParseWaveOutDeviceNumber(string? deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return -1;
+        }
+
+        return int.TryParse(deviceId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+            ? number
+            : -1;
+    }
+}

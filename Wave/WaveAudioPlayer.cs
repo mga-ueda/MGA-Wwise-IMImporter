@@ -24,7 +24,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     private WaveFileReader? _playlistFadeReader;
     private WaveFileReader? _playlistExitFadeReader;
     private WaveFileReader? _playlistPreRollReader;
-    private WaveOutEvent? _output;
+    private IWavePlayer? _output;
     private StereoFloatWaveProvider? _provider;
     private string? _path;
     /// <summary>再生専用の一時コピー。元ファイルをロックしない。</summary>
@@ -36,6 +36,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     private bool _seekPendingWhilePaused;
     private LoopPlaybackPlan[] _loopPlans = [];
     private LoopPlaybackPlan? _activePlan;
+    private AudioOutputSettings _outputSettings = AudioOutputSettings.Default;
 
     public event EventHandler? PlaybackEnded;
     public event EventHandler<string>? Diagnostic;
@@ -473,9 +474,121 @@ internal sealed class WaveAudioPlayer : IDisposable
             info,
             message => Trace(message));
         PushActivePlanToProvider();
-        _output = new WaveOutEvent();
-        _output.Init(_provider);
+        InitOutputDevice();
+    }
+
+    /// <summary>
+    /// 出力 API／デバイスを差し替える。ソース未ロード時は次回 <see cref="Load"/> で反映。
+    /// ロード済みなら再生位置を保って出力だけ再初期化する。
+    /// </summary>
+    public void ApplyOutputSettings(AudioOutputSettings settings)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _outputSettings = settings;
+        if (_provider is null)
+        {
+            Trace(
+                $"audio.output-settings api={AudioOutputSettings.ToIniValue(settings.Api)}"
+                + $" device='{settings.DeviceId}' (deferred)");
+            return;
+        }
+
+        var progress = Progress;
+        var wasPlaying = _isPlaying;
+        DisposeOutputOnly();
+        InitOutputDevice();
+        Seek(progress);
+        if (wasPlaying)
+        {
+            Play();
+        }
+    }
+
+    private void InitOutputDevice()
+    {
+        if (_provider is null)
+        {
+            return;
+        }
+
+        // AsioOut はコンストラクタで SynchronizationContext.Current を掴む。
+        // 背景スレッドで Init すると再生不能／フォールバックになるため UI スレッドへ延期する。
+        if (_outputSettings.Api == AudioOutputApi.Asio
+            && SynchronizationContext.Current is null)
+        {
+            Trace(
+                $"audio.output-defer api=Asio device='{_outputSettings.DeviceId}'"
+                + " (requires UI SynchronizationContext)");
+            return;
+        }
+
+        try
+        {
+            _output = AudioOutputFactory.Create(_outputSettings, out var fallbackMessage);
+            if (!string.IsNullOrEmpty(fallbackMessage))
+            {
+                Trace($"audio.output-fallback {fallbackMessage}");
+                Diagnostic?.Invoke(this, fallbackMessage);
+                // 要求設定は保持する（次回 UI スレッドでの再試行・ダイアログ表示のため）
+            }
+
+            _output.Init(_provider);
+        }
+        catch (Exception ex)
+        {
+            DisposeOutputOnly();
+            var message =
+                $"Output init failed ({AudioOutputSettings.ToIniValue(_outputSettings.Api)}"
+                + $" '{_outputSettings.DeviceId}'): {ex.Message}; falling back to WaveOut default.";
+            Trace($"audio.output-fallback {message}");
+            Diagnostic?.Invoke(this, message);
+            _output = AudioOutputFactory.Create(AudioOutputSettings.Default, out _);
+            _output.Init(_provider);
+        }
+
         _output.PlaybackStopped += OnPlaybackStopped;
+        Trace(
+            $"audio.output-ready api={AudioOutputSettings.ToIniValue(_outputSettings.Api)}"
+            + $" device='{_outputSettings.DeviceId}'"
+            + $" type={_output.GetType().Name}");
+    }
+
+    /// <summary>
+    /// 出力デバイスが未初期化なら現在の設定で初期化する（UI スレッドから呼ぶこと）。
+    /// </summary>
+    public void EnsureOutputDevice()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_provider is null || _output is not null)
+        {
+            return;
+        }
+
+        InitOutputDevice();
+    }
+
+    private void DisposeOutputOnly()
+    {
+        _isPlaying = false;
+        if (_output is null)
+        {
+            return;
+        }
+
+        _suppressPlaybackEnded = true;
+        try
+        {
+            _output.PlaybackStopped -= OnPlaybackStopped;
+            _output.Stop();
+            _output.Dispose();
+        }
+        finally
+        {
+            _suppressPlaybackEnded = false;
+            _output = null;
+        }
     }
 
     /// <summary>
@@ -543,6 +656,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        EnsureOutputDevice();
         if (_output is null || _reader is null)
         {
             return;
@@ -687,17 +801,51 @@ internal sealed class WaveAudioPlayer : IDisposable
             || _reader.Position >= _reader.Length
             || _reader.CurrentTime >= _reader.TotalTime)
         {
-            if (!playlistEnded)
+            CompletePlaybackEnded(playlistEnded);
+        }
+    }
+
+    /// <summary>
+    /// ASIO（AutoStop=false）の終端を UI スレッドから回収する。
+    /// 終了処理を行ったら true。
+    /// </summary>
+    public bool TryCompletePlaybackIfEnded()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (!_isPlaying || _reader is null || _output is null)
+        {
+            return false;
+        }
+
+        // ASIO: コールバック内 Stop を避け、HasReachedEnd を UI から回収する
+        if (_output is AsioOut { HasReachedEnd: true })
+        {
+            var playlistEnded = _provider?.TryResetPlaylistAfterEnd() == true;
+            _suppressPlaybackEnded = true;
+            try
             {
-                _reader.Position = 0;
+                _output.Stop();
+            }
+            finally
+            {
+                _suppressPlaybackEnded = false;
             }
 
-            _provider?.StopExitLayer();
-            _isPlaying = false;
-            _provider?.ResetOutputPeak();
-            Trace($"playback.ended playlistEnded={playlistEnded} sample={_provider?.CurrentMainSample ?? 0}");
-            PlaybackEnded?.Invoke(this, EventArgs.Empty);
+            CompletePlaybackEnded(playlistEnded);
+            return true;
         }
+
+        return false;
+    }
+
+    private void CompletePlaybackEnded(bool playlistEnded)
+    {
+        _provider?.StopExitLayer();
+        _isPlaying = false;
+        _provider?.ResetOutputPeak();
+        Trace($"playback.ended playlistEnded={playlistEnded} sample={_provider?.CurrentMainSample ?? 0}");
+        PlaybackEnded?.Invoke(this, EventArgs.Empty);
     }
 
     private void StopAndRelease()

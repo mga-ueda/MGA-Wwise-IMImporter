@@ -69,6 +69,7 @@ partial class Form1
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
     private LanguageFlagButton languageFlagButton;
+    private SettingsGearButton settingsGearButton;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
     private FlatOptionCheckBox keepLastSessionCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
@@ -170,6 +171,7 @@ partial class Form1
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
         languageFlagButton = new LanguageFlagButton();
+        settingsGearButton = new SettingsGearButton();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
         keepLastSessionCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
@@ -253,6 +255,7 @@ partial class Form1
         projectActionPanel.Controls.Add(keepLastSessionCheckBox);
         projectActionPanel.Controls.Add(topMostCheckBox);
         projectActionPanel.Controls.Add(languageFlagButton);
+        projectActionPanel.Controls.Add(settingsGearButton);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
         // projectOutputPathTextBox
@@ -304,13 +307,20 @@ partial class Form1
         languageFlagButton.TabIndex = 4;
         languageFlagButton.Click += LanguageFlagButton_Click;
         //
+        // settingsGearButton
+        //
+        settingsGearButton.Margin = new Padding(0, 0, 4, 0);
+        settingsGearButton.Name = "settingsGearButton";
+        settingsGearButton.TabIndex = 5;
+        settingsGearButton.Click += SettingsGearButton_Click;
+        //
         // projectSpectrumView
         //
         projectSpectrumView.AccessibleName = "Output spectrum";
         projectSpectrumView.Margin = new Padding(0);
         projectSpectrumView.Name = "projectSpectrumView";
         projectSpectrumView.Size = new Size(126, 24);
-        projectSpectrumView.TabIndex = 5;
+        projectSpectrumView.TabIndex = 6;
         projectSpectrumView.TabStop = false;
         //
         // waveformHostPanel

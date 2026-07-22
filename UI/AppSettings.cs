@@ -1,4 +1,5 @@
 using System.Globalization;
+using MgaWwiseIMImporter.Wave;
 
 namespace MgaWwiseIMImporter.UI;
 
@@ -19,6 +20,14 @@ internal sealed class AppSettings
     /// より新しい版が出たら再度案内する。
     /// </summary>
     public string SkippedUpdateVersion { get; set; } = string.Empty;
+
+    /// <summary>再生出力 API（既定 WaveOut）。</summary>
+    public AudioOutputApi AudioApi { get; set; } = AudioOutputApi.WaveOut;
+
+    /// <summary>出力デバイス識別子（API 依存。空はシステム既定）。</summary>
+    public string AudioDeviceId { get; set; } = string.Empty;
+
+    public AudioOutputSettings ToAudioOutputSettings() => new(AudioApi, AudioDeviceId ?? string.Empty);
 
     public static AppSettings Load()
     {
@@ -52,11 +61,20 @@ internal sealed class AppSettings
         Save();
     }
 
+    public void SaveAudioOutput(AudioOutputApi api, string? deviceId)
+    {
+        AudioApi = api;
+        AudioDeviceId = deviceId ?? string.Empty;
+        Save();
+    }
+
     private Dictionary<string, string> ToDictionary() => new(StringComparer.OrdinalIgnoreCase)
     {
         ["AlwaysOnTop"] = AlwaysOnTop ? "1" : "0",
         ["UiLanguage"] = UiStrings.ToIniValue(UiLanguage),
         ["SkippedUpdateVersion"] = SkippedUpdateVersion ?? string.Empty,
+        ["AudioApi"] = AudioOutputSettings.ToIniValue(AudioApi),
+        ["AudioDeviceId"] = AudioDeviceId ?? string.Empty,
     };
 
     private static void WriteValues(Dictionary<string, string> values)
@@ -68,6 +86,8 @@ internal sealed class AppSettings
             ["SkippedUpdateVersion"] = values.TryGetValue("SkippedUpdateVersion", out var skipped)
                 ? skipped
                 : string.Empty,
+            ["AudioApi"] = values.TryGetValue("AudioApi", out var audioApi) ? audioApi : "WaveOut",
+            ["AudioDeviceId"] = values.TryGetValue("AudioDeviceId", out var deviceId) ? deviceId : string.Empty,
         });
     }
 
@@ -80,12 +100,20 @@ internal sealed class AppSettings
         SkippedUpdateVersion = values.TryGetValue("SkippedUpdateVersion", out var skipped)
             ? AppVersion.NormalizeTag(skipped)
             : string.Empty,
+        AudioApi = values.TryGetValue("AudioApi", out var audioApiText)
+            ? AudioOutputSettings.ParseApi(audioApiText)
+            : AudioOutputApi.WaveOut,
+        AudioDeviceId = values.TryGetValue("AudioDeviceId", out var deviceId)
+            ? deviceId
+            : string.Empty,
     };
 
     private static bool HasKnownKeys(Dictionary<string, string> values) =>
         values.ContainsKey("AlwaysOnTop")
         || values.ContainsKey("UiLanguage")
-        || values.ContainsKey("SkippedUpdateVersion");
+        || values.ContainsKey("SkippedUpdateVersion")
+        || values.ContainsKey("AudioApi")
+        || values.ContainsKey("AudioDeviceId");
 
     private static bool ReadBool(Dictionary<string, string> values, string key, bool defaultValue)
     {

@@ -352,19 +352,33 @@ public partial class Form1 : Form, IMessageFilter
 
             BeginInvoke(() =>
             {
+                if (IsDisposed)
+                {
+                    return;
+                }
+
                 WritePlaybackDiagnostic("playback.ended");
                 _resumePlaybackAfterBackwardSeek = false;
                 ClearPendingPlaylistUiTransition();
                 ClearPlaylistPlaybackSelection();
                 _playheadTimer.Stop();
-                var resetProgress = _audioPlayer.Progress;
+
+                // 末尾到達後は再生開始位置へ戻す（全モード共通）
+                var resetProgress = Math.Clamp(_lastPlaybackStartProgress ?? 0d, 0d, 1d);
+                if (_audioPlayer.HasSource)
+                {
+                    _audioPlayer.Seek(resetProgress);
+                    _audioPlayer.ArmLoopAtProgress(resetProgress);
+                }
+
                 AnchorPlayhead(resetProgress);
                 waveformView.SetPlayhead(resetProgress, recordTrail: false, ensureVisible: true);
                 waveformView.SetExitPlayhead(null);
                 waveformView.SetFadeOutPlayhead(null);
+                waveformView.SetAnacrusisPlayhead(null);
                 UpdateTransportPlaybackState();
                 UpdateTransportPosition();
-                // タイマー停止後は UpdatePlayhead が回らないため、メーターを明示的に落とす
+                ApplyPlaylistSelectorColors();
                 UpdateSourceLevelMeter();
             });
         };
@@ -1929,6 +1943,7 @@ public partial class Form1 : Form, IMessageFilter
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
         languageFlagButton.ApplyColors();
+        settingsGearButton.ApplyColors();
         projectSpectrumView.BackColor = barBack;
         projectSpectrumView.Invalidate();
         projectBar.Invalidate();
@@ -2001,6 +2016,7 @@ public partial class Form1 : Form, IMessageFilter
         CenterProjectBarControl(projectFolderButton, contentHeight);
         CenterProjectBarControl(projectDeleteButton, contentHeight);
         CenterProjectBarControl(languageFlagButton, contentHeight);
+        CenterProjectBarControl(settingsGearButton, contentHeight);
         CenterProjectBarControl(projectSpectrumView, contentHeight);
     }
 
@@ -2144,6 +2160,7 @@ public partial class Form1 : Form, IMessageFilter
             topMostCheckBox.Checked = _appSettings.AlwaysOnTop;
             topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
             TopMost = _appSettings.AlwaysOnTop;
+            _audioPlayer.ApplyOutputSettings(_appSettings.ToAudioOutputSettings());
         }
         finally
         {
@@ -4417,6 +4434,7 @@ public partial class Form1 : Form, IMessageFilter
             _requestedPlaylistPartNumber = null;
             _manualPlaylistPartNumber = null;
             var progress = target.StartSampleOffset / (double)frameCount;
+            _lastPlaybackStartProgress = progress;
             AnchorPlayhead(progress);
             waveformView.SetPlayhead(progress, recordTrail: false, ensureVisible: true);
             waveformView.SetExitPlayhead(null);
@@ -5157,6 +5175,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         Text = UiStrings.FormTitle;
         languageFlagButton.RefreshAppearance();
+        settingsGearButton.RefreshAppearance();
         ApplyLocalizedControlLabels();
         if (playlistToolTip is DarkToolTip darkTip)
         {
@@ -5297,12 +5316,45 @@ public partial class Form1 : Form, IMessageFilter
         ReleaseFocusToWaveform();
     }
 
+    private void SettingsGearButton_Click(object? sender, EventArgs e)
+    {
+        using var dialog = new AudioSettingsForm(_appSettings.ToAudioOutputSettings())
+        {
+            // メインが最前面でもダイアログが背面に回らないようにする
+            TopMost = TopMost,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            ReleaseFocusToWaveform();
+            return;
+        }
+
+        var settings = dialog.SelectedSettings;
+        try
+        {
+            _audioPlayer.ApplyOutputSettings(settings);
+            _appSettings.SaveAudioOutput(settings.Api, settings.DeviceId);
+        }
+        catch (Exception ex)
+        {
+            OwnerCenteredMessageBox.Show(
+                this,
+                UiStrings.ErrAudioOutputApplyFailed(ex.Message),
+                UiStrings.DialogAudioSettingsTitle,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        ReleaseFocusToWaveform();
+    }
+
     private void ApplyActionBarToolTips()
     {
         playlistToolTip.SetToolTip(detailedLogCheckBox, UiStrings.TipDebugLog);
         playlistToolTip.SetToolTip(languageFlagButton, UiStrings.IsJapanese
             ? UiStrings.TipLanguageJapanese
             : UiStrings.TipLanguageEnglish);
+        playlistToolTip.SetToolTip(settingsGearButton, UiStrings.TipAudioSettings);
         playlistToolTip.SetToolTip(compactFileNumbersCheckBox, UiStrings.TipCompactFileNumbers);
         playlistToolTip.SetToolTip(keepLastSessionCheckBox, UiStrings.TipKeepLastSession);
         playlistToolTip.SetToolTip(topMostCheckBox, UiStrings.TipAlwaysOnTop);
@@ -6107,7 +6159,9 @@ public partial class Form1 : Form, IMessageFilter
             _previewSession = new WaveformPreviewSession(preview);
             _previewSession.SetCommentRule(_markerSettings.ToCommentRule());
 
-            // 再生用一時コピーは大きな WAV だと数秒かかる。
+            // 再生用一時コピーは大きな WAV だと数秒かかる（背景スレッド）。
+            // ただし AsioOut は UI の SynchronizationContext が必要なため、
+            // 出力デバイスの初期化は UI スレッドでやり直す。
             try
             {
                 await Task.Run(() =>
@@ -6121,6 +6175,10 @@ public partial class Form1 : Form, IMessageFilter
                                     preview.WavInfo.FrameCount)
                                 : preview.Regions));
                 });
+
+                // UI スレッド: 保存済み出力設定で ASIO/WASAPI を確実に開く
+                _audioPlayer.ApplyOutputSettings(_appSettings.ToAudioOutputSettings());
+                _audioPlayer.EnsureOutputDevice();
             }
             catch (Exception ex)
             {
@@ -7736,6 +7794,12 @@ public partial class Form1 : Form, IMessageFilter
             transportBar.SetPosition(null);
             UpdateTransportNavigationAvailability();
             UpdateSourceLevelMeter();
+            return;
+        }
+
+        // ASIO 終端はコールバック内 Stop だと硬直するため、ここで UI から回収する
+        if (_audioPlayer.TryCompletePlaybackIfEnded())
+        {
             return;
         }
 

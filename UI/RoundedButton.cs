@@ -121,7 +121,11 @@ internal sealed class RoundedButton : Button
             g,
             Text,
             Font,
-            ClientRectangle,
+            new Rectangle(
+                Padding.Left,
+                Padding.Top,
+                Math.Max(0, Width - Padding.Horizontal),
+                Math.Max(0, Height - Padding.Vertical)),
             textColor,
             TextFormatFlags.HorizontalCenter
             | TextFormatFlags.VerticalCenter

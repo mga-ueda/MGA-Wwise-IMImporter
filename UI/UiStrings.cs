@@ -63,6 +63,51 @@ internal static class UiStrings
         "現在: English。クリックで日本語に切り替えます。",
         "Current: English. Click to switch to Japanese.");
 
+    public static string TipAudioSettings => Get(
+        "再生の出力 API とデバイスを設定します。",
+        "Configure playback output API and device.");
+
+    public static string AccessibleAudioSettingsButton => Get(
+        "音声出力設定",
+        "Audio output settings");
+
+    // --- Audio settings dialog ---
+    public static string DialogAudioSettingsTitle => Get(
+        "Audio Output Settings",
+        "Audio Output Settings");
+
+    public static string LabelAudioApi => Get(
+        "Output API",
+        "Output API");
+
+    public static string LabelAudioDevice => Get(
+        "Output Device",
+        "Output Device");
+
+    public static string LabelAudioApiWaveOut => Get("WaveOut", "WaveOut");
+    public static string LabelAudioApiWasapi => Get("WASAPI", "WASAPI");
+    public static string LabelAudioApiAsio => Get("ASIO", "ASIO");
+
+    public static string LabelAudioDeviceDefault => Get(
+        "Default",
+        "Default");
+
+    public static string LabelAudioDeviceWaveMapper => Get(
+        "Wave Mapper (Default)",
+        "Wave Mapper (Default)");
+
+    public static string LabelAudioDeviceDefaultSuffix => Get(
+        " (Default)",
+        " (Default)");
+
+    public static string ButtonAudioSettingsOk => Get("OK", "OK");
+    public static string ButtonAudioSettingsCancel => Get("CANSEL", "CANSEL");
+
+    public static string ErrAudioOutputApplyFailed(string detail) => Format(
+        "出力設定の適用に失敗しました。\n{0}",
+        "Failed to apply audio output settings.\n{0}",
+        detail);
+
     // --- Action bar tooltips ---
     public static string TipDebugLog => Get(
         "再生・操作の詳細な診断情報を画面ログへ出力します（開発用）。",
