@@ -18,3 +18,6 @@ test/
 
 # Local probe / scratch
 _probe/
+
+# Release artifacts (dotnet publish output / zip)
+publish/
