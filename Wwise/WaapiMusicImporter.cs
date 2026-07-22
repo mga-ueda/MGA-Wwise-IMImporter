@@ -8,10 +8,12 @@ namespace MgaWwiseIMImporter.Wwise;
 /// <summary>
 /// <see cref="WwiseMusicPlan"/> を WAAPI（ak.wwise.core.object.set）で Wwise へ流し込む。
 /// <para>
-/// 1. 各 Music Segment 用にリージョン範囲だけを切り出した WAV を用意する。
+/// 1. 各 Music Segment 用の WAV を用意する。複数波形で焼き込み不要なら元ファイルを
+///    outputDirectory へコピーして共有し、MusicClip の Begin/End Offset で範囲を合わせる。
+///    フェード／ラウドネス焼き込みが必要なときだけ切り出し WAV を書く。
 /// 2. 複数パート時は State Group／State を作成または更新し、Music Switch Container に割当。
-/// 3. object.set で Playlist／Segment／Track（＋切り出し WAV）と Cue を作成。
-/// 4. リージョン端フェードがあれば切り出し WAV へ焼き込む（MusicClip プロパティは触らない）。
+/// 3. object.set で Playlist／Segment／Track（＋WAV）と Cue を作成。
+/// 4. 必要なら MusicClip トリムを設定する。
 /// </para>
 /// </summary>
 internal static class WaapiMusicImporter
@@ -111,7 +113,7 @@ internal static class WaapiMusicImporter
             .Where(fade => fade.HasAnyFade)
             .ToList() ?? [];
 
-        var segmentWavs = SliceSegmentWavs(
+        var segmentMedia = SliceSegmentWavs(
             plan,
             sourceWavPath,
             outputDirectory,
@@ -166,7 +168,7 @@ internal static class WaapiMusicImporter
                             plan,
                             containerPath,
                             playlist,
-                            segmentWavs,
+                            segmentMedia,
                             importSettings,
                             applyAutoVolume,
                             autoVolumeTarget,
@@ -211,7 +213,7 @@ internal static class WaapiMusicImporter
                     BuildSinglePlaylistSetArgs(
                         plan,
                         parentPath,
-                        segmentWavs,
+                        segmentMedia,
                         importSettings,
                         applyAutoVolume,
                         autoVolumeTarget,
@@ -234,6 +236,24 @@ internal static class WaapiMusicImporter
                 cancellationToken)
             .ConfigureAwait(false);
 
+        var playAtFixes = await ApplyMusicClipTrimsAsync(
+                client,
+                plan,
+                musicRootPath,
+                segmentMedia,
+                Log,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // 負の PlayAt は WAAPI では設定不可のため、プロジェクトを保存→クローズし、
+        // WWU（XML）を直接書き換えてから再オープンする。
+        await ApplyPlayAtFixesViaWorkUnitAsync(
+                client,
+                playAtFixes,
+                Log,
+                cancellationToken)
+            .ConfigureAwait(false);
+
         if (plan.IsMultiPart)
         {
             foreach (var playlist in plan.Playlists)
@@ -248,8 +268,9 @@ internal static class WaapiMusicImporter
         foreach (var playlist in plan.Playlists)
         {
             Log(UiStrings.LogPlaylistSummary(playlist.Name, playlist.Segments.Count));
-            foreach (var segment in playlist.Segments)
+            for (var segmentIndex = 0; segmentIndex < playlist.Segments.Count; segmentIndex++)
             {
+                var segment = playlist.Segments[segmentIndex];
                 var flags = new List<string>();
                 if (segment.LoopInfinite)
                 {
@@ -271,26 +292,104 @@ internal static class WaapiMusicImporter
                     flags.Add($"cues={segment.CustomCues.Count}");
                 }
 
-                if (segment.Tracks.Count > 1)
-                {
-                    flags.Add($"tracks={segment.Tracks.Count}");
-                }
+                flags.Add($"tracks={segment.Tracks.Count}");
 
                 var durationMs = Math.Max(0.0, segment.ClipEndMs - segment.ClipStartMs);
                 var entryLocal = Math.Max(0.0, segment.EntryCueMs - segment.ClipStartMs);
                 Log(
-                    $"  {segment.Name}"
+                    $"  [{segmentIndex + 1}/{playlist.Segments.Count}] {segment.Name}"
                     + $"  len={durationMs:0}ms"
                     + (entryLocal > 0.5 ? $"  entry=+{entryLocal:0}ms" : string.Empty)
                     + $"  T{segment.TempoBpm:0.##}-{segment.TimeSignatureUpper}/{segment.TimeSignatureLower}"
-                    + (flags.Count > 0 ? $"  ({string.Join(", ", flags)})" : string.Empty));
+                    + $"  ({string.Join(", ", flags)})");
+
+                foreach (var track in segment.Tracks)
+                {
+                    var key = TrackSliceKey(segment.Name, track.Name);
+                    if (!segmentMedia.TryGetValue(key, out var media))
+                    {
+                        Log($"    Track {track.Name}: (media missing)");
+                        continue;
+                    }
+
+                    var beginMs = media.SampleRate == 0
+                        ? 0.0
+                        : media.SourceStartSample * 1000.0 / media.SampleRate;
+                    var endMs = media.SampleRate == 0
+                        ? 0.0
+                        : media.SourceEndSample * 1000.0 / media.SampleRate;
+                    Log(
+                        $"    Track {track.Name}: {Path.GetFileName(media.WavPath)}"
+                        + $"  src=[{media.SourceStartSample} .. {media.SourceEndSample})"
+                        + $"  ({beginMs:0.###} .. {endMs:0.###} ms)"
+                        + (media.ApplyClipTrim
+                            ? "  [copy+trim]"
+                            : media.ReusedOriginal
+                                ? "  [copy]"
+                                : "  [slice]"));
+                }
             }
         }
 
-        Log($"{UiStrings.KeySlices} {segmentWavs.Count}");
+        var uniqueWavCount = segmentMedia.Values
+            .Select(binding => binding.WavPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        Log($"{UiStrings.KeySlices} {uniqueWavCount}");
         Log(UiStrings.LogWwiseImportComplete);
         Log();
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// EXPORT 直前に Playlist / Segment / Track 構成をログへ出す。
+    /// </summary>
+    public static string FormatPlanSummary(WwiseMusicPlan plan)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(UiStrings.LogImportPlanHeader);
+        sb.AppendLine(UiStrings.LogImportPlanPlaylists(plan.Playlists.Count, plan.ContainerName));
+        foreach (var playlist in plan.Playlists)
+        {
+            sb.AppendLine(UiStrings.LogPlaylistSummary(playlist.Name, playlist.Segments.Count));
+            for (var i = 0; i < playlist.Segments.Count; i++)
+            {
+                var segment = playlist.Segments[i];
+                var flags = new List<string>();
+                if (segment.LoopInfinite)
+                {
+                    flags.Add("loop=∞");
+                }
+
+                if (segment.EntryCueMs > segment.ClipStartMs)
+                {
+                    flags.Add("anacrusis");
+                }
+
+                if (segment.ExitCueMs < segment.ClipEndMs)
+                {
+                    flags.Add("exit-tail");
+                }
+
+                flags.Add($"tracks={segment.Tracks.Count}");
+                var durationMs = Math.Max(0.0, segment.ClipEndMs - segment.ClipStartMs);
+                var entryLocal = Math.Max(0.0, segment.EntryCueMs - segment.ClipStartMs);
+                sb.AppendLine(
+                    $"  [{i + 1}/{playlist.Segments.Count}] {segment.Name}"
+                    + $"  len={durationMs:0}ms"
+                    + (entryLocal > 0.5 ? $"  entry=+{entryLocal:0}ms" : string.Empty)
+                    + $"  ({string.Join(", ", flags)})");
+                foreach (var track in segment.Tracks)
+                {
+                    sb.AppendLine(
+                        $"    Track {track.Name}"
+                        + $"  clip=[{track.ClipStartMs:0.###} .. {track.ClipEndMs:0.###}] ms"
+                        + $"  samples=[{track.AbsoluteStartSample} .. {track.AbsoluteEndSample})");
+                }
+            }
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     private static async Task CallObjectSetAsync(
@@ -468,10 +567,10 @@ internal static class WaapiMusicImporter
     }
 
     /// <summary>
-    /// 元 WAV から各トラックの可聴範囲だけを直接切り出す。
-    /// 返り値は TrackSliceKey → 切り出し WAV パス。
+    /// 各トラックのメディアを用意する。返り値は TrackSliceKey → バインディング。
+    /// 複数波形で焼き込み不要なら元 WAV を outputDirectory へコピーして再利用する。
     /// </summary>
-    private static Dictionary<string, string> SliceSegmentWavs(
+    private static Dictionary<string, TrackMediaBinding> SliceSegmentWavs(
         WwiseMusicPlan plan,
         string sourceWavPath,
         string outputDirectory,
@@ -491,8 +590,9 @@ internal static class WaapiMusicImporter
             part => part,
             StringComparer.OrdinalIgnoreCase);
 
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, TrackMediaBinding>(StringComparer.OrdinalIgnoreCase);
         var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var loggedReusePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var playlist in plan.Playlists)
         {
             foreach (var segment in playlist.Segments)
@@ -537,13 +637,7 @@ internal static class WaapiMusicImporter
                         gain = partGain;
                     }
 
-                    // Track 名は Segment 名＋レイヤー番号で一意に付けているため、
-                    // 旧形式の segment__track 結合は冗長（例: BGM_x__BGM_x_1.wav）。
-                    var fileName = UniqueSliceFileName(
-                        $"{track.Name}.wav",
-                        usedFileNames);
-                    var dest = Path.Combine(outputDirectory, fileName);
-
+                    var trackKey = TrackSliceKey(segment.Name, track.Name);
                     var sliceSourcePath = part.ResolveSourcePath(sourceWavPath);
                     var localStart = part.VirtualToLocal(startSample);
                     var localEnd = part.VirtualToLocal(endSample);
@@ -555,25 +649,163 @@ internal static class WaapiMusicImporter
                         : blockAlign;
                     var localFades = RemapFadesToLocal(regionEdgeFades, part);
 
+                    // 複数波形: 焼き込み不要なら元 WAV を outputDirectory へコピーして共有（2 本のまま）。
+                    // セグメントごとの範囲は MusicClip Begin/End Offset で合わせる（手動作業の自動化）。
+                    if (CanReuseDedicatedSourceWav(
+                            part,
+                            sliceSourcePath,
+                            localStart,
+                            localEnd,
+                            gain,
+                            localFades,
+                            sliceInfo))
+                    {
+                        var desiredFileName = string.IsNullOrWhiteSpace(part.FileName)
+                            ? $"{track.Name}.wav"
+                            : part.FileName;
+                        if (!desiredFileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                        {
+                            desiredFileName += ".wav";
+                        }
+
+                        var dest = Path.GetFullPath(Path.Combine(outputDirectory, desiredFileName));
+                        var sourceFull = Path.GetFullPath(sliceSourcePath);
+                        if (!string.Equals(sourceFull, dest, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!File.Exists(dest)
+                                || new FileInfo(dest).Length != new FileInfo(sourceFull).Length
+                                || File.GetLastWriteTimeUtc(dest) != File.GetLastWriteTimeUtc(sourceFull))
+                            {
+                                File.Copy(sourceFull, dest, overwrite: true);
+                            }
+                        }
+
+                        var needsTrim = localStart != part.ResolveLocalStart()
+                            || localEnd != part.ResolveLocalEnd();
+                        var effectiveRate = sliceInfo.SampleRate != 0
+                            ? sliceInfo.SampleRate
+                            : sampleRate;
+                        map[trackKey] = new TrackMediaBinding(
+                            dest,
+                            localStart,
+                            localEnd,
+                            sliceInfo.FrameCount,
+                            effectiveRate,
+                            ApplyClipTrim: needsTrim,
+                            ReusedOriginal: true);
+                        if (loggedReusePaths.Add(dest))
+                        {
+                            log(UiStrings.LogWavSourceReused(Path.GetFileName(dest)));
+                        }
+
+                        log(
+                            UiStrings.LogTrackMediaBinding(
+                                segment.Name,
+                                track.Name,
+                                Path.GetFileName(dest),
+                                localStart,
+                                localEnd,
+                                reusedOriginal: true,
+                                applyClipTrim: needsTrim));
+                        usedFileNames.Add(Path.GetFileName(dest));
+                        continue;
+                    }
+
+                    // フェード／ゲイン焼き込み時のみ切り出し（仕様上やむを得ない例外）。
+                    var desiredSliceName = string.IsNullOrWhiteSpace(part.FileName)
+                        ? $"{track.Name}.wav"
+                        : part.FileName;
+                    if (!desiredSliceName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                    {
+                        desiredSliceName += ".wav";
+                    }
+
+                    var fileName = UniqueSliceFileName(desiredSliceName, usedFileNames);
+                    var destSlice = Path.Combine(outputDirectory, fileName);
                     WriteSegmentSafely(
                         sliceSourcePath,
-                        dest,
+                        destSlice,
                         localStart,
                         localEnd,
                         sliceBlockAlign,
                         gain,
                         sliceInfo,
                         localFades);
-                    map[TrackSliceKey(segment.Name, track.Name)] = dest;
+                    var writtenInfo = WavFileInfo.Read(destSlice);
+                    map[trackKey] = new TrackMediaBinding(
+                        Path.GetFullPath(destSlice),
+                        0,
+                        writtenInfo.FrameCount,
+                        writtenInfo.FrameCount,
+                        writtenInfo.SampleRate != 0 ? writtenInfo.SampleRate : sampleRate,
+                        ApplyClipTrim: false,
+                        ReusedOriginal: false);
                     log(Math.Abs(gain - 1f) < 0.000001f
                         ? UiStrings.LogWavSliceWritten(fileName)
                         : UiStrings.LogWavSliceWrittenWithGain(fileName, gain));
+                    log(
+                        UiStrings.LogTrackMediaBinding(
+                            segment.Name,
+                            track.Name,
+                            fileName,
+                            localStart,
+                            localEnd,
+                            reusedOriginal: false,
+                            applyClipTrim: false));
                 }
             }
         }
 
         return map;
     }
+
+    /// <summary>
+    /// 複数波形の専用ソースで、焼き込みなしに元 WAV を共有できるか。
+    /// 部分範囲は MusicClip トリムで合わせる前提（手動と同じ 2 波形構成）。
+    /// </summary>
+    private static bool CanReuseDedicatedSourceWav(
+        WaveformOutputPart part,
+        string sliceSourcePath,
+        long localStart,
+        long localEnd,
+        float gain,
+        IReadOnlyList<RegionEdgeFade>? localFades,
+        WavFileInfo sliceInfo)
+    {
+        if (!part.HasDedicatedSource || sliceInfo.FrameCount <= 0)
+        {
+            return false;
+        }
+
+        var localMin = part.ResolveLocalStart();
+        var localMax = part.ResolveLocalEnd();
+        if (localStart < localMin || localEnd > localMax || localEnd <= localStart)
+        {
+            return false;
+        }
+
+        if (Math.Abs(gain - 1f) >= 0.000001f)
+        {
+            return false;
+        }
+
+        if (localFades is { Count: > 0 }
+            && RegionEdgeFade.OverlapsRange(localStart, localEnd, localFades))
+        {
+            return false;
+        }
+
+        return File.Exists(sliceSourcePath);
+    }
+
+    private readonly record struct TrackMediaBinding(
+        string WavPath,
+        long SourceStartSample,
+        long SourceEndSample,
+        long SourceFrameCount,
+        uint SampleRate,
+        bool ApplyClipTrim,
+        bool ReusedOriginal);
 
     private static IReadOnlyList<RegionEdgeFade>? RemapFadesToLocal(
         IReadOnlyList<RegionEdgeFade>? regionEdgeFades,
@@ -806,7 +1038,7 @@ internal static class WaapiMusicImporter
         WwiseMusicPlan plan,
         string containerPath,
         WwisePlaylistPlan playlist,
-        IReadOnlyDictionary<string, string> segmentWavs,
+        IReadOnlyDictionary<string, TrackMediaBinding> segmentMedia,
         WwiseImportSettings importSettings,
         bool applyAutoVolume,
         AutoVolumeTarget autoVolumeTarget,
@@ -825,7 +1057,7 @@ internal static class WaapiMusicImporter
                             plan,
                             containerPath,
                             playlist,
-                            segmentWavs,
+                            segmentMedia,
                             importSettings,
                             isMultiPart: true,
                             applyAutoVolume,
@@ -842,7 +1074,7 @@ internal static class WaapiMusicImporter
     private static Dictionary<string, object?> BuildSinglePlaylistSetArgs(
         WwiseMusicPlan plan,
         string parentPath,
-        IReadOnlyDictionary<string, string> segmentWavs,
+        IReadOnlyDictionary<string, TrackMediaBinding> segmentMedia,
         WwiseImportSettings importSettings,
         bool applyAutoVolume,
         AutoVolumeTarget autoVolumeTarget,
@@ -863,7 +1095,7 @@ internal static class WaapiMusicImporter
                             plan,
                             containerPath,
                             plan.Playlists[0],
-                            segmentWavs,
+                            segmentMedia,
                             importSettings,
                             isMultiPart: false,
                             applyAutoVolume,
@@ -882,7 +1114,7 @@ internal static class WaapiMusicImporter
         WwiseMusicPlan plan,
         string containerPath,
         WwisePlaylistPlan playlist,
-        IReadOnlyDictionary<string, string> segmentWavs,
+        IReadOnlyDictionary<string, TrackMediaBinding> segmentMedia,
         WwiseImportSettings importSettings,
         bool isMultiPart,
         bool applyAutoVolume,
@@ -904,7 +1136,7 @@ internal static class WaapiMusicImporter
             var segment = playlist.Segments[i];
             segmentDefs.Add(BuildSegmentDef(
                 segment,
-                segmentWavs,
+                segmentMedia,
                 isFirstSegment: i == 0,
                 streamEnabled,
                 lookAheadMs,
@@ -1015,13 +1247,14 @@ internal static class WaapiMusicImporter
 
     private static Dictionary<string, object?> BuildSegmentDef(
         WwiseSegmentPlan segment,
-        IReadOnlyDictionary<string, string> trackWavs,
+        IReadOnlyDictionary<string, TrackMediaBinding> trackMedia,
         bool isFirstSegment,
         bool streamEnabled,
         int lookAheadMs,
         int prefetchLengthMs)
     {
         // 切り出し WAV の先頭がセグメント 0。Cue は相対時刻。
+        // 元 WAV 再利用時は作成後に MusicClip トリム＋WWU の PlayAt パッチで範囲を合わせる。
         var origin = segment.ClipStartMs;
         var exitLocal = Math.Max(0.0, segment.ExitCueMs - origin);
         var endLocal = Math.Max(exitLocal, segment.ClipEndMs - origin);
@@ -1031,7 +1264,7 @@ internal static class WaapiMusicImporter
         {
             var track = segment.Tracks[t];
             var key = TrackSliceKey(segment.Name, track.Name);
-            if (!trackWavs.TryGetValue(key, out var wavPath))
+            if (!trackMedia.TryGetValue(key, out var media))
             {
                 throw new InvalidOperationException(
                     UiStrings.ErrSlicedWavMissing(segment.Name, track.Name));
@@ -1049,7 +1282,7 @@ internal static class WaapiMusicImporter
                 {
                     ["files"] = new object[]
                     {
-                        new Dictionary<string, object?> { ["audioFile"] = wavPath },
+                        new Dictionary<string, object?> { ["audioFile"] = media.WavPath },
                     },
                 },
             };
@@ -1079,6 +1312,577 @@ internal static class WaapiMusicImporter
             ["@EndPosition"] = endLocal,
             ["children"] = trackDefs,
         };
+    }
+
+    /// <summary>
+    /// 共有 WAV のセグメント範囲を MusicClip Begin/End Offset（ミリ秒）で合わせる。
+    /// MusicClip は Track の descendants に出ないことがあるため、from type MusicClip で探す。
+    /// 頭トリムしたクリップを 0 位置へ寄せる PlayAt（負値）は WAAPI の制約
+    /// [0, 1e10] で設定できないため、必要なパッチ一覧を返し WWU 直接更新へ回す。
+    /// </summary>
+    private static async Task<List<MusicClipPlayAtFix>> ApplyMusicClipTrimsAsync(
+        WaapiHttpClient client,
+        WwiseMusicPlan plan,
+        string musicRootPath,
+        IReadOnlyDictionary<string, TrackMediaBinding> segmentMedia,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        var playAtFixes = new List<MusicClipPlayAtFix>();
+        var anyTrim = segmentMedia.Values.Any(m => m.ApplyClipTrim);
+        if (!anyTrim)
+        {
+            return playAtFixes;
+        }
+
+        // Track 配下の descendants では取れないことがあるため、プロジェクト全体から取る。
+        var allClips = await QueryAllMusicClipsAsync(client, cancellationToken)
+            .ConfigureAwait(false);
+        log(UiStrings.LogMusicClipCatalog(allClips.Count));
+
+        foreach (var playlist in plan.Playlists)
+        {
+            var playlistPath = plan.IsMultiPart
+                ? $"{musicRootPath}\\{playlist.Name}"
+                : musicRootPath;
+            foreach (var segment in playlist.Segments)
+            {
+                var segmentPath = $"{playlistPath}\\{segment.Name}";
+                foreach (var track in segment.Tracks)
+                {
+                    var key = TrackSliceKey(segment.Name, track.Name);
+                    if (!segmentMedia.TryGetValue(key, out var media) || !media.ApplyClipTrim)
+                    {
+                        continue;
+                    }
+
+                    if (media.SampleRate == 0 || media.SourceFrameCount <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            UiStrings.ErrMusicClipTrimMissingRate(track.Name, segment.Name));
+                    }
+
+                    var beginMs = media.SourceStartSample * 1000.0 / media.SampleRate;
+                    // MusicClip のプロパティ規約（WWU 実測）:
+                    //   BeginTrimOffset / EndTrimOffset : ソース内の開始／終了位置（絶対ミリ秒）
+                    //   PlayAt : ソース先頭のタイムライン位置。手動編集同様、トリム後の内容を
+                    //            0 に詰めるには -Begin（負値）が必要だが WAAPI では書けないので
+                    //            後段の WWU 直接パッチで設定する。
+                    var endMs = media.SourceEndSample * 1000.0 / media.SampleRate;
+                    var trackPath = $"{segmentPath}\\{track.Name}";
+                    var clipIds = FindMusicClipsForTrack(
+                        allClips,
+                        trackPath,
+                        Path.GetFileNameWithoutExtension(media.WavPath));
+                    if (clipIds.Count == 0)
+                    {
+                        // パス推定でもう一度直接 get を試す。
+                        var guessed = await TryGetObjectIdAsync(
+                                client,
+                                $"{trackPath}\\{Path.GetFileNameWithoutExtension(media.WavPath)}",
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(guessed))
+                        {
+                            clipIds.Add(guessed);
+                        }
+                    }
+
+                    if (clipIds.Count == 0)
+                    {
+                        throw new InvalidOperationException(
+                            UiStrings.ErrMusicClipNotFound(trackPath));
+                    }
+
+                    if (clipIds.Count > 1)
+                    {
+                        throw new InvalidOperationException(
+                            UiStrings.ErrMusicClipAmbiguous(trackPath, clipIds.Count));
+                    }
+
+                    var clipId = clipIds[0];
+                    await SetClipPropertyAsync(
+                            client, clipId, "BeginTrimOffset", beginMs, cancellationToken)
+                        .ConfigureAwait(false);
+                    await SetClipPropertyAsync(
+                            client, clipId, "EndTrimOffset", endMs, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (beginMs > 0.0005)
+                    {
+                        playAtFixes.Add(new MusicClipPlayAtFix(clipId, -beginMs));
+                    }
+
+                    log(
+                        UiStrings.LogMusicClipTrimApplied(
+                            track.Name,
+                            segment.Name,
+                            beginMs,
+                            endMs));
+                }
+            }
+        }
+
+        return playAtFixes;
+    }
+
+    private readonly record struct MusicClipPlayAtFix(string ClipId, double PlayAtMs);
+
+    /// <summary>
+    /// 負の PlayAt を WWU 直接編集で設定する。
+    /// WAAPI の PlayAt は制約 [0, 1e10] のため、手動編集と同じ結果
+    /// （頭トリムしたクリップをタイムライン 0 に配置）を API 経由では作れない。
+    /// 手順: project.save → 対象 WWU 特定 → project.close → XML パッチ → project.open。
+    /// </summary>
+    private static async Task ApplyPlayAtFixesViaWorkUnitAsync(
+        WaapiHttpClient client,
+        IReadOnlyList<MusicClipPlayAtFix> fixes,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        if (fixes.Count == 0)
+        {
+            return;
+        }
+
+        log(UiStrings.LogPlayAtPatchStart(fixes.Count));
+
+        // クリップの属する WWU ファイルとプロジェクト（.wproj）パスを先に取得する。
+        var clipFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fix in fixes)
+        {
+            var filePath = await QuerySingleReturnStringAsync(
+                    client,
+                    $"$ \"{fix.ClipId}\"",
+                    "filePath",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            {
+                throw new InvalidOperationException(
+                    UiStrings.ErrPlayAtWorkUnitNotFound(fix.ClipId));
+            }
+
+            clipFiles[fix.ClipId] = filePath;
+        }
+
+        var projectPath = await QuerySingleReturnStringAsync(
+                client,
+                "$ from type Project",
+                "filePath",
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath))
+        {
+            throw new InvalidOperationException(UiStrings.ErrPlayAtProjectPathUnknown);
+        }
+
+        // 未保存の変更（今回の作成分を含む）を WWU へ書き出してから閉じる。
+        await client.CallAsync(
+                "ak.wwise.core.project.save",
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        // ここから先は途中中断するとプロジェクトが閉じたままになるため、
+        // キャンセル要求があっても再オープンまで完走させる。
+        await client.CallAsync(
+                "ak.wwise.ui.project.close",
+                new Dictionary<string, object?> { ["bypassSave"] = true },
+                cancellationToken: CancellationToken.None)
+            .ConfigureAwait(false);
+
+        try
+        {
+            // close は非同期に進行する。Wwise がまだ WWU を掴んでいる間に
+            // 書き換えると、パッチが失われたり Wwise 本体が落ちることがある。
+            // プロジェクトが完全に閉じるまで待ってからパッチする。
+            await WaitForProjectClosedAsync(client).ConfigureAwait(false);
+
+            foreach (var group in fixes.GroupBy(f => clipFiles[f.ClipId], StringComparer.OrdinalIgnoreCase))
+            {
+                PatchPlayAtInWorkUnitFile(group.Key, group.ToList(), log);
+            }
+        }
+        finally
+        {
+            // 「Closing project in progress」ロックが残っていても解除までリトライする。
+            log(UiStrings.LogPlayAtProjectReopen(Path.GetFileName(projectPath)));
+            await CallWithLockRetryAsync(
+                    client,
+                    "ak.wwise.ui.project.open",
+                    new Dictionary<string, object?>
+                    {
+                        ["path"] = projectPath,
+                        ["bypassSave"] = true,
+                    })
+                .ConfigureAwait(false);
+        }
+
+        // open はロード完了前に返る。ロード中の WAAPI アクセスは既定値（PlayAt=0）を
+        // 返したり Wwise を不安定にするため、ロード完了を待ってから検証する。
+        await WaitForProjectLoadedAsync(client, projectPath).ConfigureAwait(false);
+
+        // 書き込み結果を WAAPI で読み戻して照合する。
+        // WWU フォーマットが将来変わってパッチが無効になった場合に、ここで確実に検出する。
+        // ロード直後は既定値 0 が見えることがあるため、期待値に一致するまでリトライする。
+        foreach (var fix in fixes)
+        {
+            double? actual = null;
+            var verifyDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (true)
+            {
+                actual = await QueryClipPlayAtAsync(client, fix.ClipId)
+                    .ConfigureAwait(false);
+                if ((actual is not null && Math.Abs(actual.Value - fix.PlayAtMs) <= 0.01)
+                    || DateTime.UtcNow >= verifyDeadline)
+                {
+                    break;
+                }
+
+                await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            if (actual is null || Math.Abs(actual.Value - fix.PlayAtMs) > 0.01)
+            {
+                throw new InvalidOperationException(
+                    UiStrings.ErrPlayAtVerifyFailed(fix.ClipId, fix.PlayAtMs, actual));
+            }
+        }
+
+        log(UiStrings.LogPlayAtPatchDone(fixes.Count));
+    }
+
+    /// <summary>
+    /// プロジェクトが完全に閉じるまで待つ。
+    /// クローズ進行中は ak.wwise.locked、完了後は「プロジェクト未ロード」系エラーか空結果になる。
+    /// </summary>
+    private static async Task WaitForProjectClosedAsync(WaapiHttpClient client)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var result = await client.CallAsync(
+                        "ak.wwise.core.object.get",
+                        new Dictionary<string, object?> { ["waql"] = "$ from type Project" },
+                        new Dictionary<string, object?> { ["return"] = new[] { "id" } },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (!result.TryGetProperty("return", out var arr)
+                    || arr.ValueKind != JsonValueKind.Array
+                    || arr.GetArrayLength() == 0)
+                {
+                    return;
+                }
+            }
+            catch (WaapiException ex) when (
+                ex.Message.Contains("ak.wwise.locked", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("exclusive lock", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("in progress", StringComparison.OrdinalIgnoreCase))
+            {
+                // クローズ進行中。待って再確認する。
+            }
+            catch (WaapiException)
+            {
+                // 「プロジェクトが読み込まれていない」等 → クローズ完了とみなす。
+                return;
+            }
+
+            await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// 再オープンしたプロジェクトのロード完了（クエリで .wproj パスが返る状態）まで待つ。
+    /// タイムアウト時はそのまま返し、後段の検証で失敗として検出する。
+    /// </summary>
+    private static async Task WaitForProjectLoadedAsync(WaapiHttpClient client, string projectPath)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var result = await client.CallAsync(
+                        "ak.wwise.core.object.get",
+                        new Dictionary<string, object?> { ["waql"] = "$ from type Project" },
+                        new Dictionary<string, object?> { ["return"] = new[] { "filePath" } },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (result.TryGetProperty("return", out var arr)
+                    && arr.ValueKind == JsonValueKind.Array
+                    && arr.GetArrayLength() > 0
+                    && arr[0].TryGetProperty("filePath", out var pathEl)
+                    && string.Equals(
+                        pathEl.GetString(),
+                        projectPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+            catch (WaapiException)
+            {
+                // ロック中／ロード中。待って再確認する。
+            }
+
+            await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Wwise が排他ロック中（ak.wwise.locked、プロジェクトのクローズ／ロード進行中）の間、
+    /// 解除されるまで呼び出しをリトライする。
+    /// </summary>
+    private static async Task<JsonElement> CallWithLockRetryAsync(
+        WaapiHttpClient client,
+        string uri,
+        object? args = null,
+        object? options = null)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
+        while (true)
+        {
+            try
+            {
+                return await client.CallAsync(uri, args, options, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (WaapiException ex) when (
+                DateTime.UtcNow < deadline
+                && (ex.Message.Contains("ak.wwise.locked", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("exclusive lock", StringComparison.OrdinalIgnoreCase)))
+            {
+                await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>再オープン後の MusicClip から PlayAt 実値を読み戻す。</summary>
+    private static async Task<double?> QueryClipPlayAtAsync(
+        WaapiHttpClient client,
+        string clipId)
+    {
+        var result = await CallWithLockRetryAsync(
+                client,
+                "ak.wwise.core.object.get",
+                new Dictionary<string, object?> { ["waql"] = $"$ \"{clipId}\"" },
+                new Dictionary<string, object?> { ["return"] = new[] { "id", "@PlayAt" } })
+            .ConfigureAwait(false);
+        if (!result.TryGetProperty("return", out var arr)
+            || arr.ValueKind != JsonValueKind.Array
+            || arr.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        return arr[0].TryGetProperty("@PlayAt", out var el)
+               && el.ValueKind == JsonValueKind.Number
+            ? el.GetDouble()
+            : null;
+    }
+
+    /// <summary>WWU（XML）内の MusicClip に PlayAt プロパティを直接書き込む。</summary>
+    private static void PatchPlayAtInWorkUnitFile(
+        string wwuPath,
+        IReadOnlyList<MusicClipPlayAtFix> fixes,
+        Action<string> log)
+    {
+        // Wwise のクローズ処理がファイルを掴んだまま残ることがあるため、
+        // 排他で開けるようになるまで待ってから書き換える。
+        WaitForExclusiveFileAccess(wwuPath);
+
+        var doc = new System.Xml.XmlDocument { PreserveWhitespace = true };
+        doc.Load(wwuPath);
+
+        foreach (var fix in fixes)
+        {
+            var clipNode = doc.SelectSingleNode(
+                $"//MusicClip[@ID='{fix.ClipId}']") as System.Xml.XmlElement;
+            if (clipNode is null)
+            {
+                throw new InvalidOperationException(
+                    UiStrings.ErrPlayAtClipXmlMissing(fix.ClipId, wwuPath));
+            }
+
+            var propertyList = clipNode.SelectSingleNode("PropertyList") as System.Xml.XmlElement;
+            if (propertyList is null)
+            {
+                propertyList = doc.CreateElement("PropertyList");
+                clipNode.PrependChild(propertyList);
+            }
+
+            var value = fix.PlayAtMs.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            if (propertyList.SelectSingleNode("Property[@Name='PlayAt']")
+                is System.Xml.XmlElement existing)
+            {
+                existing.SetAttribute("Value", value);
+            }
+            else
+            {
+                var property = doc.CreateElement("Property");
+                property.SetAttribute("Name", "PlayAt");
+                property.SetAttribute("Type", "Real64");
+                property.SetAttribute("Value", value);
+                propertyList.AppendChild(property);
+            }
+        }
+
+        doc.Save(wwuPath);
+        log(UiStrings.LogPlayAtPatchFile(Path.GetFileName(wwuPath), fixes.Count));
+    }
+
+    /// <summary>指定ファイルを排他モードで開けるまで待つ（最大 30 秒）。</summary>
+    private static void WaitForExclusiveFileAccess(string path)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (true)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+                return;
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(250);
+            }
+        }
+    }
+
+    /// <summary>WAQL で 1 件だけ取得し、指定の return フィールド（文字列）を返す。</summary>
+    private static async Task<string?> QuerySingleReturnStringAsync(
+        WaapiHttpClient client,
+        string waql,
+        string field,
+        CancellationToken cancellationToken)
+    {
+        var result = await client.CallAsync(
+                "ak.wwise.core.object.get",
+                new Dictionary<string, object?> { ["waql"] = waql },
+                new Dictionary<string, object?> { ["return"] = new[] { "id", field } },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (!result.TryGetProperty("return", out var arr)
+            || arr.ValueKind != JsonValueKind.Array
+            || arr.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        return arr[0].TryGetProperty(field, out var el) ? el.GetString() : null;
+    }
+
+    private static async Task SetClipPropertyAsync(
+        WaapiHttpClient client,
+        string clipId,
+        string property,
+        double value,
+        CancellationToken cancellationToken)
+    {
+        await client.CallAsync(
+                "ak.wwise.core.object.setProperty",
+                new Dictionary<string, object?>
+                {
+                    ["object"] = clipId,
+                    ["property"] = property,
+                    ["value"] = value,
+                },
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<List<(string Id, string Path)>> QueryAllMusicClipsAsync(
+        WaapiHttpClient client,
+        CancellationToken cancellationToken)
+    {
+        var list = new List<(string Id, string Path)>();
+        var result = await client.CallAsync(
+                "ak.wwise.core.object.get",
+                new Dictionary<string, object?>
+                {
+                    ["waql"] = "$ from type MusicClip",
+                },
+                new Dictionary<string, object?>
+                {
+                    ["return"] = new[] { "id", "name", "type", "path" },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.TryGetProperty("return", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return list;
+        }
+
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (!item.TryGetProperty("id", out var idEl))
+            {
+                continue;
+            }
+
+            var id = idEl.GetString();
+            if (string.IsNullOrEmpty(id))
+            {
+                continue;
+            }
+
+            var path = item.TryGetProperty("path", out var pathEl)
+                ? pathEl.GetString() ?? string.Empty
+                : string.Empty;
+            list.Add((id, path));
+        }
+
+        return list;
+    }
+
+    private static List<string> FindMusicClipsForTrack(
+        IReadOnlyList<(string Id, string Path)> allClips,
+        string trackPath,
+        string wavStem)
+    {
+        var matches = new List<string>();
+        var trackFull = trackPath.TrimEnd('\\');
+        var prefix = trackFull + "\\";
+
+        // Track パス直下だけを対象にする。
+        // 緩い Contains は bgm_st_0040_a が bgm_st_0040_a_a / _a_b にも
+        // マッチして全クリップへトリムが上書きされるため使わない。
+        foreach (var (id, path) in allClips)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                continue;
+            }
+
+            if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(path, trackFull, StringComparison.OrdinalIgnoreCase))
+            {
+                matches.Add(id);
+            }
+        }
+
+        if (matches.Count > 0 || string.IsNullOrEmpty(wavStem))
+        {
+            return matches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        // フォールバック: Track\\{wavStem} と一致するパスのみ。
+        var exactClipPath = prefix + wavStem;
+        foreach (var (id, path) in allClips)
+        {
+            if (string.Equals(path, exactClipPath, StringComparison.OrdinalIgnoreCase))
+            {
+                matches.Add(id);
+            }
+        }
+
+        return matches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static bool IsReservedCueName(string name) =>

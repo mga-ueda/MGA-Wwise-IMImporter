@@ -75,8 +75,8 @@ internal sealed class WaveformPreviewSession
     /// <summary>複数波形モード時、ファイル区間ごとに 2 マーカー特例を実体化済みか（VirtualStart をキー）。</summary>
     private readonly HashSet<long> _multiTwoMarkerMaterializedSpanStarts = [];
     private readonly List<WaveOnlyModeProcessor.MarkerCommentRename> _pendingWaveMarkerRenames = [];
-    private readonly Dictionary<int, WaveformOutputPart> _markerShareAnchorByPartNumber = [];
-    private readonly List<IReadOnlyList<WaveformOutputPart>> _markerShareGroups = [];
+    private readonly Dictionary<int, int> _markerShareAnchorByPartNumber = [];
+    private readonly List<int[]> _markerShareGroups = [];
     private HashSet<int> _disabledPartNumbers = [];
     private IReadOnlyList<WaveformMarkerMark> _effectiveMarkers;
     private IReadOnlyList<WaveformMarkerMark> _wwiseMarkers;
@@ -206,7 +206,7 @@ internal sealed class WaveformPreviewSession
 
         if (partGroupIds is { Count: > 0 })
         {
-            var groups = new Dictionary<int, List<WaveformOutputPart>>();
+            var groups = new Dictionary<int, List<int>>();
             foreach (var part in EffectiveOutputParts)
             {
                 if (_disabledPartNumbers.Contains(part.Number)
@@ -221,7 +221,7 @@ internal sealed class WaveformPreviewSession
                     groups[groupId] = members;
                 }
 
-                members.Add(part);
+                members.Add(part.Number);
             }
 
             foreach (var members in groups.Values)
@@ -231,17 +231,22 @@ internal sealed class WaveformPreviewSession
                     continue;
                 }
 
-                members.Sort((a, b) => a.Number.CompareTo(b.Number));
-                var anchor = members[0];
-                _markerShareGroups.Add(members);
-                foreach (var member in members)
+                members.Sort();
+                var anchorNumber = members[0];
+                _markerShareGroups.Add(members.ToArray());
+                foreach (var memberNumber in members)
                 {
-                    _markerShareAnchorByPartNumber[member.Number] = anchor;
+                    _markerShareAnchorByPartNumber[memberNumber] = anchorNumber;
                 }
             }
         }
 
         RebuildMarkerSnapshots();
+        // 複数波形: グループ化でリーダーマーカーをメンバーへ投影したうえで -A/-L/-E/-R も再構築する。
+        if (Preview.IsMultiWaveOnly && _waveOnlyMarkers is not null)
+        {
+            RebuildWaveOnlyRegions();
+        }
     }
 
     public bool AddMarkers(IEnumerable<long> sampleOffsets)
@@ -373,6 +378,12 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
+        if (Preview.IsMultiWaveOnly
+            && !TryResolveSharedMarkerSample(sampleOffset, out sampleOffset))
+        {
+            return false;
+        }
+
         if (sampleOffset < 0 || sampleOffset >= Preview.WavInfo.FrameCount)
         {
             return false;
@@ -383,7 +394,10 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
-        _waveOnlyMarkers.Add(new WaveformMarkerMark(sampleOffset, comment.Trim()));
+        _waveOnlyMarkers.Add(
+            new WaveformMarkerMark(
+                sampleOffset,
+                WaveOnlyModeProcessor.NormalizeExactSuffixComment(comment)));
         _waveOnlyMarkers.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
         RebuildMarkerSnapshots();
         RebuildWaveOnlyRegions();
@@ -398,6 +412,15 @@ internal sealed class WaveformPreviewSession
         if (_waveOnlyMarkers is null)
         {
             return false;
+        }
+
+        if (Preview.IsMultiWaveOnly)
+        {
+            if (!TryResolveSharedMarkerSample(fromSampleOffset, out fromSampleOffset)
+                || !TryResolveSharedMarkerSample(toSampleOffset, out toSampleOffset))
+            {
+                return false;
+            }
         }
 
         if (fromSampleOffset == toSampleOffset)
@@ -444,6 +467,15 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
+        if (Preview.IsMultiWaveOnly)
+        {
+            if (!TryResolveSharedMarkerSample(fromSampleOffset, out fromSampleOffset)
+                || !TryResolveSharedMarkerSample(toSampleOffset, out toSampleOffset))
+            {
+                return false;
+            }
+        }
+
         var delta = toSampleOffset - fromSampleOffset;
         if (delta == 0)
         {
@@ -464,12 +496,37 @@ internal sealed class WaveformPreviewSession
 
         long? previousSample = null;
         var previousIndex = -1;
+        WaveformOutputPart? fromPart = null;
+        if (Preview.IsMultiWaveOnly)
+        {
+            fromPart = EffectiveOutputParts
+                .Where(part =>
+                    fromSampleOffset >= part.StartSampleOffset
+                    && fromSampleOffset < part.EndSampleOffset)
+                .Select(part => (WaveformOutputPart?)part)
+                .FirstOrDefault();
+        }
+
         for (var i = 0; i < _waveOnlyMarkers.Count; i++)
         {
             var sample = _waveOnlyMarkers[i].SampleOffset;
             if (sample >= fromSampleOffset)
             {
                 continue;
+            }
+
+            // 複数波形: 同じ Playlist（基準側）内の前マーカーだけを連動対象にする。
+            if (fromPart is { } part)
+            {
+                if (sample < part.StartSampleOffset || sample >= part.EndSampleOffset)
+                {
+                    continue;
+                }
+
+                if (!IsAuthoritativeUserMarkerSample(sample))
+                {
+                    continue;
+                }
             }
 
             if (previousSample is null || sample > previousSample.Value)
@@ -534,13 +591,19 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
+        if (Preview.IsMultiWaveOnly
+            && !TryResolveSharedMarkerSample(sampleOffset, out sampleOffset))
+        {
+            return false;
+        }
+
         var index = _waveOnlyMarkers.FindIndex(marker => marker.SampleOffset == sampleOffset);
         if (index < 0)
         {
             return false;
         }
 
-        var nextComment = comment.Trim();
+        var nextComment = WaveOnlyModeProcessor.NormalizeExactSuffixComment(comment);
         if (string.Equals(_waveOnlyMarkers[index].Comment, nextComment, StringComparison.Ordinal))
         {
             return false;
@@ -563,6 +626,12 @@ internal sealed class WaveformPreviewSession
     public bool TryRemoveWaveOnlyMarker(long sampleOffset)
     {
         if (_waveOnlyMarkers is null)
+        {
+            return false;
+        }
+
+        if (Preview.IsMultiWaveOnly
+            && !TryResolveSharedMarkerSample(sampleOffset, out sampleOffset))
         {
             return false;
         }
@@ -604,7 +673,7 @@ internal sealed class WaveformPreviewSession
                 var last = group.Last();
                 return new WaveformMarkerMark(
                     group.Key,
-                    last.Comment.Trim(),
+                    WaveOnlyModeProcessor.NormalizeExactSuffixComment(last.Comment),
                     last.IsSharedProjection,
                     last.IsFromWaveEmbedded);
             })
@@ -673,7 +742,8 @@ internal sealed class WaveformPreviewSession
 
         if (Preview.IsMultiWaveOnly)
         {
-            var built = MultiWaveOnlyRegionBuilder.Build(_waveOnlyMarkers, Preview.SourceSpans);
+            var markersForBuild = BuildMultiWaveMarkersForRegionBuild();
+            var built = MultiWaveOnlyRegionBuilder.Build(markersForBuild, Preview.SourceSpans);
             _waveOnlyRegions = built.Regions;
             _waveOnlyOutputParts = built.Parts;
         }
@@ -688,6 +758,81 @@ internal sealed class WaveformPreviewSession
         }
 
         _regionEdgeFades = RegionEdgeFade.RemapToRuns(_regionEdgeFades, _waveOnlyRegions);
+
+        // Materialize でコメントが -L/-E に変わったあと、表示用 EffectiveMarkers も必ず追従させる。
+        // （以前はグループ時だけ再投影しており、2 マーカー特例の差し替えが移動するまで遅延していた）
+        RebuildMarkerSnapshots();
+    }
+
+    /// <summary>
+    /// 複数波形グループ時: 基準 Playlist のマーカーをメンバーへ相対投影したリストでリージョンを組む。
+    /// メンバー固有の実体マーカーはグループ中は無視する（解除後に戻る）。
+    /// <para>
+    /// 投影の基準はトリム後の出力パートではなく <see cref="WaveformSourceSpan"/>（ファイル全長）。
+    /// `-R` は除外開始＝パート終端に来るため、パート半開区間だと落ちて同期先の除外が消える。
+    /// </para>
+    /// </summary>
+    private IReadOnlyList<WaveformMarkerMark> BuildMultiWaveMarkersForRegionBuild()
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return [];
+        }
+
+        if (_markerShareGroups.Count == 0)
+        {
+            return _waveOnlyMarkers;
+        }
+
+        var groupedSpanStarts = CollectGroupedSourceSpanStarts();
+        var projected = _waveOnlyMarkers
+            .Where(marker =>
+                !TryGetSourceSpanForSample(marker.SampleOffset, out var span)
+                || !groupedSpanStarts.Contains(span.VirtualStartSample))
+            .ToList();
+
+        foreach (var groupNumbers in _markerShareGroups)
+        {
+            if (!TryGetLivePart(groupNumbers[0], out var anchorPart)
+                || !TryGetSourceSpanForPart(anchorPart, out var anchorSpan))
+            {
+                continue;
+            }
+
+            var anchorMarkers = _waveOnlyMarkers
+                .Where(marker =>
+                    marker.SampleOffset >= anchorSpan.VirtualStartSample
+                    && marker.SampleOffset < anchorSpan.VirtualEndSample)
+                .ToArray();
+            foreach (var memberNumber in groupNumbers)
+            {
+                if (_disabledPartNumbers.Contains(memberNumber)
+                    || !TryGetLivePart(memberNumber, out var memberPart)
+                    || !TryGetSourceSpanForPart(memberPart, out var memberSpan))
+                {
+                    continue;
+                }
+
+                var memberLength = memberSpan.FrameCount;
+                foreach (var marker in anchorMarkers)
+                {
+                    var relativeSample = marker.SampleOffset - anchorSpan.VirtualStartSample;
+                    if (relativeSample < 0 || relativeSample >= memberLength)
+                    {
+                        continue;
+                    }
+
+                    projected.Add(new WaveformMarkerMark(
+                        memberSpan.VirtualStartSample + relativeSample,
+                        marker.Comment,
+                        IsSharedProjection: memberPart.Number != anchorPart.Number,
+                        IsFromWaveEmbedded: marker.IsFromWaveEmbedded));
+                }
+            }
+        }
+
+        projected.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
+        return projected;
     }
 
     /// <summary>
@@ -752,6 +897,12 @@ internal sealed class WaveformPreviewSession
         // 各 SourceSpan = 1 プレイリスト。区間内のマーカーがちょうど 2 つなら -L/-E 実体化。
         foreach (var span in Preview.SourceSpans)
         {
+            // グループの非基準メンバーはリーダー投影に任せる（固有マーカーの暗黙実体化はしない）。
+            if (IsNonAnchorGroupedSpan(span))
+            {
+                continue;
+            }
+
             var localMarkers = new List<WaveformMarkerMark>();
             var sourceIndexes = new List<int>();
             for (var i = 0; i < _waveOnlyMarkers.Count; i++)
@@ -846,6 +997,7 @@ internal sealed class WaveformPreviewSession
 
     /// <summary>
     /// グループ内の編集位置を、最小 part 番号の基準 Playlist 上の同じ相対位置へ変換する。
+    /// パート範囲は常に現行の <see cref="EffectiveOutputParts"/> から取る（グループ化時のスナップショットは使わない）。
     /// </summary>
     private bool TryResolveSharedMarkerSample(long requestedSampleOffset, out long sampleOffset)
     {
@@ -857,7 +1009,8 @@ internal sealed class WaveformPreviewSession
             .Select(candidate => (WaveformOutputPart?)candidate)
             .FirstOrDefault();
         if (part is not { } matchedPart
-            || !_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchor))
+            || !_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchorNumber)
+            || !TryGetLivePart(anchorNumber, out var anchor))
         {
             return true;
         }
@@ -871,6 +1024,47 @@ internal sealed class WaveformPreviewSession
 
         sampleOffset = resolved;
         return true;
+    }
+
+    /// <summary>現行の出力パート一覧から、指定番号のパートを取得する。</summary>
+    private bool TryGetLivePart(int partNumber, out WaveformOutputPart part)
+    {
+        foreach (var candidate in EffectiveOutputParts)
+        {
+            if (candidate.Number == partNumber)
+            {
+                part = candidate;
+                return true;
+            }
+        }
+
+        part = default;
+        return false;
+    }
+
+    /// <summary>
+    /// 複数波形グループの非基準メンバー区間なら true（固有マーカーの暗黙実体化を抑止）。
+    /// </summary>
+    private bool IsNonAnchorGroupedSpan(WaveformSourceSpan span)
+    {
+        if (_markerShareAnchorByPartNumber.Count == 0)
+        {
+            return false;
+        }
+
+        var hostPart = EffectiveOutputParts
+            .Where(part =>
+                span.VirtualStartSample >= part.StartSampleOffset
+                && span.VirtualStartSample < part.EndSampleOffset)
+            .Select(part => (WaveformOutputPart?)part)
+            .FirstOrDefault();
+        if (hostPart is not { } part
+            || !_markerShareAnchorByPartNumber.TryGetValue(part.Number, out var anchorNumber))
+        {
+            return false;
+        }
+
+        return part.Number != anchorNumber;
     }
 
     private bool IsEditableMarkerSample(long sampleOffset)
@@ -958,45 +1152,48 @@ internal sealed class WaveformPreviewSession
             return;
         }
 
-        var groupedPartNumbers = _markerShareGroups
-            .SelectMany(group => group)
-            .Select(part => part.Number)
-            .ToHashSet();
+        var groupedSpanStarts = CollectGroupedSourceSpanStarts();
         var sharedMarkers = baseMarkers
-            .Where(marker => !EffectiveOutputParts.Any(part =>
-                groupedPartNumbers.Contains(part.Number)
-                && marker.SampleOffset >= part.StartSampleOffset
-                && marker.SampleOffset < part.EndSampleOffset))
+            .Where(marker =>
+                !TryGetSourceSpanForSample(marker.SampleOffset, out var span)
+                || !groupedSpanStarts.Contains(span.VirtualStartSample))
             .ToList();
 
-        foreach (var group in _markerShareGroups)
+        foreach (var groupNumbers in _markerShareGroups)
         {
-            var anchor = group[0];
+            if (!TryGetLivePart(groupNumbers[0], out var anchorPart)
+                || !TryGetSourceSpanForPart(anchorPart, out var anchorSpan))
+            {
+                continue;
+            }
+
             var anchorMarkers = baseMarkers
                 .Where(marker =>
-                    marker.SampleOffset >= anchor.StartSampleOffset
-                    && marker.SampleOffset < anchor.EndSampleOffset)
+                    marker.SampleOffset >= anchorSpan.VirtualStartSample
+                    && marker.SampleOffset < anchorSpan.VirtualEndSample)
                 .ToArray();
-            foreach (var member in group)
+            foreach (var memberNumber in groupNumbers)
             {
-                if (_disabledPartNumbers.Contains(member.Number))
+                if (_disabledPartNumbers.Contains(memberNumber)
+                    || !TryGetLivePart(memberNumber, out var memberPart)
+                    || !TryGetSourceSpanForPart(memberPart, out var memberSpan))
                 {
                     continue;
                 }
 
-                var memberLength = member.EndSampleOffset - member.StartSampleOffset;
+                var memberLength = memberSpan.FrameCount;
                 foreach (var marker in anchorMarkers)
                 {
-                    var relativeSample = marker.SampleOffset - anchor.StartSampleOffset;
+                    var relativeSample = marker.SampleOffset - anchorSpan.VirtualStartSample;
                     if (relativeSample < 0 || relativeSample >= memberLength)
                     {
                         continue;
                     }
 
                     sharedMarkers.Add(new WaveformMarkerMark(
-                        member.StartSampleOffset + relativeSample,
+                        memberSpan.VirtualStartSample + relativeSample,
                         marker.Comment,
-                        IsSharedProjection: member.Number != anchor.Number,
+                        IsSharedProjection: memberPart.Number != anchorPart.Number,
                         IsFromWaveEmbedded: marker.IsFromWaveEmbedded));
                 }
             }
@@ -1006,6 +1203,61 @@ internal sealed class WaveformPreviewSession
             .OrderBy(marker => marker.SampleOffset)
             .ToArray();
         _wwiseMarkers = _waveOnlyMarkers is not null ? [] : _effectiveMarkers;
+    }
+
+    /// <summary>グループに属するパートが載っている SourceSpan の VirtualStart 集合。</summary>
+    private HashSet<long> CollectGroupedSourceSpanStarts()
+    {
+        var groupedPartNumbers = _markerShareGroups
+            .SelectMany(group => group)
+            .ToHashSet();
+        var starts = new HashSet<long>();
+        foreach (var part in EffectiveOutputParts)
+        {
+            if (!groupedPartNumbers.Contains(part.Number)
+                || !TryGetSourceSpanForPart(part, out var span))
+            {
+                continue;
+            }
+
+            starts.Add(span.VirtualStartSample);
+        }
+
+        return starts;
+    }
+
+    /// <summary>出力パートが属するファイル区間（複数波形の SourceSpan）を返す。</summary>
+    private bool TryGetSourceSpanForPart(WaveformOutputPart part, out WaveformSourceSpan span)
+    {
+        foreach (var candidate in Preview.SourceSpans)
+        {
+            if (part.StartSampleOffset >= candidate.VirtualStartSample
+                && part.StartSampleOffset < candidate.VirtualEndSample)
+            {
+                span = candidate;
+                return true;
+            }
+        }
+
+        span = default;
+        return false;
+    }
+
+    /// <summary>仮想サンプルが属する SourceSpan を返す。</summary>
+    private bool TryGetSourceSpanForSample(long sampleOffset, out WaveformSourceSpan span)
+    {
+        foreach (var candidate in Preview.SourceSpans)
+        {
+            if (sampleOffset >= candidate.VirtualStartSample
+                && sampleOffset < candidate.VirtualEndSample)
+            {
+                span = candidate;
+                return true;
+            }
+        }
+
+        span = default;
+        return false;
     }
 
     private bool IsMarkerOnDisabledPart(long sampleOffset)
@@ -1037,12 +1289,12 @@ internal sealed class WaveformPreviewSession
             return true;
         }
 
-        if (!_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchor))
+        if (!_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchorNumber))
         {
             return true;
         }
 
-        return matchedPart.Number == anchor.Number;
+        return matchedPart.Number == anchorNumber;
     }
 
     /// <summary>
@@ -1058,11 +1310,11 @@ internal sealed class WaveformPreviewSession
                 continue;
             }
 
-            if (_markerShareAnchorByPartNumber.TryGetValue(part.Number, out var anchor))
+            if (_markerShareAnchorByPartNumber.TryGetValue(part.Number, out var anchorNumber))
             {
                 for (var j = 0; j < EffectiveOutputParts.Count; j++)
                 {
-                    if (EffectiveOutputParts[j].Number == anchor.Number)
+                    if (EffectiveOutputParts[j].Number == anchorNumber)
                     {
                         return j;
                     }

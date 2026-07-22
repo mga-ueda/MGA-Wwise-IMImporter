@@ -99,6 +99,41 @@ internal static class WaveOnlyModeProcessor
         || IsExitOnlyComment(marker.Comment)
         || IsAnacrusisOnlyComment(marker.Comment);
 
+    /// <summary>
+    /// コメントが <c>-l</c>/<c>-e</c>/<c>-a</c>/<c>-r</c>（大小無視・前後空白可）のみなら
+    /// 正規形の <c>-L</c>/<c>-E</c>/<c>-A</c>/<c>-R</c> に揃える。それ以外は Trim のみ。
+    /// </summary>
+    public static string NormalizeExactSuffixComment(string? comment)
+    {
+        var trimmed = (comment ?? string.Empty).Trim();
+        if (trimmed.Length == 0)
+        {
+            return trimmed;
+        }
+
+        if (IsLoopOnlyComment(trimmed))
+        {
+            return WaveformRegionBuilder.LoopLeftSuffix;
+        }
+
+        if (IsExitOnlyComment(trimmed))
+        {
+            return WaveformRegionBuilder.LoopEndSuffix;
+        }
+
+        if (IsAnacrusisOnlyComment(trimmed))
+        {
+            return WaveformRegionBuilder.AnacrusisSuffix;
+        }
+
+        if (IsRemoveOnlyComment(trimmed))
+        {
+            return WaveformRegionBuilder.ExcludeRangeSuffix;
+        }
+
+        return trimmed;
+    }
+
     private static bool IsExactSuffixComment(string? comment, string suffix) =>
         !string.IsNullOrEmpty(comment)
         && comment.Trim().Equals(suffix, StringComparison.OrdinalIgnoreCase);
@@ -125,7 +160,7 @@ internal static class WaveOnlyModeProcessor
 
             markers.Add(new WaveformMarkerMark(
                 point.SampleOffset,
-                point.DisplayComment,
+                NormalizeExactSuffixComment(point.DisplayComment),
                 IsFromWaveEmbedded: true));
         }
 
@@ -441,9 +476,10 @@ internal static class WaveOnlyModeProcessor
                 return false;
             }
 
-            if (IsLoopOnlyComment(ordered[0].Comment)
-                && IsExitOnlyComment(ordered[1].Comment))
+            if (ordered.Any(HasExactWaveOnlySuffixComment))
             {
+                // 既に -L/-R/-E/-A があるペアは触らない（-R を -E に潰さない）。
+                // BuildRegionsFromMarkers の 2 点特例と同じ「未実体化のみ」条件に揃える。
                 return false;
             }
 

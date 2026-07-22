@@ -32,8 +32,11 @@ internal sealed class WaveAudioPlayer : IDisposable
     private bool _isPlaying;
     private bool _disposed;
     private bool _suppressPlaybackEnded;
-    /// <summary>一時停止中にシークしたか。次の再生前にデバイスの先読みバッファを破棄する。</summary>
-    private bool _seekPendingWhilePaused;
+    /// <summary>
+    /// 次の Play 前に出力デバイスを作り直し、先読みバッファを破棄するか。
+    /// Pause／Stop／シーク後はデバイス側に旧位置が残り得る（ASIO で顕著）。
+    /// </summary>
+    private bool _discardOutputBufferBeforePlay;
     private LoopPlaybackPlan[] _loopPlans = [];
     private LoopPlaybackPlan? _activePlan;
     private AudioOutputSettings _outputSettings = AudioOutputSettings.Default;
@@ -165,6 +168,15 @@ internal sealed class WaveAudioPlayer : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _provider?.SetRegionEdgeFades(fades);
+    }
+
+    /// <summary>
+    /// プレビュー再生で無音にする除外（-R）区間を登録する。
+    /// </summary>
+    public void SetExcludedRegions(IReadOnlyList<WaveformRegionMark>? regions)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _provider?.SetExcludedRegions(regions);
     }
 
     /// <summary>
@@ -349,22 +361,19 @@ internal sealed class WaveAudioPlayer : IDisposable
             return false;
         }
 
-        // Pause はデバイス側の先読みバッファを保持するため、停止中選択では一度破棄し、
-        // 対象 Playlist の先頭が最初に鳴ることを保証する。
+        // Pause／Stop 後はデバイス側の先読みを捨てるため、出力を作り直してから再生する。
         _provider.ClearPlaylistPlayback();
-        _suppressPlaybackEnded = true;
-        try
+        RecreateOutputDevice();
+        if (_output is null || _provider is null)
         {
-            _output.Stop();
+            Trace($"playlist.start rejected after recreate provider={_provider is not null} output={_output is not null}");
+            return false;
         }
-        finally
-        {
-            _suppressPlaybackEnded = false;
-        }
+
         var plan = FindPlanAtSample(startSample);
         _provider.StartPlaylistRange(startSample, endSample, plan);
         _activePlan = plan;
-        _seekPendingWhilePaused = false;
+        _discardOutputBufferBeforePlay = false;
         _output.Play();
         _isPlaying = true;
         Trace($"playlist.start accepted start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
@@ -623,6 +632,21 @@ internal sealed class WaveAudioPlayer : IDisposable
     }
 
     /// <summary>
+    /// 出力デバイスだけを破棄して作り直し、ドライバ／ハードの先読みを捨てる。
+    /// リーダー位置と Provider 状態は維持する。
+    /// </summary>
+    private void RecreateOutputDevice()
+    {
+        if (_provider is null)
+        {
+            return;
+        }
+
+        DisposeOutputOnly();
+        InitOutputDevice();
+    }
+
+    /// <summary>
     /// 元ファイルを一時領域へコピーし、そのパスを返す。
     /// 失敗時は呼び元が元ファイルを掴む状態にならないよう、コピーを破棄する。
     /// </summary>
@@ -698,23 +722,18 @@ internal sealed class WaveAudioPlayer : IDisposable
             _reader.Position = 0;
         }
 
-        // 一時停止中にシークしていた場合、デバイスの先読みバッファには旧位置の音が
-        // 残っている。そのまま Play すると新しい位置の前に旧位置の音が一瞬鳴るため、
-        // 一度 Stop してバッファを破棄してから再生する（リーダー位置は保持される）。
-        if (_seekPendingWhilePaused)
+        // ASIO 等は Stop/Play だけではハード／ドライバ先読みが残ることがあるため、
+        // 出力デバイスを作り直してから再生する。
+        if (_discardOutputBufferBeforePlay)
         {
-            _suppressPlaybackEnded = true;
-            try
+            RecreateOutputDevice();
+            if (_output is null)
             {
-                _output.Stop();
-            }
-            finally
-            {
-                _suppressPlaybackEnded = false;
+                return;
             }
         }
 
-        _seekPendingWhilePaused = false;
+        _discardOutputBufferBeforePlay = false;
         _output.Play();
         _isPlaying = true;
         Trace($"transport.play sample={_provider?.CurrentMainSample ?? 0}");
@@ -729,8 +748,20 @@ internal sealed class WaveAudioPlayer : IDisposable
             return;
         }
 
-        _output.Pause();
+        // ASIO の Pause はドライバ停止だけでハードウェア先読みを捨てない。
+        // Stop 相当にしてから、次の再生でデバイス再生成する。
+        _suppressPlaybackEnded = true;
+        try
+        {
+            _output.Stop();
+        }
+        finally
+        {
+            _suppressPlaybackEnded = false;
+        }
+
         _isPlaying = false;
+        _discardOutputBufferBeforePlay = true;
         _provider?.ResetOutputPeak();
         Trace($"transport.pause sample={_provider?.CurrentMainSample ?? 0}");
     }
@@ -746,11 +777,20 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         _provider?.ClearPlaylistPlayback();
-        _output.Stop();
+        _suppressPlaybackEnded = true;
+        try
+        {
+            _output.Stop();
+        }
+        finally
+        {
+            _suppressPlaybackEnded = false;
+        }
+
         _reader.Position = 0;
         _provider?.StopExitLayer();
         _isPlaying = false;
-        _seekPendingWhilePaused = false;
+        _discardOutputBufferBeforePlay = true;
         _provider?.ResetOutputPeak();
         Trace("transport.stop");
     }
@@ -797,11 +837,21 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         _reader.CurrentTime = TimeSpan.FromTicks(ticks);
-        // 再生中は連続読み出しで自然に切り替わるが、一時停止中は先読みバッファに旧位置が
-        // 残るため、次の再生でバッファを破棄する必要があることを記録する。
-        if (!_isPlaying)
+
+        if (_isPlaying)
         {
-            _seekPendingWhilePaused = true;
+            // 再生中シークでも先読みが残るため、出力デバイスを作り直してから続行する。
+            RecreateOutputDevice();
+            if (_output is not null)
+            {
+                _discardOutputBufferBeforePlay = false;
+                _output.Play();
+                _isPlaying = true;
+            }
+        }
+        else
+        {
+            _discardOutputBufferBeforePlay = true;
         }
 
         Trace($"transport.seek progress={clamped:R} sample={_provider?.CurrentMainSample ?? 0}");
@@ -882,7 +932,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     private void StopAndRelease()
     {
         _isPlaying = false;
-        _seekPendingWhilePaused = false;
+        _discardOutputBufferBeforePlay = false;
         _provider?.ClearPlaylistPlayback();
         _provider?.StopExitLayer();
         _provider?.ResetOutputPeak();
@@ -989,6 +1039,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         private long _playlistStartedGeneration;
         private long _playlistStartedTargetSample;
         private IReadOnlyList<RegionEdgeFade> _regionEdgeFades = [];
+        private IReadOnlyList<(long Start, long End)> _excludedRanges = [];
         private float _outputPeak;
         /// <summary>スペアナ用の直近出力モノラルサンプル（リングバッファ）。</summary>
         private readonly float[] _monitorRing = new float[8192];
@@ -1059,6 +1110,32 @@ internal sealed class WaveAudioPlayer : IDisposable
                 _regionEdgeFades = fades is null || fades.Count == 0
                     ? []
                     : fades.ToArray();
+            }
+        }
+
+        public void SetExcludedRegions(IReadOnlyList<WaveformRegionMark>? regions)
+        {
+            lock (_gate)
+            {
+                if (regions is null || regions.Count == 0)
+                {
+                    _excludedRanges = [];
+                    return;
+                }
+
+                var list = new List<(long Start, long End)>();
+                foreach (var region in regions)
+                {
+                    if (!region.IsExcluded || region.EndSampleOffset <= region.StartSampleOffset)
+                    {
+                        continue;
+                    }
+
+                    list.Add((region.StartSampleOffset, region.EndSampleOffset));
+                }
+
+                list.Sort((a, b) => a.Start.CompareTo(b.Start));
+                _excludedRanges = list;
             }
         }
 
@@ -1488,6 +1565,7 @@ internal sealed class WaveAudioPlayer : IDisposable
                 long? playlistEnd;
                 var playlistFadePlaying = false;
                 var playlistPreRollPlaying = false;
+                IReadOnlyList<(long Start, long End)> excludedRanges;
                 lock (_gate)
                 {
                     plan = _activePlan;
@@ -1498,6 +1576,7 @@ internal sealed class WaveAudioPlayer : IDisposable
                     playlistEnd = _playlistEndSample;
                     playlistFadePlaying = _playlistFadePlaying;
                     playlistPreRollPlaying = _playlistPreRollPlaying;
+                    excludedRanges = _excludedRanges;
                 }
 
                 var samplePos = CurrentSample(_source);
@@ -1626,19 +1705,30 @@ internal sealed class WaveAudioPlayer : IDisposable
                     _playlistPreRollFadeInFrameCount,
                     "pre-roll");
 
-                // 加算ミックス（簡易クリップ）
+                // 加算ミックス（簡易クリップ）。-R 区間はタイムラインを進めつつ無音にする。
                 for (var i = 0; i < gotFrames; i++)
                 {
-                    var mainL = BitConverter.ToSingle(_mainFloat, i * 8);
-                    var mainR = BitConverter.ToSingle(_mainFloat, i * 8 + 4);
-                    var exitL = BitConverter.ToSingle(_exitFloat, i * 8);
-                    var exitR = BitConverter.ToSingle(_exitFloat, i * 8 + 4);
-                    var fadeL = BitConverter.ToSingle(_playlistFadeFloat, i * 8);
-                    var fadeR = BitConverter.ToSingle(_playlistFadeFloat, i * 8 + 4);
-                    var preRollL = BitConverter.ToSingle(_playlistPreRollFloat, i * 8);
-                    var preRollR = BitConverter.ToSingle(_playlistPreRollFloat, i * 8 + 4);
-                    var outputL = ClampSample(mainL + exitL + fadeL + preRollL);
-                    var outputR = ClampSample(mainR + exitR + fadeR + preRollR);
+                    float outputL;
+                    float outputR;
+                    if (IsExcludedSample(samplePos + i, excludedRanges))
+                    {
+                        outputL = 0f;
+                        outputR = 0f;
+                    }
+                    else
+                    {
+                        var mainL = BitConverter.ToSingle(_mainFloat, i * 8);
+                        var mainR = BitConverter.ToSingle(_mainFloat, i * 8 + 4);
+                        var exitL = BitConverter.ToSingle(_exitFloat, i * 8);
+                        var exitR = BitConverter.ToSingle(_exitFloat, i * 8 + 4);
+                        var fadeL = BitConverter.ToSingle(_playlistFadeFloat, i * 8);
+                        var fadeR = BitConverter.ToSingle(_playlistFadeFloat, i * 8 + 4);
+                        var preRollL = BitConverter.ToSingle(_playlistPreRollFloat, i * 8);
+                        var preRollR = BitConverter.ToSingle(_playlistPreRollFloat, i * 8 + 4);
+                        outputL = ClampSample(mainL + exitL + fadeL + preRollL);
+                        outputR = ClampSample(mainR + exitR + fadeR + preRollR);
+                    }
+
                     outputPeak = Math.Max(
                         outputPeak,
                         Math.Max(Math.Abs(outputL), Math.Abs(outputR)));
@@ -2116,6 +2206,26 @@ internal sealed class WaveAudioPlayer : IDisposable
 
         private static float ClampSample(float value) =>
             value < -1f ? -1f : value > 1f ? 1f : value;
+
+        private static bool IsExcludedSample(
+            long sample,
+            IReadOnlyList<(long Start, long End)> ranges)
+        {
+            foreach (var (start, end) in ranges)
+            {
+                if (sample < start)
+                {
+                    return false;
+                }
+
+                if (sample < end)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private long CurrentSample(WaveFileReader reader) =>
             _sourceBlockAlign <= 0 ? 0 : reader.Position / _sourceBlockAlign;

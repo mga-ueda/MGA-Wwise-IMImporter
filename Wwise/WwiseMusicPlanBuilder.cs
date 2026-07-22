@@ -394,10 +394,8 @@ internal static class WwiseMusicPlanBuilder
                 var durationMs = Math.Max(0.0, draft.ClipEndMs - draft.ClipStartMs);
                 maxDurationMs = Math.Max(maxDurationMs, durationMs);
                 loopInfinite |= draft.LoopInfinite;
-                // レイヤー識別は Playlist と同系の連番（_1 / _2 …）。旧パート名は使わない。
-                var trackName = memberPlans.Count == 1
-                    ? segmentName
-                    : $"{segmentName}_{layer + 1}";
+                // 各レイヤーの Track 名はドロップファイル名を維持する（セグメント連番は付けない）。
+                var trackName = ResolvePartBaseName(member.Part);
                 tracks.Add(new WwiseTrackPlan
                 {
                     Name = trackName,
@@ -703,6 +701,19 @@ internal static class WwiseMusicPlanBuilder
 
     private static string BuildPlaylistName(string baseName, int unitCount, int unitIndex) =>
         unitCount == 1 ? baseName : $"{baseName}_{unitIndex + 1}";
+
+    private static string ResolvePartBaseName(WaveformOutputPart part)
+    {
+        var name = Path.GetFileNameWithoutExtension(part.FileName);
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return name;
+        }
+
+        return string.IsNullOrWhiteSpace(part.FileName)
+            ? $"part_{part.Number}"
+            : part.FileName;
+    }
 
     private static bool IsAnacrusis(WaveformRegionMark region) =>
         region.NameSuffix.Equals(WaveformRegionBuilder.AnacrusisSuffix, StringComparison.OrdinalIgnoreCase);

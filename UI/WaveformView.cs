@@ -197,6 +197,7 @@ internal sealed class WaveformView : Control
     private float? _mouseGuideX;
     private Bitmap? _staticLayer;
     private bool _staticLayerDirty = true;
+    private int _presentationSuspendCount;
     private bool _holdScaffold;
     private bool _staticRebuildQueued;
 
@@ -1079,12 +1080,19 @@ internal sealed class WaveformView : Control
     /// <summary>指定の絶対進捗が見えるよう表示窓をずらす（既に見えていれば何もしない）。</summary>
     private void EnsureAbsoluteVisible(double absoluteProgress)
     {
-        if (_peaks is null || _peaks.IsEmpty || _timeZoom <= TimeZoomMin + 1e-9)
+        if (_peaks is null || _peaks.IsEmpty)
         {
             return;
         }
 
         absoluteProgress = Math.Clamp(absoluteProgress, 0d, 1d);
+
+        // 全体表示（zoom=1 かつ先頭）なら既に全域が見える。
+        if (_timeZoom <= TimeZoomMin + 1e-9 && _viewStart <= 1e-12)
+        {
+            return;
+        }
+
         var span = ViewSpan;
         var margin = span * 0.05d;
         if (absoluteProgress >= _viewStart + margin && absoluteProgress <= ViewEnd - margin)
@@ -1553,6 +1561,11 @@ internal sealed class WaveformView : Control
         // Bitmap は破棄せずダーティ化のみ（直後の BuildStaticLayer で同サイズなら再利用）
         _staticLayerDirty = true;
 
+        if (_presentationSuspendCount > 0)
+        {
+            return;
+        }
+
         if (!IsHandleCreated || IsDisposed)
         {
             Invalidate();
@@ -1566,6 +1579,24 @@ internal sealed class WaveformView : Control
         }
 
         Invalidate();
+    }
+
+    /// <summary>
+    /// SetMarkers / SetRegions 等の連続更新で静的レイヤ再構築を 1 回にまとめる。
+    /// </summary>
+    public void SuspendPresentationRebuild() => _presentationSuspendCount++;
+
+    public void ResumePresentationRebuild(bool clearDetailPeaks = false)
+    {
+        if (_presentationSuspendCount > 0)
+        {
+            _presentationSuspendCount--;
+        }
+
+        if (_presentationSuspendCount == 0)
+        {
+            RebuildPresentationLayers(clearDetailPeaks);
+        }
     }
 
     private static double SampleToAbsolute(long sampleOffset, long frameCount)

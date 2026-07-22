@@ -220,6 +220,8 @@ internal static class UiStrings
         + Environment.NewLine
         + "Alt + ← / →: シーク位置のマーカーを 1px 移動（シークも連動）"
         + Environment.NewLine
+        + "Ctrl+Alt + ← / →: シーク位置のマーカー＋一つ前を 1px 同時移動"
+        + Environment.NewLine
         + "▼／コメントをダブルクリック: コメントを編集"
         + Environment.NewLine
         + "Ctrl+Shift+R: シーク位置のマーカーをリネーム"
@@ -228,7 +230,7 @@ internal static class UiStrings
         + Environment.NewLine
         + "Ctrl+Shift+← / →: 前後のマーカーへ移動（Playlist 境界は飛ばす）"
         + Environment.NewLine
-        + "選択して Delete / Ctrl+Shift+Del: マーカーを削除（アプリ上のみ）"
+        + "選択して Delete / Ctrl+Del: マーカーを削除（アプリ上のみ）"
         + Environment.NewLine
         + "Insert: シーク位置にマーカー追加（コメントなし）"
         + Environment.NewLine
@@ -247,6 +249,8 @@ internal static class UiStrings
         + Environment.NewLine
         + "Alt + ← / →: nudge marker at seek by 1px (seek follows)"
         + Environment.NewLine
+        + "Ctrl+Alt + ← / →: nudge marker at seek and the previous one by 1px"
+        + Environment.NewLine
         + "Double-click ▼ / comment: edit comment"
         + Environment.NewLine
         + "Ctrl+Shift+R: rename marker at seek"
@@ -255,7 +259,7 @@ internal static class UiStrings
         + Environment.NewLine
         + "Ctrl+Shift+← / →: jump to previous / next marker (skip Playlist edges)"
         + Environment.NewLine
-        + "Select + Delete / Ctrl+Shift+Del: remove marker (app session only)"
+        + "Select + Delete / Ctrl+Del: remove marker (app session only)"
         + Environment.NewLine
         + "Insert: add marker at seek position (no comment)"
         + Environment.NewLine
@@ -1062,6 +1066,10 @@ internal static class UiStrings
         "Message : 前回セッションの読み込みに失敗しました（形式不正）。",
         "Message : Failed to load the last session (invalid format).");
 
+    public static string LogManualDropSessionDiscarded => Get(
+        "Message : 手動ドロップのため前回セッションは復元せず、新規の作業として開始しました。",
+        "Message : Manual drop detected; starting fresh without restoring the previous session.");
+
     public static string LogLastSessionPartMismatch => Get(
         "Message : 前回セッションはパート構成が一致しないため復元しませんでした。",
         "Message : Last session was not restored because the part layout does not match.");
@@ -1837,6 +1845,151 @@ internal static class UiStrings
         "Plan ready: {0} playlist(s).",
         playlistCount);
 
+    public static string LogImportPlanHeader => Get(
+        "=== Import Plan ===",
+        "=== Import Plan ===");
+
+    public static string LogImportPlanPlaylists(int playlistCount, string containerName) => Format(
+        "Container: {0} / Playlists: {1}",
+        "Container: {0} / Playlists: {1}",
+        containerName,
+        playlistCount);
+
+    public static string LogExportRegionHeader => Get(
+        "=== Export Regions ===",
+        "=== Export Regions ===");
+
+    public static string LogExportRegionIncluded(
+        int index,
+        string suffix,
+        long start,
+        long end) => Format(
+        "  [{0}] {1}  samples=[{2} .. {3})",
+        "  [{0}] {1}  samples=[{2} .. {3})",
+        index,
+        suffix,
+        start,
+        end);
+
+    public static string LogExportRegionExcluded(int index, long start, long end) => Format(
+        "  [{0}] -R  samples=[{1} .. {2})  (excluded)",
+        "  [{0}] -R  samples=[{1} .. {2})  (excluded)",
+        index,
+        start,
+        end);
+
+    public static string LogExportRegionTotals(int included, int excluded) => Format(
+        "Included: {0} / Excluded(-R): {1}",
+        "Included: {0} / Excluded(-R): {1}",
+        included,
+        excluded);
+
+    public static string LogExportMarkerHeader(int count) => Format(
+        "Markers : {0} 件",
+        "Markers : {0}",
+        count);
+
+    public static string LogExportMarkerLine(long sample, string comment, bool embedded) => Format(
+        "  @ {0:N0}  \"{1}\"{2}",
+        "  @ {0:N0}  \"{1}\"{2}",
+        sample,
+        string.IsNullOrEmpty(comment) ? "(名前なし)" : comment,
+        embedded ? "  (埋め込み)" : string.Empty);
+
+    public static string LogTrackMediaBinding(
+        string segmentName,
+        string trackName,
+        string fileName,
+        long localStart,
+        long localEnd,
+        bool reusedOriginal,
+        bool applyClipTrim = false) => Format(
+        "Media : {0} / {1} → {2}  samples=[{3} .. {4})  {5}",
+        "Media : {0} / {1} → {2}  samples=[{3} .. {4})  {5}",
+        segmentName,
+        trackName,
+        fileName,
+        localStart,
+        localEnd,
+        applyClipTrim ? "copy+trim" : reusedOriginal ? "copy" : "slice");
+
+    public static string LogMusicClipCatalog(int count) => Format(
+        "Message : MusicClip を {0} 件検出しました（トリム対象の検索用）。",
+        "Message : Found {0} MusicClip(s) for trim lookup.",
+        count);
+
+    public static string LogMusicClipTrimApplied(
+        string trackName,
+        string segmentName,
+        double beginMs,
+        double endMs) => Format(
+        "Message : Clip trim → {0} @ {1}  Begin={2:0.###}ms  End={3:0.###}ms",
+        "Message : Clip trim → {0} @ {1}  Begin={2:0.###}ms  End={3:0.###}ms",
+        trackName,
+        segmentName,
+        beginMs,
+        endMs);
+
+    public static string LogPlayAtPatchStart(int count) => Format(
+        "Message : 負の PlayAt を {0} 件設定します（WAAPI 非対応のため、保存→WWU 直接編集→再オープンを行います）",
+        "Message : Applying {0} negative PlayAt value(s) via save → WWU patch → reopen (WAAPI cannot set them)",
+        count);
+
+    public static string LogPlayAtPatchFile(string fileName, int count) => Format(
+        "Message : WWU を直接更新しました → {0}（クリップ {1} 件）",
+        "Message : Patched work unit → {0} ({1} clip(s))",
+        fileName,
+        count);
+
+    public static string LogPlayAtProjectReopen(string projectName) => Format(
+        "Message : プロジェクトを再オープンしています → {0}",
+        "Message : Reopening project → {0}",
+        projectName);
+
+    public static string LogPlayAtPatchDone(int count) => Format(
+        "Message : PlayAt 設定完了（{0} 件）。クリップはタイムライン 0 に配置されています。",
+        "Message : PlayAt applied ({0} clip(s)). Clips are aligned to timeline 0.",
+        count);
+
+    public static string ErrPlayAtWorkUnitNotFound(string clipId) => Format(
+        "MusicClip の所属 WWU ファイルを特定できませんでした（{0}）",
+        "Could not resolve the work unit file for MusicClip ({0})",
+        clipId);
+
+    public static string ErrPlayAtProjectPathUnknown => Format(
+        "プロジェクト（.wproj）のパスを取得できなかったため PlayAt を設定できません",
+        "Cannot apply PlayAt because the project (.wproj) path could not be resolved");
+
+    public static string ErrPlayAtClipXmlMissing(string clipId, string wwuPath) => Format(
+        "WWU 内に MusicClip {0} が見つかりません（{1}）。プロジェクトの保存に失敗している可能性があります。",
+        "MusicClip {0} was not found in {1}. The project may not have been saved.",
+        clipId,
+        wwuPath);
+
+    public static string ErrPlayAtVerifyFailed(string clipId, double expected, double? actual) => Format(
+        "PlayAt の検証に失敗しました（clip={0} 期待値={1:0.###}ms 実値={2}）。WWU フォーマットが変更された可能性があります。",
+        "PlayAt verification failed (clip={0} expected={1:0.###}ms actual={2}). The WWU format may have changed.",
+        clipId,
+        expected,
+        actual is null ? "(なし)" : actual.Value.ToString("0.###") + "ms");
+
+    public static string ErrMusicClipNotFound(string trackPath) => Format(
+        "MusicClip が見つかりませんでした（2 波形＋トリム構成を維持できないため中止）→ {0}",
+        "MusicClip not found (aborting to keep 2-wave + trim workflow) → {0}",
+        trackPath);
+
+    public static string ErrMusicClipAmbiguous(string trackPath, int count) => Format(
+        "MusicClip が Track に対して {1} 件ヒットしました（トリムの取り違え防止のため中止）→ {0}",
+        "Ambiguous MusicClip match count={1} for track (aborting) → {0}",
+        trackPath,
+        count);
+
+    public static string ErrMusicClipTrimMissingRate(string trackName, string segmentName) => Format(
+        "MusicClip トリムに必要な SampleRate/FrameCount がありません → {0} @ {1}",
+        "Missing SampleRate/FrameCount for MusicClip trim → {0} @ {1}",
+        trackName,
+        segmentName);
+
     public static string LogCheckingStateGroup => Get(
         "Checking State Group...",
         "Checking State Group...");
@@ -1865,6 +2018,11 @@ internal static class UiStrings
     public static string LogWavSliceWritten(string fileName) => Format(
         "WAV: {0}",
         "WAV: {0}",
+        fileName);
+
+    public static string LogWavSourceReused(string fileName) => Format(
+        "WAV: {0}（元ファイルを出力先へコピーして使用）",
+        "WAV: {0} (copied original to output)",
         fileName);
 
     public static string LogWavSliceWrittenWithGain(string fileName, double gain) => Format(

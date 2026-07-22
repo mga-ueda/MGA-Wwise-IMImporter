@@ -180,6 +180,8 @@ public partial class Form1 : Form, IMessageFilter
     private double _playlistTransitionGlowDurationMs;
     private double _playlistTransitionGlowLevel;
     private double? _pendingWaveformScrollStart;
+    /// <summary>Alt+矢印でのマーカー連続移動中は Persist を遅延する。</summary>
+    private bool _pendingWaveOnlySessionPersist;
 
     /// <summary>パート番号 → グループ ID（Last Session へ永続化）。</summary>
     private readonly Dictionary<int, int> _playlistPartGroupIds = new();
@@ -1120,7 +1122,7 @@ public partial class Form1 : Form, IMessageFilter
             return true;
         }
 
-        if (keyData == (Keys.Control | Keys.Shift | Keys.Delete)
+        if (keyData == (Keys.Control | Keys.Delete)
             && TryDeleteWaveOnlyMarkerAtPlayhead())
         {
             return true;
@@ -1138,10 +1140,19 @@ public partial class Form1 : Form, IMessageFilter
 
         var keyCode = keyData & Keys.KeyCode;
         if (keyCode is Keys.Left or Keys.Right
+            && (keyData & Keys.Control) == Keys.Control
+            && (keyData & Keys.Alt) == Keys.Alt
+            && (keyData & Keys.Shift) == 0
+            && TryNudgeWaveOnlyMarkerAtPlayheadByPixel(keyCode, shiftPrevious: true))
+        {
+            return true;
+        }
+
+        if (keyCode is Keys.Left or Keys.Right
             && (keyData & Keys.Control) == 0
             && (keyData & Keys.Alt) == Keys.Alt
             && (keyData & Keys.Shift) == 0
-            && TryNudgeWaveOnlyMarkerAtPlayheadByPixel(keyCode))
+            && TryNudgeWaveOnlyMarkerAtPlayheadByPixel(keyCode, shiftPrevious: false))
         {
             return true;
         }
@@ -1234,6 +1245,11 @@ public partial class Form1 : Form, IMessageFilter
             e.Handled = true;
         }
 
+        if (e.KeyCode is Keys.Left or Keys.Right)
+        {
+            FlushPendingWaveOnlySessionPersist();
+        }
+
         base.OnKeyUp(e);
     }
 
@@ -1241,6 +1257,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         ClearPlaylistGroupPaintStickyId();
         EndActiveTransportShortcutFeedback();
+        FlushPendingWaveOnlySessionPersist();
         base.OnDeactivate(e);
     }
 
@@ -2515,31 +2532,14 @@ public partial class Form1 : Form, IMessageFilter
         }
     }
 
-    /// <summary>
-    /// 既存グループへ参加したパートへ、同じグループ ID の既存メンバー設定をコピーする。
-    /// </summary>
-    private void CopyTransitionSettingsFromGroupPeers(int partNumber, int groupId)
-    {
-        var peers = _playlistPartGroupIds
-            .Where(pair => pair.Value == groupId && pair.Key != partNumber)
-            .Select(pair => pair.Key)
-            .OrderBy(number => number)
-            .ToArray();
-        if (peers.Length == 0)
-        {
-            return;
-        }
-
-        var source = peers[0];
-        _playlistExitSourceModes[partNumber] = ResolveExitSourceMode(source);
-        _playlistFadeInSecondsByPart[partNumber] = ResolveFadeInSeconds(source);
-        _playlistFadeOutSecondsByPart[partNumber] = ResolveFadeOutSeconds(source);
-        _playlistGroupFadeInSecondsByPart[partNumber] = ResolveGroupFadeInSeconds(source);
-        _playlistGroupFadeOutSecondsByPart[partNumber] = ResolveGroupFadeOutSeconds(source);
-    }
-
     private void ShowTransitionSettingsForPart(int partNumber)
     {
+        if (_playlistPartGroupIds.TryGetValue(partNumber, out var groupId))
+        {
+            // 表示前にグループ内設定を揃え、メンバー間でラジオが食い違わないようにする。
+            SyncTransitionSettingsForGroup(groupId);
+        }
+
         _transitionSettingsEditPartNumber = partNumber;
         SelectFadeRadio(
             fadeInChoicesPanel,
@@ -2824,12 +2824,15 @@ public partial class Form1 : Form, IMessageFilter
         var preservedKeepTarget = _keepTarget;
         var preservedKeptTargetPath = _keptTargetPath;
         var preservedKeptTargetProjectFilePath = _keptTargetProjectFilePath;
+        // More Options の開閉はユーザー操作のまま残す（既定の展開で上書きしない）。
+        var preservedMoreOptionsExpanded = markerOptionsPanel.MoreOptionsExpanded;
 
         var profile = ProjectSettingsStore.CreateAppDefaults(name);
         profile.OutputDirectory = preservedOutputDirectory;
         profile.KeepTarget = preservedKeepTarget;
         profile.KeptTargetPath = preservedKeptTargetPath;
         profile.KeptTargetProjectFilePath = preservedKeptTargetProjectFilePath;
+        profile.MoreOptionsExpanded = preservedMoreOptionsExpanded;
 
         if (_projectStore.ContainsName(name))
         {
@@ -3321,6 +3324,19 @@ public partial class Form1 : Form, IMessageFilter
                 enabledParts,
                 enabledGroups,
                 nameOverrides).ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        // 複数波形: グループ化しても各 Playlist 表示はドロップ名のままにする。
+        if (_loadedPreview?.IsMultiWaveOnly == true)
+        {
+            foreach (var part in enabledParts)
+            {
+                if (nameOverrides.TryGetValue(part.Number, out var overrideName)
+                    && !string.IsNullOrWhiteSpace(overrideName))
+                {
+                    names[part.Number] = overrideName;
+                }
+            }
+        }
 
         var excludedIndex = 0;
         foreach (var part in parts.OrderBy(part => part.StartSampleOffset))
@@ -4310,6 +4326,14 @@ public partial class Form1 : Form, IMessageFilter
 
         session.SetDisabledPartNumbers(_disabledPlaylistPartNumbers);
         session.SetPlaylistGroups(BuildEnabledPartGroupIds());
+        if (_loadedPreview is { IsMultiWaveOnly: true }
+            && session.AllowsSessionMarkerEdit)
+        {
+            // 複数波形: 投影マーカーに加え、リージョン（-A/-L/-E/-R）もリーダー基準で更新する。
+            ApplyWaveOnlySessionPresentation(session);
+            return;
+        }
+
         waveformView.SetMarkers(session.EffectiveMarkers);
     }
 
@@ -4343,8 +4367,47 @@ public partial class Form1 : Form, IMessageFilter
             _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
         }
 
-        CopyTransitionSettingsFromGroupPeers(partNumber, groupId);
+        SyncTransitionSettingsForGroup(groupId);
         UpdateGroupFadeRadioEnabled();
+    }
+
+    /// <summary>
+    /// 同一グループのトランジション設定をリーダー（最小 part 番号）基準で全メンバーへ揃える。
+    /// </summary>
+    private void SyncTransitionSettingsForGroup(int groupId)
+    {
+        var members = _playlistPartGroupIds
+            .Where(pair => pair.Value == groupId)
+            .Select(pair => pair.Key)
+            .OrderBy(number => number)
+            .ToArray();
+        if (members.Length < 2)
+        {
+            return;
+        }
+
+        var leader = members[0];
+        var exit = ResolveExitSourceMode(leader);
+        var fadeIn = ResolveFadeInSeconds(leader);
+        var fadeOut = ResolveFadeOutSeconds(leader);
+        var groupFadeIn = ResolveGroupFadeInSeconds(leader);
+        var groupFadeOut = ResolveGroupFadeOutSeconds(leader);
+        foreach (var member in members)
+        {
+            _playlistExitSourceModes[member] = exit;
+            _playlistFadeInSecondsByPart[member] = fadeIn;
+            _playlistFadeOutSecondsByPart[member] = fadeOut;
+            _playlistGroupFadeInSecondsByPart[member] = groupFadeIn;
+            _playlistGroupFadeOutSecondsByPart[member] = groupFadeOut;
+        }
+    }
+
+    private void SyncTransitionSettingsAcrossAllGroups()
+    {
+        foreach (var groupId in _playlistPartGroupIds.Values.Distinct().ToArray())
+        {
+            SyncTransitionSettingsForGroup(groupId);
+        }
     }
 
     private void RemovePlaylistPartFromGroup(int partNumber)
@@ -6215,6 +6278,13 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
 
+        // 手動ドロップは作業のやり直しとみなし、モードを問わずログをクリアする。
+        // Reload / 起動時の前回セッション読み込みは呼び出し側で別途扱う。
+        if (rememberInputFiles && !isLastSessionLoad)
+        {
+            ClearLogText();
+        }
+
         if (rememberInputFiles)
         {
             _lastInputFiles = fileList;
@@ -6305,6 +6375,7 @@ public partial class Form1 : Form, IMessageFilter
                     }
 
                     _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(loopPlanRegions));
+                    _audioPlayer.SetExcludedRegions(loopPlanRegions);
                 });
 
                 // UI スレッド: 保存済み出力設定で ASIO/WASAPI を確実に開く
@@ -6373,10 +6444,26 @@ public partial class Form1 : Form, IMessageFilter
 
         UpdateTransportPosition();
         PopulatePlaylistChoices(_previewSession.EffectiveOutputParts);
-        // 直前と同じ波形の再ドロップ／Reload だけ復元。一度でも別波形なら破棄のまま。
-        if (sameAsPreviousWave)
+        // 復元するのは Reload ボタンと起動時の前回セッション読み込みだけ。
+        // 手動ドロップは（同じ波形でも）「作業のやり直し」の意図とみなして復元しない。
+        var isManualDrop = rememberInputFiles && !isLastSessionLoad;
+        if (sameAsPreviousWave && !isManualDrop)
         {
             TryRestoreLastWaveSession(preview);
+        }
+        else if (sameAsPreviousWave
+                 && isManualDrop
+                 && !_creatingNewProject
+                 && _projectStore.ContainsName(_loadedProjectName)
+                 && _projectStore.TryReadLastWaveSession(_loadedProjectName, out var discarded)
+                 && discarded is not null
+                 && discarded.MatchesLoadedWave(preview))
+        {
+            AppendReport(
+                $"{UiStrings.LogSessionHeader}{Environment.NewLine}"
+                + UiStrings.LogManualDropSessionDiscarded
+                + Environment.NewLine
+                + Environment.NewLine);
         }
 
         if (_previewSession is { AllowsSessionMarkerEdit: true } waveOnlySession)
@@ -6504,6 +6591,52 @@ public partial class Form1 : Form, IMessageFilter
         // リージョン端フェードは In/Out サンプルキー。マーカー復元後のリージョンへ再マップする。
         RestoreRegionEdgeFadesFromState(state);
 
+        // グループはパート照合より先に戻す。
+        // 複数波形ではリーダー投影でリージョン／パート境界が変わるため、照合前に共有を適用する。
+        var groupRequested = savedGroups.Count;
+        var groupApplied = 0;
+        var partsAfterMarkers = _previewSession?.EffectiveOutputParts ?? preview.OutputParts;
+        var numbersAfterMarkers = partsAfterMarkers.Select(part => part.Number).ToHashSet();
+        foreach (var (savedPartNumber, groupId) in savedGroups)
+        {
+            if (!numbersAfterMarkers.Contains(savedPartNumber)
+                || _disabledPlaylistPartNumbers.Contains(savedPartNumber))
+            {
+                continue;
+            }
+
+            _playlistPartGroupIds[savedPartNumber] = groupId;
+            groupApplied++;
+        }
+
+        foreach (var groupId in _playlistPartGroupIds.Values.Distinct())
+        {
+            if (savedColors.TryGetValue(groupId, out var colorIndex))
+            {
+                _playlistGroupColorIndexes[groupId] = colorIndex;
+            }
+            else if (!_playlistGroupColorIndexes.ContainsKey(groupId))
+            {
+                _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
+            }
+        }
+
+        var maxGroupIdEarly = _playlistPartGroupIds.Count == 0
+            ? 0
+            : _playlistPartGroupIds.Values.Max();
+        _nextPlaylistGroupId = Math.Max(Math.Max(1, state.NextGroupId), maxGroupIdEarly + 1);
+        var maxColorIndexEarly = _playlistGroupColorIndexes.Count == 0
+            ? -1
+            : _playlistGroupColorIndexes.Values.Max();
+        _nextPlaylistGroupColorIndex = Math.Max(
+            Math.Max(0, state.NextColorIndex),
+            maxColorIndexEarly + 1);
+
+        if (groupApplied > 0)
+        {
+            ApplyPlaylistGroupMarkerSharing();
+        }
+
         var partsForMatch = _previewSession?.EffectiveOutputParts ?? preview.OutputParts;
         var loadedByNumber = partsForMatch.ToDictionary(part => part.Number);
         var matchingNumbers = new HashSet<int>();
@@ -6545,6 +6678,53 @@ public partial class Form1 : Form, IMessageFilter
             }
         }
 
+        // 初期適用で番号が一致しなかったグループを、範囲照合後のマップで付け直す。
+        if (savedToLoadedPartNumber.Count > 0 && savedGroups.Count > 0)
+        {
+            var remapped = false;
+            foreach (var (savedPartNumber, groupId) in savedGroups)
+            {
+                var partNumber = savedToLoadedPartNumber.TryGetValue(savedPartNumber, out var loaded)
+                    ? loaded
+                    : savedPartNumber;
+                if (!matchingNumbers.Contains(partNumber)
+                    || _disabledPlaylistPartNumbers.Contains(partNumber))
+                {
+                    continue;
+                }
+
+                if (!_playlistPartGroupIds.TryGetValue(partNumber, out var existing)
+                    || existing != groupId)
+                {
+                    _playlistPartGroupIds[partNumber] = groupId;
+                    remapped = true;
+                    if (!_playlistPartGroupIds.ContainsKey(savedPartNumber)
+                        || savedPartNumber == partNumber)
+                    {
+                        groupApplied = Math.Max(groupApplied, 1);
+                    }
+                }
+            }
+
+            // 古い番号キーが残っていれば落とす。
+            if (remapped)
+            {
+                var validNumbers = matchingNumbers.Count > 0
+                    ? matchingNumbers
+                    : numbersAfterMarkers;
+                foreach (var key in _playlistPartGroupIds.Keys.ToArray())
+                {
+                    if (!validNumbers.Contains(key))
+                    {
+                        _playlistPartGroupIds.Remove(key);
+                    }
+                }
+
+                ApplyPlaylistGroupMarkerSharing();
+                groupApplied = _playlistPartGroupIds.Count;
+            }
+        }
+
         if (state.Parts.Count > 0 && matchingNumbers.Count == 0)
         {
             AppendReport(
@@ -6553,13 +6733,15 @@ public partial class Form1 : Form, IMessageFilter
                 + Environment.NewLine
                 + Environment.NewLine);
 
-            // パートは不一致でも Wave 単体マーカー／端フェードは復元済みなので表示へ反映する。
+            // パートは不一致でも Wave 単体マーカー／端フェード／グループは可能な範囲で反映する。
             if (_previewSession is { AllowsSessionMarkerEdit: true } sessionAfterMismatch)
             {
+                ApplyPlaylistGroupMarkerSharing();
                 ApplyWaveOnlySessionPresentation(sessionAfterMismatch);
             }
             else
             {
+                ApplyPlaylistGroupMarkerSharing();
                 SyncRegionEdgeFadesToUi();
             }
 
@@ -6587,44 +6769,15 @@ public partial class Form1 : Form, IMessageFilter
             }
         }
 
-        var groupRequested = savedGroups.Count;
-        var groupApplied = 0;
-        foreach (var (savedPartNumber, groupId) in savedGroups)
+        // 無効化したパートはグループから外す。
+        foreach (var partNumber in _disabledPlaylistPartNumbers.ToArray())
         {
-            var partNumber = MapPartNumber(savedPartNumber);
-            if (!matchingNumbers.Contains(partNumber)
-                || _disabledPlaylistPartNumbers.Contains(partNumber))
+            if (_playlistPartGroupIds.Remove(partNumber, out var groupId))
             {
-                continue;
-            }
-
-            _playlistPartGroupIds[partNumber] = groupId;
-            groupApplied++;
-        }
-
-        foreach (var groupId in _playlistPartGroupIds.Values.Distinct())
-        {
-            if (savedColors.TryGetValue(groupId, out var colorIndex))
-            {
-                _playlistGroupColorIndexes[groupId] = colorIndex;
-            }
-            else if (!_playlistGroupColorIndexes.ContainsKey(groupId))
-            {
-                _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
+                DiscardPlaylistGroupIfEmpty(groupId);
+                groupApplied = _playlistPartGroupIds.Count;
             }
         }
-
-        var maxGroupId = _playlistPartGroupIds.Count == 0
-            ? 0
-            : _playlistPartGroupIds.Values.Max();
-        _nextPlaylistGroupId = Math.Max(Math.Max(1, state.NextGroupId), maxGroupId + 1);
-
-        var maxColorIndex = _playlistGroupColorIndexes.Count == 0
-            ? -1
-            : _playlistGroupColorIndexes.Values.Max();
-        _nextPlaylistGroupColorIndex = Math.Max(
-            Math.Max(0, state.NextColorIndex),
-            maxColorIndex + 1);
 
         var markerRequested = state.UserMarkerSampleOffsets.Count + waveOnlyMarkerRequested;
         var markerApplied = 0;
@@ -6743,6 +6896,9 @@ public partial class Form1 : Form, IMessageFilter
         }
 
         ApplyPlaylistDisableUi();
+        // 無効化反映後にグループ共有を再適用（複数波形の投影マーカー／リージョン含む）。
+        ApplyPlaylistGroupMarkerSharing();
+        SyncTransitionSettingsAcrossAllGroups();
         ApplyPlaylistGroupColorsOnly();
         SyncRegionEdgeFadesToUi();
 
@@ -6863,6 +7019,10 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
 
+        // 複数波形＋グループ時、-R 等の投影リージョンが古いと除外区間まで書き出され得る。
+        // スナップショット直前に共有／リージョンを確定させる。
+        EnsureExportSessionRegionsCurrent();
+
         // クリック時点で接続・プロジェクト・選択・書き出し先を再検証（失敗時は WAV を書き始めない）
         ExportPreflightResult preflight;
         try
@@ -6952,6 +7112,31 @@ public partial class Form1 : Form, IMessageFilter
     }
 
     /// <summary>
+    /// EXPORT 直前に Wave 単体／複数波形のリージョンを最新マーカー・グループ投影へ揃える。
+    /// </summary>
+    private void EnsureExportSessionRegionsCurrent()
+    {
+        if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
+        {
+            return;
+        }
+
+        session.SetDisabledPartNumbers(_disabledPlaylistPartNumbers);
+        if (_loadedPreview is { IsMultiWaveOnly: true })
+        {
+            session.SetPlaylistGroups(BuildEnabledPartGroupIds());
+            ApplyWaveOnlySessionPresentation(session, refreshPlaylists: false);
+            return;
+        }
+
+        // 単体 Wave もグループ共有マーカーを確定してから書き出す。
+        session.SetPlaylistGroups(BuildEnabledPartGroupIds());
+        waveformView.SetMarkers(session.EffectiveMarkers);
+        waveformView.SetRegions(session.EffectiveRegions);
+        waveformView.SetOutputParts(session.EffectiveOutputParts);
+    }
+
+    /// <summary>
     /// エクスポート済み WAV を Wwise の選択位置へ Music 構造として流し込む。
     /// キャンセル時はログを残してスキップする。作成先は EXPORT 開始時に固定したパスを使う。
     /// </summary>
@@ -7008,6 +7193,10 @@ public partial class Form1 : Form, IMessageFilter
                 _playlistExitSourceMode,
                 containerNameOverride);
             ReportProgress(UiStrings.LogPlanReady(plan.Playlists.Count));
+            AppendReport(WaapiMusicImporter.FormatPlanSummary(plan) + Environment.NewLine);
+            var exportRegions = _previewSession?.EffectiveRegions ?? preview.Regions;
+            AppendReport(
+                FormatExportRegionSummary(exportRegions, snapshot.Markers) + Environment.NewLine);
         }
         catch (Exception ex)
         {
@@ -7461,16 +7650,19 @@ public partial class Form1 : Form, IMessageFilter
             }
         }
 
+        var appliedComment = WaveOnlyModeProcessor.NormalizeExactSuffixComment(e.Comment);
         if (!TryMutateWaveOnlyMarkers(
-                current => current.TrySetWaveOnlyMarkerComment(e.SampleOffset, e.Comment)))
+                current => current.TrySetWaveOnlyMarkerComment(e.SampleOffset, appliedComment)))
         {
+            // 小文字 → 大文字など見た目だけ変わる場合も、表示を正規形へ揃える。
+            ApplyWaveOnlySessionPresentation(session, refreshPlaylists: false);
             return;
         }
 
         if (fromWaveEmbedded)
         {
             AppendReport(
-                UiStrings.LogWaveOnlyMarkerRenamed(previousComment, e.Comment.Trim())
+                UiStrings.LogWaveOnlyMarkerRenamed(previousComment, appliedComment)
                 + Environment.NewLine);
         }
 
@@ -7479,7 +7671,7 @@ public partial class Form1 : Form, IMessageFilter
             new
             {
                 sample = e.SampleOffset,
-                comment = e.Comment,
+                comment = appliedComment,
                 previousComment,
                 fromWaveEmbedded,
                 effectiveCount = session.EffectiveMarkers.Count,
@@ -7716,10 +7908,11 @@ public partial class Form1 : Form, IMessageFilter
     }
 
     /// <summary>
-    /// Wave 単体モードで、再生位置にちょうどマーカーがあるとき Alt+←/→ で 1px 移動する。
+    /// Wave 単体／複数波形で、再生位置にちょうどマーカーがあるとき
+    /// Alt+←/→ で 1px 移動する。Ctrl+Alt なら一つ前のマーカーも同量移動する。
     /// シークバーも同じだけ動かし、連続移動できるようにする。
     /// </summary>
-    private bool TryNudgeWaveOnlyMarkerAtPlayheadByPixel(Keys keyCode)
+    private bool TryNudgeWaveOnlyMarkerAtPlayheadByPixel(Keys keyCode, bool shiftPrevious = false)
     {
         if (keyCode is not (Keys.Left or Keys.Right))
         {
@@ -7765,21 +7958,42 @@ public partial class Form1 : Form, IMessageFilter
             }
         }
 
-        if (session.HasWaveOnlyMarkerAt(toSample))
+        if (shiftPrevious)
         {
-            AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
-            return true;
+            if (!TryMutateWaveOnlyMarkers(
+                    current => current.TryMoveWaveOnlyMarkerWithPrevious(fromSample, toSample),
+                    persistSession: false))
+            {
+                if (session.HasWaveOnlyMarkerAt(toSample))
+                {
+                    AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+                }
+
+                return true;
+            }
+        }
+        else
+        {
+            if (session.HasWaveOnlyMarkerAt(toSample))
+            {
+                AppendReport(UiStrings.LogWaveOnlyMarkerDuplicate + Environment.NewLine);
+                return true;
+            }
+
+            if (!TryMutateWaveOnlyMarkers(
+                    current => current.TryMoveWaveOnlyMarker(fromSample, toSample),
+                    persistSession: false))
+            {
+                return true;
+            }
         }
 
-        if (!TryMutateWaveOnlyMarkers(
-                current => current.TryMoveWaveOnlyMarker(fromSample, toSample)))
-        {
-            return true;
-        }
-
+        _pendingWaveOnlySessionPersist = true;
         waveformView.SetSelectedMarkerSampleOffset(toSample);
         // 次のキー入力でも「ちょうどマーカー上」と判定できるようサンプル位置へ合わせる。
-        SeekPlayback((double)toSample / frameCount);
+        // -R 側へ出たときも表示窓を追従させ、キーリピート中に位置が見えるようにする。
+        SeekPlayback((double)toSample / frameCount, ensureVisible: true);
+        waveformView.Update();
         return true;
     }
 
@@ -7872,7 +8086,9 @@ public partial class Form1 : Form, IMessageFilter
     /// Wave 単体マーカーを変更し、成功時だけ Undo 履歴へ積む。
     /// パート構成が変わらないときは Playlist を再生成せず、キーリピート中のフォーカス崩れを防ぐ。
     /// </summary>
-    private bool TryMutateWaveOnlyMarkers(Func<WaveformPreviewSession, bool> mutate)
+    private bool TryMutateWaveOnlyMarkers(
+        Func<WaveformPreviewSession, bool> mutate,
+        bool persistSession = true)
     {
         if (_previewSession is not { AllowsSessionMarkerEdit: true } session)
         {
@@ -7895,19 +8111,44 @@ public partial class Form1 : Form, IMessageFilter
         ApplyWaveOnlySessionPresentation(
             session,
             refreshPlaylists: !AreOutputPartsEquivalent(beforeParts, session.EffectiveOutputParts));
-        PersistLastWaveSessionIfPossible();
+        if (persistSession)
+        {
+            PersistLastWaveSessionIfPossible();
+        }
+
         return true;
+    }
+
+    private void FlushPendingWaveOnlySessionPersist()
+    {
+        if (!_pendingWaveOnlySessionPersist)
+        {
+            return;
+        }
+
+        _pendingWaveOnlySessionPersist = false;
+        PersistLastWaveSessionIfPossible();
     }
 
     private void ApplyWaveOnlySessionPresentation(
         WaveformPreviewSession session,
         bool refreshPlaylists = true)
     {
-        waveformView.SetMarkers(session.EffectiveMarkers);
-        waveformView.SetRegions(session.EffectiveRegions);
-        waveformView.SetOutputParts(session.EffectiveOutputParts);
-        SyncRegionEdgeFadesToUi(session);
+        waveformView.SuspendPresentationRebuild();
+        try
+        {
+            waveformView.SetMarkers(session.EffectiveMarkers);
+            waveformView.SetRegions(session.EffectiveRegions);
+            waveformView.SetOutputParts(session.EffectiveOutputParts);
+            SyncRegionEdgeFadesToUi(session);
+        }
+        finally
+        {
+            waveformView.ResumePresentationRebuild();
+        }
+
         _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(session.EffectiveRegions));
+        _audioPlayer.SetExcludedRegions(session.EffectiveRegions);
         if (refreshPlaylists)
         {
             PopulatePlaylistChoices(session.EffectiveOutputParts);
@@ -8005,7 +8246,59 @@ public partial class Form1 : Form, IMessageFilter
         ?? _loadedPreview?.Regions
         ?? [];
 
-    private void SeekPlayback(double progress)
+    /// <summary>EXPORT 計画に載るリージョン概要（-R 除外の有無を明示）。</summary>
+    private static string FormatExportRegionSummary(
+        IReadOnlyList<WaveformRegionMark> regions,
+        IReadOnlyList<WaveformMarkerMark> markers)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(UiStrings.LogExportRegionHeader);
+        var excluded = 0;
+        var included = 0;
+        for (var i = 0; i < regions.Count; i++)
+        {
+            var region = regions[i];
+            if (region.IsExcluded)
+            {
+                excluded++;
+                sb.AppendLine(
+                    UiStrings.LogExportRegionExcluded(
+                        i + 1,
+                        region.StartSampleOffset,
+                        region.EndSampleOffset));
+                continue;
+            }
+
+            included++;
+            var suffix = string.IsNullOrEmpty(region.NameSuffix)
+                ? "-"
+                : region.NameSuffix;
+            sb.AppendLine(
+                UiStrings.LogExportRegionIncluded(
+                    i + 1,
+                    suffix,
+                    region.StartSampleOffset,
+                    region.EndSampleOffset));
+        }
+
+        sb.AppendLine(UiStrings.LogExportRegionTotals(included, excluded));
+        if (markers.Count > 0)
+        {
+            sb.AppendLine(UiStrings.LogExportMarkerHeader(markers.Count));
+            foreach (var marker in markers.OrderBy(m => m.SampleOffset))
+            {
+                sb.AppendLine(
+                    UiStrings.LogExportMarkerLine(
+                        marker.SampleOffset,
+                        marker.Comment,
+                        marker.IsFromWaveEmbedded));
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private void SeekPlayback(double progress, bool ensureVisible = false)
     {
         if (!_audioPlayer.HasSource)
         {
@@ -8024,7 +8317,7 @@ public partial class Form1 : Form, IMessageFilter
         _audioPlayer.ArmLoopAtProgress(clamped);
         // エンジンは時間丸めで僅かにずれるので、表示は要求位置を優先する
         AnchorPlayhead(clamped);
-        waveformView.SetPlayhead(clamped, recordTrail: false);
+        waveformView.SetPlayhead(clamped, recordTrail: false, ensureVisible: ensureVisible);
         waveformView.SetExitPlayhead(null);
         waveformView.SetFadeOutPlayhead(null);
         UpdateTransportPosition();
