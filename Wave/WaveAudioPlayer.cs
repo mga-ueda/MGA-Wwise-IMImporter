@@ -19,11 +19,16 @@ internal enum PlaylistDestinationSyncMode
 /// </summary>
 internal sealed class WaveAudioPlayer : IDisposable
 {
+    /// <summary>グループ内重ね再生の最大本数（クロック＋上乗せ）。</summary>
+    public const int MaxPlaylistVoices = 8;
+
     private WaveFileReader? _reader;
     private WaveFileReader? _exitReader;
     private WaveFileReader? _playlistFadeReader;
     private WaveFileReader? _playlistExitFadeReader;
     private WaveFileReader? _playlistPreRollReader;
+    private readonly WaveFileReader?[] _overlayReaders = new WaveFileReader?[MaxPlaylistVoices - 1];
+    private readonly WaveFileReader?[] _overlayExitReaders = new WaveFileReader?[MaxPlaylistVoices - 1];
     private IWavePlayer? _output;
     private StereoFloatWaveProvider? _provider;
     private string? _path;
@@ -349,7 +354,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     /// 停止／一時停止中に Playlist 範囲の先頭へ移動して再生を開始する。
     /// 範囲は開始を含み、終了を含まないソース WAV のサンプル位置。
     /// </summary>
-    public bool StartPlaylistRange(long startSample, long endSample)
+    public bool StartPlaylistRange(long startSample, long endSample, int clockVoiceId = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_isPlaying
@@ -371,12 +376,12 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         var plan = FindPlanAtSample(startSample);
-        _provider.StartPlaylistRange(startSample, endSample, plan);
+        _provider.StartPlaylistRange(startSample, endSample, plan, clockVoiceId);
         _activePlan = plan;
         _discardOutputBufferBeforePlay = false;
         _output.Play();
         _isPlaying = true;
-        Trace($"playlist.start accepted start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
+        Trace($"playlist.start accepted start={startSample} end={endSample} voice={clockVoiceId} loopPlan={plan?.ToString() ?? "none"}");
         return true;
     }
 
@@ -463,6 +468,211 @@ internal sealed class WaveAudioPlayer : IDisposable
         return _provider?.TryGetPlaylistTransitionState(out state) == true;
     }
 
+    /// <summary>
+    /// 再生中の位置を変えずに、現在パートをクロック Playlist 範囲として採用する。
+    /// Space 再生などから Alt+上乗せへ入るときに使う。
+    /// </summary>
+    public bool TryAdoptClockPlaylistRange(
+        long startSample,
+        long endSample,
+        int clockVoiceId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isPlaying
+            || _provider is null
+            || !IsValidPlaylistRange(startSample, endSample))
+        {
+            Trace(
+                $"playlist.adopt-clock rejected playing={_isPlaying}"
+                + $" start={startSample} end={endSample} voice={clockVoiceId}");
+            return false;
+        }
+
+        var plan = FindPlanAtSample(CurrentMainSample);
+        var accepted = _provider.TryAdoptClockPlaylistRange(
+            startSample,
+            endSample,
+            clockVoiceId,
+            plan);
+        if (accepted)
+        {
+            _activePlan = plan;
+        }
+
+        Trace(
+            $"playlist.adopt-clock accepted={accepted} start={startSample} end={endSample}"
+            + $" voice={clockVoiceId} sample={CurrentMainSample}");
+        return accepted;
+    }
+
+    /// <summary>
+    /// グループ内上乗せボイスを Same Time 相対で追加する。
+    /// 既に同一 voiceId があれば false。合計 <see cref="MaxPlaylistVoices"/> 本まで。
+    /// </summary>
+    public bool TryAddOverlayPlaylistVoice(
+        int voiceId,
+        long startSample,
+        long endSample,
+        double fadeInSeconds,
+        out string? rejectReason)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        rejectReason = null;
+        if (!_isPlaying || _provider is null || !IsValidPlaylistRange(startSample, endSample))
+        {
+            rejectReason = "not-playing-or-invalid-range";
+            return false;
+        }
+
+        var fadeInFrameCount = SecondsToFadeFrames(fadeInSeconds);
+        var accepted = _provider.TryAddOverlayPlaylistVoice(
+            voiceId,
+            startSample,
+            endSample,
+            fadeInFrameCount,
+            FindPlanAtSample,
+            out rejectReason);
+        Trace(
+            $"playlist.overlay-add accepted={accepted} voice={voiceId}"
+            + $" start={startSample} end={endSample}"
+            + $" fadeInSeconds={fadeInSeconds:R} reason={rejectReason ?? "ok"}");
+        return accepted;
+    }
+
+    /// <summary>上乗せボイスを Group Fade Out で停止する。最後の1本なら再生終了扱い。</summary>
+    public bool TryFadeOutOverlayPlaylistVoice(int voiceId, double fadeOutSeconds)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_provider is null)
+        {
+            return false;
+        }
+
+        var fadeOutFrameCount = SecondsToFadeFrames(fadeOutSeconds);
+        var accepted = _provider.TryFadeOutOverlayPlaylistVoice(voiceId, fadeOutFrameCount);
+        Trace(
+            $"playlist.overlay-fade-out accepted={accepted} voice={voiceId}"
+            + $" fadeOutSeconds={fadeOutSeconds:R}");
+        return accepted;
+    }
+
+    /// <summary>クロック側 Playlist を Group Fade Out で止め、上乗せがあれば先頭を昇格する。</summary>
+    public bool TryFadeOutClockPlaylistVoice(
+        double fadeOutSeconds,
+        out int? promotedVoiceId,
+        out bool playbackWillEnd)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        promotedVoiceId = null;
+        playbackWillEnd = false;
+        if (_provider is null)
+        {
+            return false;
+        }
+
+        var fadeOutFrameCount = SecondsToFadeFrames(fadeOutSeconds);
+        var accepted = _provider.TryFadeOutClockPlaylistVoice(
+            fadeOutFrameCount,
+            FindPlanAtSample,
+            out promotedVoiceId,
+            out playbackWillEnd);
+        Trace(
+            $"playlist.clock-fade-out accepted={accepted}"
+            + $" promoted={promotedVoiceId?.ToString() ?? "none"}"
+            + $" willEnd={playbackWillEnd} fadeOutSeconds={fadeOutSeconds:R}");
+        return accepted;
+    }
+
+    /// <summary>上乗せボイスをすべて Group Fade Out する（遷移前の一括停止用）。</summary>
+    public void FadeOutAllOverlayPlaylistVoices(double fadeOutSeconds)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_provider is null)
+        {
+            return;
+        }
+
+        var fadeOutFrameCount = SecondsToFadeFrames(fadeOutSeconds);
+        _provider.FadeOutAllOverlayPlaylistVoices(fadeOutFrameCount);
+        Trace($"playlist.overlay-fade-out-all fadeOutSeconds={fadeOutSeconds:R}");
+    }
+
+    /// <summary>上乗せを即時クリアする。</summary>
+    public void ClearOverlayPlaylistVoices()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _provider?.ClearOverlayPlaylistVoices();
+    }
+
+    public bool HasOverlayPlaylistVoice(int voiceId) =>
+        _provider?.HasOverlayPlaylistVoice(voiceId) == true;
+
+    public int ActiveOverlayPlaylistVoiceCount =>
+        _provider?.ActiveOverlayPlaylistVoiceCount ?? 0;
+
+    public int TotalActivePlaylistVoiceCount =>
+        (_provider?.HasClockPlaylistRange == true ? 1 : 0)
+        + ActiveOverlayPlaylistVoiceCount;
+
+    public bool HasClockPlaylistRange =>
+        _provider?.HasClockPlaylistRange == true;
+
+    /// <summary>
+    /// 上乗せボイスの絶対進捗（0〜1）を destination へ書き込む。
+    /// Fade Out 中は含めない（白いフェードバー側へ分ける）。戻り値は本数。
+    /// </summary>
+    public int CopyOverlayPlaylistVoiceProgresses(double[] destination) =>
+        _provider?.CopyOverlayPlaylistVoiceProgresses(destination, FrameCount) ?? 0;
+
+    /// <summary>
+    /// Group Fade Out 中の上乗せボイス進捗（0〜1）。白いシークバー用。
+    /// </summary>
+    public int CopyOverlayFadeOutProgresses(double[] destination) =>
+        _provider?.CopyOverlayFadeOutProgresses(destination, FrameCount) ?? 0;
+
+    /// <summary>上乗せボイスの -E 二重再生進捗（0〜1）を destination へ書き込む。</summary>
+    public int CopyOverlayExitProgresses(double[] destination) =>
+        _provider?.CopyOverlayExitProgresses(destination, FrameCount) ?? 0;
+
+    /// <summary>最終クロックの Group Fade Out 中の進捗（0〜1）。</summary>
+    public bool TryGetClockFadeOutPlaybackProgress(out double progress)
+    {
+        progress = 0d;
+        if (_provider is null || FrameCount <= 0)
+        {
+            return false;
+        }
+
+        return _provider.TryGetClockFadeOutPlaybackProgress(FrameCount, out progress);
+    }
+
+    /// <summary>有効な上乗せ voiceId を destination へ書き込む。戻り値は本数。</summary>
+    public int CopyActiveOverlayPlaylistVoiceIds(int[] destination) =>
+        _provider?.CopyActiveOverlayPlaylistVoiceIds(destination) ?? 0;
+
+    public void SetClockPlaylistVoiceId(int voiceId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _provider?.SetClockPlaylistVoiceId(voiceId);
+    }
+
+    public int GetClockPlaylistVoiceId() =>
+        _provider?.GetClockPlaylistVoiceId() ?? 0;
+
+    private int SecondsToFadeFrames(double seconds)
+    {
+        if (_provider is null || seconds <= 0d || !double.IsFinite(seconds))
+        {
+            return 0;
+        }
+
+        return Math.Max(
+            1,
+            (int)Math.Min(
+                int.MaxValue,
+                Math.Round(_provider.WaveFormat.SampleRate * seconds)));
+    }
+
     private bool IsValidPlaylistRange(long startSample, long endSample) =>
         startSample >= 0 && endSample > startSample && endSample <= FrameCount;
 
@@ -505,12 +715,20 @@ internal sealed class WaveAudioPlayer : IDisposable
         _playlistFadeReader = new WaveFileReader(_playbackCopyPath!);
         _playlistExitFadeReader = new WaveFileReader(_playbackCopyPath!);
         _playlistPreRollReader = new WaveFileReader(_playbackCopyPath!);
+        for (var i = 0; i < _overlayReaders.Length; i++)
+        {
+            _overlayReaders[i] = new WaveFileReader(_playbackCopyPath!);
+            _overlayExitReaders[i] = new WaveFileReader(_playbackCopyPath!);
+        }
+
         _provider = new StereoFloatWaveProvider(
             _reader,
             _exitReader,
             _playlistFadeReader,
             _playlistExitFadeReader,
             _playlistPreRollReader,
+            _overlayReaders!,
+            _overlayExitReaders!,
             info,
             message => Trace(message));
         PushActivePlanToProvider();
@@ -976,6 +1194,14 @@ internal sealed class WaveAudioPlayer : IDisposable
             _playlistPreRollReader = null;
         }
 
+        for (var i = 0; i < _overlayReaders.Length; i++)
+        {
+            _overlayReaders[i]?.Dispose();
+            _overlayReaders[i] = null;
+            _overlayExitReaders[i]?.Dispose();
+            _overlayExitReaders[i] = null;
+        }
+
         TryDeleteFile(_playbackCopyPath);
         _playbackCopyPath = null;
     }
@@ -985,6 +1211,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     /// <summary>
     /// PCM / IEEE float の WAV を ACM を使わずステレオ float に変換する再生用プロバイダ。
     /// メインはループ折り返し、Exit は別リーダでワンショット二重再生してミックスする。
+    /// グループ重ね再生は最大 <see cref="MaxPlaylistVoices"/> − 1 本の上乗せリーダを加算する。
     /// </summary>
     private sealed class StereoFloatWaveProvider : IWaveProvider
     {
@@ -994,6 +1221,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         private readonly WaveFileReader _playlistFadeSource;
         private readonly WaveFileReader _playlistExitFadeSource;
         private readonly WaveFileReader _playlistPreRollSource;
+        private readonly OverlayPlaylistVoice[] _overlayVoices;
         private readonly Action<string> _diagnostic;
         private readonly Func<byte[], int, float> _sampleReader;
         private readonly int _sourceBlockAlign;
@@ -1006,6 +1234,8 @@ internal sealed class WaveAudioPlayer : IDisposable
         private byte[] _playlistFadeFloat = [];
         private byte[] _playlistExitFadeFloat = [];
         private byte[] _playlistPreRollFloat = [];
+        private byte[] _overlayMixFloat = [];
+        private byte[] _overlayExitFloat = [];
         private readonly object _gate = new();
         private readonly object _readGate = new();
         private LoopPlaybackPlan? _activePlan;
@@ -1016,6 +1246,13 @@ internal sealed class WaveAudioPlayer : IDisposable
         private PlaylistTransitionRequest? _pendingPlaylistTransition;
         private long? _playlistStartSample;
         private long? _playlistEndSample;
+        private int _clockPlaylistVoiceId;
+        private bool _clockFadeOutPlaying;
+        private long _clockFadeOutFramesRead;
+        private int _clockFadeOutFrameCount;
+        private bool _stopAfterClockFadeOut;
+        /// <summary>最終クロック FO 完了後、Read が 0 を返し続け再生終了させる。</summary>
+        private bool _forceEndAfterClockFadeOut;
         private bool _playlistFadePlaying;
         private long _playlistFadeStartSample;
         private long _playlistFadeEndSample;
@@ -1052,6 +1289,8 @@ internal sealed class WaveAudioPlayer : IDisposable
             WaveFileReader playlistFadeSource,
             WaveFileReader playlistExitFadeSource,
             WaveFileReader playlistPreRollSource,
+            WaveFileReader[] overlaySources,
+            WaveFileReader[] overlayExitSources,
             WavFileInfo info,
             Action<string> diagnostic)
         {
@@ -1060,11 +1299,27 @@ internal sealed class WaveAudioPlayer : IDisposable
                 throw new InvalidDataException(UiStrings.ErrWaveFormatInvalid);
             }
 
+            if (overlaySources.Length != MaxPlaylistVoices - 1
+                || overlayExitSources.Length != MaxPlaylistVoices - 1)
+            {
+                throw new ArgumentException(
+                    $"Overlay readers must be {MaxPlaylistVoices - 1}.",
+                    nameof(overlaySources));
+            }
+
             _source = source;
             _exitSource = exitSource;
             _playlistFadeSource = playlistFadeSource;
             _playlistExitFadeSource = playlistExitFadeSource;
             _playlistPreRollSource = playlistPreRollSource;
+            _overlayVoices = new OverlayPlaylistVoice[overlaySources.Length];
+            for (var i = 0; i < overlaySources.Length; i++)
+            {
+                _overlayVoices[i] = new OverlayPlaylistVoice(
+                    overlaySources[i],
+                    overlayExitSources[i]);
+            }
+
             _diagnostic = diagnostic;
             _sampleReader = WavPeakReader.CreateSampleReader(info.AudioFormat, info.BitsPerSample);
             _channels = info.Channels;
@@ -1079,6 +1334,37 @@ internal sealed class WaveAudioPlayer : IDisposable
         public WaveFormat WaveFormat { get; }
 
         public float OutputPeak => Volatile.Read(ref _outputPeak);
+
+        public bool HasClockPlaylistRange
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _playlistStartSample is not null && _playlistEndSample is not null;
+                }
+            }
+        }
+
+        public int ActiveOverlayPlaylistVoiceCount
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    var count = 0;
+                    foreach (var voice in _overlayVoices)
+                    {
+                        if (voice.Active)
+                        {
+                            count++;
+                        }
+                    }
+
+                    return count;
+                }
+            }
+        }
 
         public void ResetOutputPeak() => Volatile.Write(ref _outputPeak, 0f);
 
@@ -1147,7 +1433,11 @@ internal sealed class WaveAudioPlayer : IDisposable
             }
         }
 
-        public void StartPlaylistRange(long startSample, long endSample, LoopPlaybackPlan? plan)
+        public void StartPlaylistRange(
+            long startSample,
+            long endSample,
+            LoopPlaybackPlan? plan,
+            int clockVoiceId)
         {
             lock (_readGate)
             {
@@ -1161,14 +1451,17 @@ internal sealed class WaveAudioPlayer : IDisposable
                     _playlistPreRollPlaying = false;
                     ResetMainFadeInNoLock();
                     ResetPreRollFadeInNoLock();
+                    ResetClockFadeOutNoLock();
+                    ClearOverlayPlaylistVoicesNoLock();
                     _playlistStartSample = startSample;
                     _playlistEndSample = endSample;
+                    _clockPlaylistVoiceId = clockVoiceId;
                     _activePlan = plan;
                     _exitPlaying = false;
                     _playlistStartedGeneration = generation;
                     _playlistStartedTargetSample = startSample;
                 }
-                _diagnostic($"provider.playlist-range-start generation={generation} start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
+                _diagnostic($"provider.playlist-range-start generation={generation} voice={clockVoiceId} start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
             }
         }
 
@@ -1331,13 +1624,458 @@ internal sealed class WaveAudioPlayer : IDisposable
                     _playlistPreRollPlaying = false;
                     ResetMainFadeInNoLock();
                     ResetPreRollFadeInNoLock();
+                    ResetClockFadeOutNoLock();
+                    ClearOverlayPlaylistVoicesNoLock();
                     _playlistStartSample = null;
                     _playlistEndSample = null;
+                    _clockPlaylistVoiceId = 0;
                     _playlistRequestGeneration = 0;
                     _playlistStartedGeneration = 0;
                     _playlistStartedTargetSample = 0;
                 }
             }
+        }
+
+        public bool HasOverlayPlaylistVoice(int voiceId)
+        {
+            lock (_gate)
+            {
+                foreach (var voice in _overlayVoices)
+                {
+                    if (voice.Active && voice.VoiceId == voiceId)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        public bool TryAdoptClockPlaylistRange(
+            long startSample,
+            long endSample,
+            int clockVoiceId,
+            LoopPlaybackPlan? plan)
+        {
+            lock (_readGate)
+            {
+                var currentSample = CurrentSample(_source);
+                var inRange = currentSample >= startSample && currentSample < endSample;
+                if (!inRange)
+                {
+                    // Soft adopt: UI と実サンプルが僅かにずれていてもクロック範囲は載せる。
+                    // 上乗せの relative は 0 未満にならないよう呼び出し側／Add 側で clamp する。
+                    _diagnostic(
+                        $"provider.adopt-clock-soft sample={currentSample}"
+                        + $" start={startSample} end={endSample} voice={clockVoiceId}");
+                }
+
+                lock (_gate)
+                {
+                    _playlistStartSample = startSample;
+                    _playlistEndSample = endSample;
+                    _clockPlaylistVoiceId = clockVoiceId;
+                    _activePlan = plan ?? _activePlan;
+                    ResetClockFadeOutNoLock();
+                }
+
+                _diagnostic(
+                    $"provider.adopt-clock voice={clockVoiceId} start={startSample}"
+                    + $" end={endSample} sample={currentSample} inRange={inRange}");
+                return true;
+            }
+        }
+
+        public bool TryAddOverlayPlaylistVoice(
+            int voiceId,
+            long startSample,
+            long endSample,
+            int fadeInFrameCount,
+            Func<long, LoopPlaybackPlan?> findPlan,
+            out string? rejectReason)
+        {
+            lock (_readGate)
+            {
+                lock (_gate)
+                {
+                    if (_playlistStartSample is not long clockStart
+                        || _playlistEndSample is not long)
+                    {
+                        rejectReason = "no-clock-playlist";
+                        return false;
+                    }
+
+                    if (_clockPlaylistVoiceId == voiceId)
+                    {
+                        rejectReason = "already-clock";
+                        return false;
+                    }
+
+                    var activeCount = 0;
+                    OverlayPlaylistVoice? free = null;
+                    foreach (var voice in _overlayVoices)
+                    {
+                        if (voice.Active)
+                        {
+                            activeCount++;
+                            if (voice.VoiceId == voiceId)
+                            {
+                                rejectReason = "already-active";
+                                return false;
+                            }
+                        }
+                        else if (free is null)
+                        {
+                            free = voice;
+                        }
+                    }
+
+                    // クロック1本 + 上乗せ
+                    if (activeCount + 1 >= MaxPlaylistVoices || free is null)
+                    {
+                        rejectReason = "voice-limit";
+                        return false;
+                    }
+
+                    var currentSample = CurrentSample(_source);
+                    var relative = Math.Max(0L, currentSample - clockStart);
+                    var targetSample = startSample + relative;
+                    if (targetSample >= endSample)
+                    {
+                        rejectReason = "same-time-out-of-range";
+                        return false;
+                    }
+
+                    SeekToSample(free.Reader, targetSample);
+                    free.Active = true;
+                    free.VoiceId = voiceId;
+                    free.PartStartSample = startSample;
+                    free.PartEndSample = endSample;
+                    free.LoopPlan = findPlan(targetSample);
+                    free.ExitPlaying = false;
+                    free.FadeInPlaying = fadeInFrameCount > 0;
+                    free.FadeOutPlaying = false;
+                    free.FadeFramesRead = 0;
+                    free.FadeFrameCount = Math.Max(0, fadeInFrameCount);
+                    rejectReason = null;
+                    _diagnostic(
+                        $"provider.overlay-add voice={voiceId} start={startSample} end={endSample}"
+                        + $" target={targetSample} relative={relative} fadeInFrames={fadeInFrameCount}"
+                        + $" loopPlan={free.LoopPlan?.ToString() ?? "none"}");
+                    return true;
+                }
+            }
+        }
+
+        public bool TryFadeOutOverlayPlaylistVoice(int voiceId, int fadeOutFrameCount)
+        {
+            lock (_gate)
+            {
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active || voice.VoiceId != voiceId)
+                    {
+                        continue;
+                    }
+
+                    if (fadeOutFrameCount <= 0)
+                    {
+                        voice.Active = false;
+                        voice.FadeInPlaying = false;
+                        voice.FadeOutPlaying = false;
+                        voice.ExitPlaying = false;
+                        _diagnostic($"provider.overlay-stop-immediate voice={voiceId}");
+                        return true;
+                    }
+
+                    voice.FadeInPlaying = false;
+                    voice.FadeOutPlaying = true;
+                    voice.FadeFramesRead = 0;
+                    voice.FadeFrameCount = fadeOutFrameCount;
+                    _diagnostic(
+                        $"provider.overlay-fade-out voice={voiceId} fadeOutFrames={fadeOutFrameCount}");
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        public void FadeOutAllOverlayPlaylistVoices(int fadeOutFrameCount)
+        {
+            lock (_gate)
+            {
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active)
+                    {
+                        continue;
+                    }
+
+                    if (fadeOutFrameCount <= 0)
+                    {
+                        voice.Active = false;
+                        voice.FadeInPlaying = false;
+                        voice.FadeOutPlaying = false;
+                        continue;
+                    }
+
+                    voice.FadeInPlaying = false;
+                    voice.FadeOutPlaying = true;
+                    voice.FadeFramesRead = 0;
+                    voice.FadeFrameCount = fadeOutFrameCount;
+                }
+            }
+        }
+
+        public void ClearOverlayPlaylistVoices()
+        {
+            lock (_gate)
+            {
+                ClearOverlayPlaylistVoicesNoLock();
+            }
+        }
+
+        public bool TryFadeOutClockPlaylistVoice(
+            int fadeOutFrameCount,
+            Func<long, LoopPlaybackPlan?> findPlan,
+            out int? promotedVoiceId,
+            out bool playbackWillEnd)
+        {
+            promotedVoiceId = null;
+            playbackWillEnd = false;
+            lock (_readGate)
+            {
+                lock (_gate)
+                {
+                    if (_playlistStartSample is null || _playlistEndSample is null)
+                    {
+                        return false;
+                    }
+
+                    OverlayPlaylistVoice? promote = null;
+                    foreach (var voice in _overlayVoices)
+                    {
+                        if (!voice.Active || voice.FadeOutPlaying)
+                        {
+                            continue;
+                        }
+
+                        if (promote is null || voice.VoiceId < promote.VoiceId)
+                        {
+                            promote = voice;
+                        }
+                    }
+
+                    if (promote is null)
+                    {
+                        playbackWillEnd = true;
+                        if (fadeOutFrameCount <= 0)
+                        {
+                            _playlistStartSample = null;
+                            _playlistEndSample = null;
+                            _clockPlaylistVoiceId = 0;
+                            ResetClockFadeOutNoLock();
+                            _stopAfterClockFadeOut = true;
+                            _forceEndAfterClockFadeOut = true;
+                            return true;
+                        }
+
+                        _clockFadeOutPlaying = true;
+                        _clockFadeOutFramesRead = 0;
+                        _clockFadeOutFrameCount = fadeOutFrameCount;
+                        _diagnostic(
+                            $"provider.clock-fade-out-last fadeOutFrames={fadeOutFrameCount}");
+                        return true;
+                    }
+
+                    // 旧クロックをフェードリーダーへ移し、上乗せをクロックへ昇格。
+                    var oldSample = CurrentSample(_source);
+                    if (fadeOutFrameCount > 0)
+                    {
+                        SeekToSample(_playlistFadeSource, oldSample);
+                        _playlistFadePlaying = true;
+                        _playlistFadeStartSample = oldSample;
+                        _playlistFadeEndSample = _playlistEndSample.Value;
+                        _playlistFadeStartTickMs = Environment.TickCount64;
+                        _playlistFadeExitStartSample = 0;
+                        _playlistFadeExitEndSample = 0;
+                        _playlistExitFadePlaying = false;
+                        _playlistFadeIncomingFramesRead = 0;
+                        _playlistFadeIncomingFrameCount = 0;
+                        _playlistFadeFramesRead = 0;
+                        _playlistFadeFrameCount = fadeOutFrameCount;
+                    }
+
+                    var promoteSample = CurrentSample(promote.Reader);
+                    SeekToSample(_source, promoteSample);
+                    _playlistStartSample = promote.PartStartSample;
+                    _playlistEndSample = promote.PartEndSample;
+                    _clockPlaylistVoiceId = promote.VoiceId;
+                    _activePlan = findPlan(promoteSample);
+                    _exitPlaying = false;
+                    ResetMainFadeInNoLock();
+                    ResetClockFadeOutNoLock();
+                    promotedVoiceId = promote.VoiceId;
+                    promote.Active = false;
+                    promote.FadeInPlaying = false;
+                    promote.FadeOutPlaying = false;
+                    _diagnostic(
+                        $"provider.clock-promote fromSample={oldSample} toVoice={promote.VoiceId}"
+                        + $" toSample={promoteSample} fadeOutFrames={fadeOutFrameCount}");
+                    return true;
+                }
+            }
+        }
+
+        public int CopyOverlayPlaylistVoiceProgresses(double[] destination, long frameCount)
+        {
+            if (frameCount <= 0 || destination.Length == 0)
+            {
+                return 0;
+            }
+
+            lock (_readGate)
+            {
+                var count = 0;
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active || voice.FadeOutPlaying || count >= destination.Length)
+                    {
+                        continue;
+                    }
+
+                    var sample = CurrentSample(voice.Reader);
+                    destination[count++] = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+                }
+
+                return count;
+            }
+        }
+
+        public int CopyOverlayFadeOutProgresses(double[] destination, long frameCount)
+        {
+            if (frameCount <= 0 || destination.Length == 0)
+            {
+                return 0;
+            }
+
+            lock (_readGate)
+            {
+                var count = 0;
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active || !voice.FadeOutPlaying || count >= destination.Length)
+                    {
+                        continue;
+                    }
+
+                    var sample = CurrentSample(voice.Reader);
+                    destination[count++] = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+                }
+
+                return count;
+            }
+        }
+
+        public bool TryGetClockFadeOutPlaybackProgress(long frameCount, out double progress)
+        {
+            progress = 0d;
+            if (frameCount <= 0)
+            {
+                return false;
+            }
+
+            lock (_readGate)
+            {
+                lock (_gate)
+                {
+                    if (!_clockFadeOutPlaying)
+                    {
+                        return false;
+                    }
+                }
+
+                var sample = CurrentSample(_source);
+                progress = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+                return true;
+            }
+        }
+
+        public int CopyOverlayExitProgresses(double[] destination, long frameCount)
+        {
+            if (frameCount <= 0 || destination.Length == 0)
+            {
+                return 0;
+            }
+
+            lock (_readGate)
+            {
+                var count = 0;
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active || !voice.ExitPlaying || count >= destination.Length)
+                    {
+                        continue;
+                    }
+
+                    var sample = CurrentSample(voice.ExitReader);
+                    if (sample < voice.ExitStartSample || sample >= voice.ExitEndSample)
+                    {
+                        continue;
+                    }
+
+                    destination[count++] = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+                }
+
+                return count;
+            }
+        }
+
+        public int CopyActiveOverlayPlaylistVoiceIds(int[] destination)
+        {
+            lock (_gate)
+            {
+                var count = 0;
+                foreach (var voice in _overlayVoices)
+                {
+                    if (!voice.Active || count >= destination.Length)
+                    {
+                        continue;
+                    }
+
+                    destination[count++] = voice.VoiceId;
+                }
+
+                return count;
+            }
+        }
+
+        private void ClearOverlayPlaylistVoicesNoLock()
+        {
+            foreach (var voice in _overlayVoices)
+            {
+                voice.Active = false;
+                voice.FadeInPlaying = false;
+                voice.FadeOutPlaying = false;
+                voice.FadeFramesRead = 0;
+                voice.FadeFrameCount = 0;
+                voice.VoiceId = 0;
+                voice.LoopPlan = null;
+                voice.ExitPlaying = false;
+                voice.ExitStartSample = 0;
+                voice.ExitEndSample = 0;
+            }
+        }
+
+        private void ResetClockFadeOutNoLock()
+        {
+            _clockFadeOutPlaying = false;
+            _clockFadeOutFramesRead = 0;
+            _clockFadeOutFrameCount = 0;
+            _stopAfterClockFadeOut = false;
+            _forceEndAfterClockFadeOut = false;
         }
 
         public bool TryResetPlaylistAfterEnd()
@@ -1565,6 +2303,8 @@ internal sealed class WaveAudioPlayer : IDisposable
                 long? playlistEnd;
                 var playlistFadePlaying = false;
                 var playlistPreRollPlaying = false;
+                var stopAfterClockFade = false;
+                var forceEndAfterClockFade = false;
                 IReadOnlyList<(long Start, long End)> excludedRanges;
                 lock (_gate)
                 {
@@ -1576,7 +2316,27 @@ internal sealed class WaveAudioPlayer : IDisposable
                     playlistEnd = _playlistEndSample;
                     playlistFadePlaying = _playlistFadePlaying;
                     playlistPreRollPlaying = _playlistPreRollPlaying;
+                    stopAfterClockFade = _stopAfterClockFadeOut;
+                    forceEndAfterClockFade = _forceEndAfterClockFadeOut;
                     excludedRanges = _excludedRanges;
+                }
+
+                if (forceEndAfterClockFade || stopAfterClockFade)
+                {
+                    lock (_gate)
+                    {
+                        _stopAfterClockFadeOut = false;
+                        _forceEndAfterClockFadeOut = true;
+                    }
+
+                    // この Read で既に書いた分は返し、以降は 0 で終了させる。
+                    if (totalFrames == 0)
+                    {
+                        Volatile.Write(ref _outputPeak, 0f);
+                        return 0;
+                    }
+
+                    break;
                 }
 
                 var samplePos = CurrentSample(_source);
@@ -1704,6 +2464,11 @@ internal sealed class WaveAudioPlayer : IDisposable
                     ref _playlistPreRollFadeInFramesRead,
                     _playlistPreRollFadeInFrameCount,
                     "pre-roll");
+                ApplyClockFadeOut(_mainFloat, gotFrames);
+
+                EnsureBuffer(ref _overlayMixFloat, gotFrames * 8);
+                Array.Clear(_overlayMixFloat, 0, gotFrames * 8);
+                MixOverlayPlaylistVoices(_overlayMixFloat, gotFrames);
 
                 // 加算ミックス（簡易クリップ）。-R 区間はタイムラインを進めつつ無音にする。
                 for (var i = 0; i < gotFrames; i++)
@@ -1725,8 +2490,10 @@ internal sealed class WaveAudioPlayer : IDisposable
                         var fadeR = BitConverter.ToSingle(_playlistFadeFloat, i * 8 + 4);
                         var preRollL = BitConverter.ToSingle(_playlistPreRollFloat, i * 8);
                         var preRollR = BitConverter.ToSingle(_playlistPreRollFloat, i * 8 + 4);
-                        outputL = ClampSample(mainL + exitL + fadeL + preRollL);
-                        outputR = ClampSample(mainR + exitR + fadeR + preRollR);
+                        var overlayL = BitConverter.ToSingle(_overlayMixFloat, i * 8);
+                        var overlayR = BitConverter.ToSingle(_overlayMixFloat, i * 8 + 4);
+                        outputL = ClampSample(mainL + exitL + fadeL + preRollL + overlayL);
+                        outputR = ClampSample(mainR + exitR + fadeR + preRollR + overlayR);
                     }
 
                     outputPeak = Math.Max(
@@ -2040,6 +2807,365 @@ internal sealed class WaveAudioPlayer : IDisposable
             }
         }
 
+        private void ApplyClockFadeOut(byte[] buffer, int frames)
+        {
+            bool playing;
+            long framesRead;
+            int frameCount;
+            lock (_gate)
+            {
+                playing = _clockFadeOutPlaying;
+                framesRead = _clockFadeOutFramesRead;
+                frameCount = _clockFadeOutFrameCount;
+            }
+
+            if (!playing || frameCount <= 0 || frames <= 0)
+            {
+                return;
+            }
+
+            for (var i = 0; i < frames; i++)
+            {
+                var fadeIndex = framesRead + i;
+                var gain = frameCount <= 1
+                    ? 0f
+                    : Math.Max(
+                        0f,
+                        1f - fadeIndex / (float)(frameCount - 1));
+                var at = i * 8;
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at, 4),
+                    BitConverter.ToSingle(buffer, at) * gain);
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at + 4, 4),
+                    BitConverter.ToSingle(buffer, at + 4) * gain);
+            }
+
+            lock (_gate)
+            {
+                if (!_clockFadeOutPlaying)
+                {
+                    return;
+                }
+
+                _clockFadeOutFramesRead += frames;
+                if (_clockFadeOutFramesRead < _clockFadeOutFrameCount)
+                {
+                    return;
+                }
+
+                _clockFadeOutPlaying = false;
+                _playlistStartSample = null;
+                _playlistEndSample = null;
+                _clockPlaylistVoiceId = 0;
+                _stopAfterClockFadeOut = true;
+                _forceEndAfterClockFadeOut = true;
+                _diagnostic("provider.clock-fade-out-complete");
+            }
+        }
+
+        private void MixOverlayPlaylistVoices(byte[] dest, int frames)
+        {
+            OverlayPlaylistVoice[] snapshot;
+            lock (_gate)
+            {
+                var active = 0;
+                foreach (var voice in _overlayVoices)
+                {
+                    if (voice.Active)
+                    {
+                        active++;
+                    }
+                }
+
+                if (active == 0)
+                {
+                    return;
+                }
+
+                snapshot = _overlayVoices;
+            }
+
+            EnsureBuffer(ref _overlayExitFloat, frames * 8);
+
+            foreach (var voice in snapshot)
+            {
+                bool active;
+                bool fadeIn;
+                bool fadeOut;
+                long fadeRead;
+                int fadeCount;
+                long partEnd;
+                LoopPlaybackPlan? loopPlan;
+                bool exitPlaying;
+                long exitStart;
+                long exitEnd;
+                lock (_gate)
+                {
+                    active = voice.Active;
+                    fadeIn = voice.FadeInPlaying;
+                    fadeOut = voice.FadeOutPlaying;
+                    fadeRead = voice.FadeFramesRead;
+                    fadeCount = voice.FadeFrameCount;
+                    partEnd = voice.PartEndSample;
+                    loopPlan = voice.LoopPlan;
+                    exitPlaying = voice.ExitPlaying;
+                    exitStart = voice.ExitStartSample;
+                    exitEnd = voice.ExitEndSample;
+                    if (!active)
+                    {
+                        continue;
+                    }
+                }
+
+                var pos = CurrentSample(voice.Reader);
+                if (loopPlan is { } loop)
+                {
+                    if (pos >= loop.LoopEndSample)
+                    {
+                        SeekToSample(voice.Reader, loop.LoopStartSample);
+                        BeginOverlayExitOnLoopWrap(voice, loop);
+                        pos = loop.LoopStartSample;
+                        lock (_gate)
+                        {
+                            exitPlaying = voice.ExitPlaying;
+                            exitStart = voice.ExitStartSample;
+                            exitEnd = voice.ExitEndSample;
+                        }
+                    }
+                }
+                else if (pos >= partEnd)
+                {
+                    lock (_gate)
+                    {
+                        voice.Active = false;
+                        voice.FadeInPlaying = false;
+                        voice.FadeOutPlaying = false;
+                        voice.ExitPlaying = false;
+                    }
+
+                    continue;
+                }
+
+                var limit = partEnd;
+                if (loopPlan is { } activeLoop)
+                {
+                    limit = Math.Min(limit, activeLoop.LoopEndSample);
+                }
+
+                var framesThis = (int)Math.Min(frames, Math.Max(0L, limit - pos));
+                EnsureBuffer(ref voice.FloatBuffer, frames * 8);
+                Array.Clear(voice.FloatBuffer, 0, frames * 8);
+                var got = framesThis > 0
+                    ? ReadDecodedFrames(voice.Reader, voice.FloatBuffer, 0, framesThis)
+                    : 0;
+                if (got <= 0 && !exitPlaying)
+                {
+                    lock (_gate)
+                    {
+                        voice.Active = false;
+                        voice.ExitPlaying = false;
+                    }
+
+                    continue;
+                }
+
+                if (got > 0)
+                {
+                    ApplyRegionEdgeGain(voice.FloatBuffer, got, pos);
+                }
+
+                Array.Clear(_overlayExitFloat, 0, frames * 8);
+                var exitGot = 0;
+                if (exitPlaying)
+                {
+                    exitGot = MixOverlayExitLayer(
+                        voice,
+                        _overlayExitFloat,
+                        Math.Max(got, frames),
+                        exitStart,
+                        exitEnd);
+                }
+
+                var mixFrames = Math.Max(got, exitGot);
+                for (var i = 0; i < mixFrames; i++)
+                {
+                    var gain = 1f;
+                    if (i < got && (fadeIn || fadeOut) && fadeCount > 0)
+                    {
+                        var fadeIndex = fadeRead + i;
+                        if (fadeIn)
+                        {
+                            gain = fadeCount <= 1
+                                ? 1f
+                                : Math.Min(1f, fadeIndex / (float)(fadeCount - 1));
+                        }
+                        else
+                        {
+                            gain = fadeCount <= 1
+                                ? 0f
+                                : Math.Max(0f, 1f - fadeIndex / (float)(fadeCount - 1));
+                        }
+                    }
+
+                    var at = i * 8;
+                    var left = i < got
+                        ? BitConverter.ToSingle(voice.FloatBuffer, at) * gain
+                        : 0f;
+                    var right = i < got
+                        ? BitConverter.ToSingle(voice.FloatBuffer, at + 4) * gain
+                        : 0f;
+                    if (i < exitGot)
+                    {
+                        left = ClampSample(
+                            left + BitConverter.ToSingle(_overlayExitFloat, at));
+                        right = ClampSample(
+                            right + BitConverter.ToSingle(_overlayExitFloat, at + 4));
+                    }
+
+                    BitConverter.TryWriteBytes(
+                        dest.AsSpan(at, 4),
+                        ClampSample(BitConverter.ToSingle(dest, at) + left));
+                    BitConverter.TryWriteBytes(
+                        dest.AsSpan(at + 4, 4),
+                        ClampSample(BitConverter.ToSingle(dest, at + 4) + right));
+                }
+
+                lock (_gate)
+                {
+                    if (!voice.Active)
+                    {
+                        continue;
+                    }
+
+                    if ((fadeIn || fadeOut) && got > 0)
+                    {
+                        voice.FadeFramesRead += got;
+                        if (voice.FadeFramesRead >= voice.FadeFrameCount)
+                        {
+                            if (fadeOut)
+                            {
+                                voice.Active = false;
+                                voice.FadeOutPlaying = false;
+                                voice.ExitPlaying = false;
+                                _diagnostic(
+                                    $"provider.overlay-fade-out-complete voice={voice.VoiceId}");
+                            }
+                            else
+                            {
+                                voice.FadeInPlaying = false;
+                                _diagnostic(
+                                    $"provider.overlay-fade-in-complete voice={voice.VoiceId}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void BeginOverlayExitOnLoopWrap(
+            OverlayPlaylistVoice voice,
+            LoopPlaybackPlan loop)
+        {
+            if (!loop.HasExit)
+            {
+                lock (_gate)
+                {
+                    voice.ExitPlaying = false;
+                }
+
+                return;
+            }
+
+            SeekToSample(voice.ExitReader, loop.LoopEndSample);
+            lock (_gate)
+            {
+                voice.ExitStartSample = loop.LoopEndSample;
+                voice.ExitEndSample = loop.ExitEndSample!.Value;
+                voice.ExitPlaying = true;
+            }
+
+            _diagnostic(
+                $"provider.overlay-exit-start voice={voice.VoiceId}"
+                + $" start={loop.LoopEndSample} end={loop.ExitEndSample}");
+        }
+
+        private int MixOverlayExitLayer(
+            OverlayPlaylistVoice voice,
+            byte[] dest,
+            int frames,
+            long exitStart,
+            long exitEnd)
+        {
+            Array.Clear(dest, 0, frames * 8);
+            bool playing;
+            lock (_gate)
+            {
+                playing = voice.ExitPlaying;
+            }
+
+            if (!playing || frames <= 0)
+            {
+                return 0;
+            }
+
+            var pos = CurrentSample(voice.ExitReader);
+            if (pos < exitStart)
+            {
+                SeekToSample(voice.ExitReader, exitStart);
+                pos = exitStart;
+            }
+
+            if (pos >= exitEnd)
+            {
+                lock (_gate)
+                {
+                    voice.ExitPlaying = false;
+                }
+
+                return 0;
+            }
+
+            var chunk = (int)Math.Min(frames, exitEnd - pos);
+            var got = ReadDecodedFrames(voice.ExitReader, dest, 0, chunk);
+            if (got <= 0)
+            {
+                lock (_gate)
+                {
+                    voice.ExitPlaying = false;
+                }
+
+                return 0;
+            }
+
+            ApplyRegionEdgeGain(dest, got, pos);
+            if (CurrentSample(voice.ExitReader) >= exitEnd)
+            {
+                lock (_gate)
+                {
+                    voice.ExitPlaying = false;
+                }
+            }
+
+            return got;
+        }
+
+        public void SetClockPlaylistVoiceId(int voiceId)
+        {
+            lock (_gate)
+            {
+                _clockPlaylistVoiceId = voiceId;
+            }
+        }
+
+        public int GetClockPlaylistVoiceId()
+        {
+            lock (_gate)
+            {
+                return _clockPlaylistVoiceId;
+            }
+        }
+
         private void ApplyFadeIn(
             byte[] buffer,
             int frames,
@@ -2249,6 +3375,25 @@ internal sealed class WaveAudioPlayer : IDisposable
             int FadeFrameCount,
             LoopPlaybackPlan? TargetPlan,
             long Generation);
+
+        private sealed class OverlayPlaylistVoice(WaveFileReader reader, WaveFileReader exitReader)
+        {
+            public WaveFileReader Reader { get; } = reader;
+            public WaveFileReader ExitReader { get; } = exitReader;
+            public byte[] FloatBuffer = [];
+            public int VoiceId;
+            public long PartStartSample;
+            public long PartEndSample;
+            public LoopPlaybackPlan? LoopPlan;
+            public bool ExitPlaying;
+            public long ExitStartSample;
+            public long ExitEndSample;
+            public bool Active;
+            public bool FadeInPlaying;
+            public bool FadeOutPlaying;
+            public long FadeFramesRead;
+            public int FadeFrameCount;
+        }
     }
 }
 

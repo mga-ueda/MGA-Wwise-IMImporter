@@ -444,7 +444,7 @@ partial class Form1
         logAreaPanel.Controls.Add(logEditorPanel);
         logAreaPanel.Controls.Add(rightSidePanel);
         //
-        // rightSidePanel??????Playlist????????????????
+        // rightSidePanel（右端）。Playlist／遷移設定などを縦に積む。
         //
         rightSidePanel.Dock = DockStyle.Right;
         rightSidePanel.Name = "rightSidePanel";
@@ -1037,7 +1037,7 @@ partial class Form1
         playlistListLayout.DragEnter += EditorTextBox_DragEnter;
         playlistListLayout.DragDrop += EditorTextBox_DragDrop;
         //
-        // actionBar?????????????????
+        // actionBar（下部）。クリア／リロード／EXPORT など。
         //
         actionBar.Dock = DockStyle.Bottom;
         actionBar.Height = 44;

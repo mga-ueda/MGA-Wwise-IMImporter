@@ -166,6 +166,23 @@ public partial class Form1 : Form, IMessageFilter
     private int? _activeAutomaticPlaylistPartNumber;
     private int? _requestedPlaylistPartNumber;
     private int? _manualPlaylistPartNumber;
+
+    /// <summary>自動再生中の Playlist パート番号（クロック＋上乗せ。最大 8）。</summary>
+    private readonly HashSet<int> _playingPlaylistPartNumbers = [];
+    private readonly int[] _overlayVoiceIdScratch = new int[WaveAudioPlayer.MaxPlaylistVoices];
+    private readonly double[] _overlayProgressScratch = new double[WaveAudioPlayer.MaxPlaylistVoices];
+    private readonly double[] _overlayExitProgressScratch = new double[WaveAudioPlayer.MaxPlaylistVoices];
+    private readonly double[] _overlayFadeOutProgressScratch = new double[WaveAudioPlayer.MaxPlaylistVoices];
+    private readonly HashSet<int> _playingPlaylistPartNumbersSyncScratch = [];
+
+    /// <summary>上乗せボイスの絶対進捗（0〜1）。WaveformView の追加シアンシーク用。</summary>
+    private readonly List<double> _overlayPlayheadProgresses = [];
+
+    /// <summary>上乗せボイスの -E 二重再生進捗（0〜1）。WaveformView の追加赤シーク用。</summary>
+    private readonly List<double> _overlayExitPlayheadProgresses = [];
+
+    /// <summary>Group Fade Out 中の上乗せ進捗（0〜1）。白シーク用。</summary>
+    private readonly List<double> _overlayFadeOutPlayheadProgresses = [];
     private int? _hoveredPlaylistPartNumber;
     private int? _hoveredPlaylistListPartNumber;
     private int? _lastAutoScrolledPlaylistPartNumber;
@@ -182,6 +199,8 @@ public partial class Form1 : Form, IMessageFilter
     private long _playlistTransitionGlowStartTickMs;
     private double _playlistTransitionGlowDurationMs;
     private double _playlistTransitionGlowLevel;
+    /// <summary>Alt+上乗せ／停止の塗り色フェード（part → 開始 tick／期間 ms／FadeIn）。</summary>
+    private readonly Dictionary<int, (long StartTickMs, double DurationMs, bool FadeIn)> _playlistHighlightFades = [];
     private double? _pendingWaveformScrollStart;
     /// <summary>Alt+矢印でのマーカー連続移動中は Persist を遅延する。</summary>
     private bool _pendingWaveOnlySessionPersist;
@@ -206,6 +225,8 @@ public partial class Form1 : Form, IMessageFilter
     private bool _playlistDisablePaintActive;
     private bool _playlistDisablePaintSetDisabled;
     private int? _playlistDisablePaintLastPartNumber;
+    /// <summary>Ctrl/Shift ドラッグ中は Playlist ツールチップを出さない。</summary>
+    private bool _playlistToolTipsSuspendedForPaint;
     private bool _suppressNextPlaylistClick;
     /// <summary>
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
@@ -377,6 +398,7 @@ public partial class Form1 : Form, IMessageFilter
                 WritePlaybackDiagnostic("playback.ended");
                 _resumePlaybackAfterBackwardSeek = false;
                 ClearPendingPlaylistUiTransition();
+                ClearPlaylistTransitionGlow();
                 ClearPlaylistPlaybackSelection();
                 _playheadTimer.Stop();
 
@@ -393,6 +415,7 @@ public partial class Form1 : Form, IMessageFilter
                 waveformView.SetExitPlayhead(null);
                 waveformView.SetFadeOutPlayhead(null);
                 waveformView.SetAnacrusisPlayhead(null);
+                waveformView.SetOverlayFadeOutPlayheads([]);
                 UpdateTransportPlaybackState();
                 UpdateTransportPosition();
                 ApplyPlaylistSelectorColors();
@@ -2767,12 +2790,15 @@ public partial class Form1 : Form, IMessageFilter
     /// </summary>
     private void UpdateGroupFadeRadioEnabled()
     {
-        var playingPart = _automaticPlaylistPlayback
-            ? _activeAutomaticPlaylistPartNumber
-            : _manualPlaylistPartNumber;
-        var enabled = playingPart is int part
-            && _playlistPartGroupIds.ContainsKey(part)
-            && !_disabledPlaylistPartNumbers.Contains(part);
+        // 上乗せ再生中は手動ハイライトへ落とさず、重ね状態を維持する。
+        IEnumerable<int> playingParts = _playingPlaylistPartNumbers.Count > 0
+            ? _playingPlaylistPartNumbers
+            : _manualPlaylistPartNumber is int manualPart
+                ? [manualPart]
+                : [];
+        var enabled = playingParts.Any(part =>
+            _playlistPartGroupIds.ContainsKey(part)
+            && !_disabledPlaylistPartNumbers.Contains(part));
 
         foreach (var radio in EnumerateGroupFadeRadios())
         {
@@ -3396,7 +3422,7 @@ public partial class Form1 : Form, IMessageFilter
             button.FlatAppearance.BorderColor =
                 UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
             var isAutomatic = _automaticPlaylistPlayback
-                && _activeAutomaticPlaylistPartNumber == part.Number;
+                && _playingPlaylistPartNumbers.Contains(part.Number);
             var isManual = !_automaticPlaylistPlayback
                 && _manualPlaylistPartNumber == part.Number;
             var isPending = _pendingPlaylistTransitionGeneration != 0
@@ -3410,6 +3436,17 @@ public partial class Form1 : Form, IMessageFilter
                     UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
                     _pendingPlaylistBlinkLevel);
                 button.ForeColor = UiColors.PlaylistActiveFore;
+            }
+            else if (TryGetPlaylistHighlightFadeLevel(part.Number, out var highlightFadeLevel))
+            {
+                // Alt+上乗せ／停止: Group Fade In/Out と同じ秒数で自動再生色を濃く／薄くする。
+                button.BackColor = BlendColor(
+                    back,
+                    UiColors.ForControlBack(UiColors.PlaylistAutoBack),
+                    highlightFadeLevel);
+                button.ForeColor = highlightFadeLevel > 0.2d
+                    ? UiColors.PlaylistActiveFore
+                    : UiColors.PlaylistDefaultFore;
             }
             else if (_audioPlayer.IsPlaying && (isAutomatic || isManual))
             {
@@ -3445,6 +3482,9 @@ public partial class Form1 : Form, IMessageFilter
             {
                 button.ForeColor = UiColors.LogError;
             }
+
+            // UserPaint では BackColor 変更だけでは再描画されないことがあるため Invalidate する。
+            button.Invalidate();
         }
 
         EnsureHighlightedPlaylistVisible();
@@ -4096,6 +4136,7 @@ public partial class Form1 : Form, IMessageFilter
         _hoveredPlaylistPartNumber = null;
         _hoveredPlaylistListPartNumber = null;
         _lastAutoScrolledPlaylistPartNumber = null;
+        ClearPlaylistOverlayState();
         if (clearSessionMemory)
         {
             ClearPlaylistDisableState();
@@ -4143,6 +4184,7 @@ public partial class Form1 : Form, IMessageFilter
         _playlistGroupPaintErase = false;
         _playlistGroupPaintGroupId = null;
         _playlistGroupPaintLastPartNumber = null;
+        ResumePlaylistToolTipsAfterPaint();
         // Sticky ID は Shift 押し続け中に残し、隙間を跨いだ再ドラッグでも同 ID を使う。
         if (_loadedPreview is { } preview)
         {
@@ -4159,6 +4201,34 @@ public partial class Form1 : Form, IMessageFilter
     {
         _playlistDisablePaintActive = false;
         _playlistDisablePaintLastPartNumber = null;
+        ResumePlaylistToolTipsAfterPaint();
+    }
+
+    /// <summary>グループ／無効ペイント中はホバーでツールチップが出ないよう一時停止する。</summary>
+    private void SuspendPlaylistToolTipsForPaint()
+    {
+        if (_playlistToolTipsSuspendedForPaint)
+        {
+            return;
+        }
+
+        _playlistToolTipsSuspendedForPaint = true;
+        playlistToolTip.Active = false;
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            playlistToolTip.Hide(control);
+        }
+    }
+
+    private void ResumePlaylistToolTipsAfterPaint()
+    {
+        if (!_playlistToolTipsSuspendedForPaint)
+        {
+            return;
+        }
+
+        _playlistToolTipsSuspendedForPaint = false;
+        playlistToolTip.Active = DarkToolTip.GlobalActive;
     }
 
     private void ClearPlaylistPlaybackSelection()
@@ -4167,8 +4237,23 @@ public partial class Form1 : Form, IMessageFilter
         _activeAutomaticPlaylistPartNumber = null;
         _requestedPlaylistPartNumber = null;
         _manualPlaylistPartNumber = null;
+        _playlistHighlightFades.Clear();
+        ClearPlaylistOverlayState();
         ApplyPlaylistSelectorColors();
         UpdateGroupFadeRadioEnabled();
+    }
+
+    /// <summary>上乗せ再生状態と追加シークバー表示をクリアする。</summary>
+    private void ClearPlaylistOverlayState()
+    {
+        _playingPlaylistPartNumbers.Clear();
+        _audioPlayer.ClearOverlayPlaylistVoices();
+        _overlayPlayheadProgresses.Clear();
+        _overlayExitPlayheadProgresses.Clear();
+        _overlayFadeOutPlayheadProgresses.Clear();
+        waveformView.SetOverlayPlayheads([]);
+        waveformView.SetOverlayExitPlayheads([]);
+        waveformView.SetOverlayFadeOutPlayheads([]);
     }
 
     private void AddPlaylistStatusLabel(string message)
@@ -4236,9 +4321,23 @@ public partial class Form1 : Form, IMessageFilter
         var modifiers = ModifierKeys;
         var ctrl = (modifiers & Keys.Control) == Keys.Control;
         var shift = (modifiers & Keys.Shift) == Keys.Shift;
+        var alt = (modifiers & Keys.Alt) == Keys.Alt;
+        if (alt && !ctrl && !shift)
+        {
+            _suppressNextPlaylistClick = sender is Button;
+            if (!_disabledPlaylistPartNumbers.Contains(part.Number))
+            {
+                ShowTransitionSettingsForPart(part.Number);
+                RequestPlaylistOverlayToggle(part);
+            }
+
+            return;
+        }
+
         if (ctrl && shift)
         {
             _suppressNextPlaylistClick = sender is Button;
+            SuspendPlaylistToolTipsForPaint();
             _playlistDisablePaintActive = true;
             _playlistDisablePaintSetDisabled =
                 !_disabledPlaylistPartNumbers.Contains(part.Number);
@@ -4266,6 +4365,7 @@ public partial class Form1 : Form, IMessageFilter
         }
 
         _suppressNextPlaylistClick = sender is Button;
+        SuspendPlaylistToolTipsForPaint();
         _playlistGroupPaintActive = true;
         _playlistGroupPaintErase = erase;
         _playlistGroupPaintLastPartNumber = null;
@@ -4656,15 +4756,486 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
 
+        // Keep overlays if Alt-layer playback is active.
+        if (_audioPlayer.ActiveOverlayPlaylistVoiceCount > 0
+            || _playingPlaylistPartNumbers.Count > 1)
+        {
+            return;
+        }
+
         _automaticPlaylistPlayback = false;
         _activeAutomaticPlaylistPartNumber = null;
         _requestedPlaylistPartNumber = null;
         _manualPlaylistPartNumber = partNumber;
+        ClearPlaylistOverlayState();
         WritePlaybackDiagnostic(
             "timeline.manual-part-changed",
             new { progress, partNumber });
         ApplyPlaylistSelectorColors();
         UpdateGroupFadeRadioEnabled();
+    }
+
+    /// <summary>パート番号から出力パートを取得する。無ければ null。</summary>
+    private WaveformOutputPart? TryGetOutputPart(int partNumber) =>
+        GetEffectiveOutputParts()
+            .Where(part => part.Number == partNumber)
+            .Select(part => (WaveformOutputPart?)part)
+            .FirstOrDefault();
+
+    /// <summary>進捗（0〜1）位置の出力パートを返す。</summary>
+    private WaveformOutputPart? TryGetOutputPartAtProgress(double progress)
+    {
+        if (_loadedPreview is not { } preview || preview.WavInfo.FrameCount <= 0)
+        {
+            return null;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        var sample = (long)Math.Clamp(
+            Math.Floor(Math.Clamp(progress, 0d, 1d) * frameCount),
+            0d,
+            Math.Max(0L, frameCount - 1));
+        return GetEffectiveOutputParts()
+            .Where(p => sample >= p.StartSampleOffset && sample < p.EndSampleOffset)
+            .Select(p => (WaveformOutputPart?)p)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// タイムライン上のクロック Playlist パートを解決する。
+    /// 自動再生中は追跡中パートを優先し、
+    /// 無ければプレイヘッド位置のパート（Space 再生からの採用など）を返す。
+    /// </summary>
+    private WaveformOutputPart? ResolveClockPlaylistPart()
+    {
+        var trackedNumber = _automaticPlaylistPlayback
+            ? _activeAutomaticPlaylistPartNumber
+            : _manualPlaylistPartNumber;
+        if (trackedNumber is int number && TryGetOutputPart(number) is { } trackedPart)
+        {
+            return trackedPart;
+        }
+
+        return TryGetOutputPartAtProgress(_smoothProgress);
+    }
+
+    /// <summary>
+    /// グループ内 Alt+クリック: 再生中があれば上乗せ／再クリックで個別停止。
+    /// 同一グループで既に再生中のときだけ上乗せ可能。
+    /// 上乗せは Same Time 相対で Group Fade In を適用する。
+    /// 通常クリック遷移は <see cref="RequestPlaylistPlayback"/> を使う。
+    /// </summary>
+    private void RequestPlaylistOverlayToggle(WaveformOutputPart target)
+    {
+        if (_loadedPreview is not { } preview
+            || !_audioPlayer.HasSource
+            || !_audioPlayer.IsPlaying
+            || preview.WavInfo.FrameCount <= 0
+            || _disabledPlaylistPartNumbers.Contains(target.Number))
+        {
+            return;
+        }
+
+        // FadeOut 中も Active のままなので、集合から外れていても再 Alt は停止側へ。
+        if (IsPlaylistLayerVoiceActive(target.Number)
+            || _playingPlaylistPartNumbers.Contains(target.Number))
+        {
+            RequestPlaylistOverlayFadeOut(target);
+            return;
+        }
+
+        if (!_playlistPartGroupIds.TryGetValue(target.Number, out var targetGroupId)
+            || !TryEnsureOverlayClockContext(targetGroupId, out var clockPartNumber))
+        {
+            WritePlaybackDiagnostic(
+                "playlist.overlay-ignored-no-clock",
+                new { target = target.Number });
+            return;
+        }
+
+        if (clockPartNumber == target.Number)
+        {
+            ApplyPlaylistSelectorColors();
+            UpdateGroupFadeRadioEnabled();
+            return;
+        }
+
+        var fadeInSeconds = ResolveGroupFadeInSeconds(target.Number);
+        if (!_audioPlayer.TryAddOverlayPlaylistVoice(
+                target.Number,
+                target.StartSampleOffset,
+                target.EndSampleOffset,
+                fadeInSeconds,
+                out var rejectReason))
+        {
+            WritePlaybackDiagnostic(
+                "playlist.overlay-add-rejected",
+                new { target = target.Number, clock = clockPartNumber, reason = rejectReason });
+            return;
+        }
+
+        _automaticPlaylistPlayback = true;
+        _manualPlaylistPartNumber = null;
+        _activeAutomaticPlaylistPartNumber = clockPartNumber;
+        _playingPlaylistPartNumbers.Add(clockPartNumber);
+        _playingPlaylistPartNumbers.Add(target.Number);
+        if (fadeInSeconds > 0d)
+        {
+            StartPlaylistHighlightFade(target.Number, fadeInSeconds, fadeIn: true);
+        }
+        else
+        {
+            _playlistHighlightFades.Remove(target.Number);
+        }
+
+        UpdateOverlayPlayheads(recordTrail: false);
+        ApplyPlaylistSelectorColors();
+        UpdateGroupFadeRadioEnabled();
+        StartPlaylistTransitionGlow(target.Number);
+        WritePlaybackDiagnostic(
+            "playlist.overlay-added",
+            new { target = target.Number, clock = clockPartNumber, fadeInSeconds });
+    }
+
+    /// <summary>Alt+クリックで指定 Playlist ボイスだけ Group Fade Out する。</summary>
+    private void RequestPlaylistOverlayFadeOut(WaveformOutputPart target)
+    {
+        var fadeOutSeconds = ResolveGroupFadeOutSeconds(target.Number);
+        if (_audioPlayer.HasClockPlaylistRange
+            && _audioPlayer.GetClockPlaylistVoiceId() == target.Number)
+        {
+            if (!_audioPlayer.TryFadeOutClockPlaylistVoice(
+                    fadeOutSeconds,
+                    out var promotedVoiceId,
+                    out var playbackWillEnd))
+            {
+                return;
+            }
+
+            if (promotedVoiceId is int promoted)
+            {
+                _automaticPlaylistPlayback = true;
+                _activeAutomaticPlaylistPartNumber = promoted;
+                _manualPlaylistPartNumber = null;
+                // 昇格後は音声位置が別パートへ飛ぶため、UI プレイヘッドを追従させる。
+                SyncUiPlayheadToCurrentMainSample();
+            }
+
+            SyncPlayingPlaylistPartNumbersFromPlayer();
+            WritePlaybackDiagnostic(
+                "playlist.overlay-clock-fade-out",
+                new { target = target.Number, promotedVoiceId, playbackWillEnd, fadeOutSeconds });
+        }
+        else
+        {
+            if (!_audioPlayer.TryFadeOutOverlayPlaylistVoice(target.Number, fadeOutSeconds))
+            {
+                return;
+            }
+
+            // FadeOut 完了までは Active のまま。集合はプレイヤー状態に同期する。
+            SyncPlayingPlaylistPartNumbersFromPlayer();
+            WritePlaybackDiagnostic(
+                "playlist.overlay-fade-out",
+                new { target = target.Number, fadeOutSeconds });
+        }
+
+        if (fadeOutSeconds > 0d)
+        {
+            StartPlaylistHighlightFade(target.Number, fadeOutSeconds, fadeIn: false);
+        }
+        else
+        {
+            _playlistHighlightFades.Remove(target.Number);
+        }
+
+        ApplyPlaylistSelectorColors();
+        UpdateGroupFadeRadioEnabled();
+        StartPlaylistTransitionGlow(target.Number);
+    }
+
+    /// <summary>
+    /// Alt+上乗せ／停止時、プレイリスト着色を Group Fade In/Out 秒数で濃く／薄くする。
+    /// </summary>
+    private void StartPlaylistHighlightFade(int partNumber, double seconds, bool fadeIn)
+    {
+        if (seconds <= 0d)
+        {
+            _playlistHighlightFades.Remove(partNumber);
+            return;
+        }
+
+        _playlistHighlightFades[partNumber] = (
+            Environment.TickCount64,
+            seconds * 1000d,
+            fadeIn);
+    }
+
+    /// <summary>着色フェードの強度（0=消灯 … 1=濃い）。進行中のみ true。</summary>
+    private bool TryGetPlaylistHighlightFadeLevel(int partNumber, out double level)
+    {
+        level = 0d;
+        if (!_playlistHighlightFades.TryGetValue(partNumber, out var fade))
+        {
+            return false;
+        }
+
+        var elapsed = Math.Max(0L, Environment.TickCount64 - fade.StartTickMs);
+        var t = Math.Clamp(elapsed / Math.Max(1d, fade.DurationMs), 0d, 1d);
+        if (t >= 1d)
+        {
+            _playlistHighlightFades.Remove(partNumber);
+            return false;
+        }
+
+        level = fade.FadeIn ? t : 1d - t;
+        return true;
+    }
+
+    /// <summary>着色フェードを進め、完了分を除去して再描画する。</summary>
+    private void UpdatePlaylistHighlightFades()
+    {
+        if (_playlistHighlightFades.Count == 0)
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        List<int>? completed = null;
+        foreach (var (partNumber, fade) in _playlistHighlightFades)
+        {
+            if (now - fade.StartTickMs < fade.DurationMs)
+            {
+                continue;
+            }
+
+            completed ??= [];
+            completed.Add(partNumber);
+        }
+
+        if (completed is not null)
+        {
+            foreach (var partNumber in completed)
+            {
+                _playlistHighlightFades.Remove(partNumber);
+            }
+        }
+
+        ApplyPlaylistSelectorColors();
+    }
+
+    /// <summary>Provider のメイン再生位置へ UI プレイヘッド／アンカーを合わせる。</summary>
+    private void SyncUiPlayheadToCurrentMainSample()
+    {
+        if (_loadedPreview is not { } preview || preview.WavInfo.FrameCount <= 0)
+        {
+            return;
+        }
+
+        var progress = Math.Clamp(
+            _audioPlayer.CurrentMainSample / (double)preview.WavInfo.FrameCount,
+            0d,
+            1d);
+        AnchorPlayhead(progress);
+        _smoothProgress = progress;
+        waveformView.ClearPlayheadTrail();
+        waveformView.SetPlayhead(progress, recordTrail: false, ensureVisible: true);
+        _audioPlayer.ArmLoopAtProgress(progress);
+    }
+
+    /// <summary>クロック／上乗せボイスが再生（FadeOut 中含む）中か。</summary>
+    private bool IsPlaylistLayerVoiceActive(int partNumber)
+    {
+        if (_audioPlayer.HasClockPlaylistRange
+            && _audioPlayer.GetClockPlaylistVoiceId() == partNumber)
+        {
+            return true;
+        }
+
+        return _audioPlayer.HasOverlayPlaylistVoice(partNumber);
+    }
+
+    /// <summary>再生中 Playlist 集合を音声側の Active ボイスに合わせる。</summary>
+    private bool SyncPlayingPlaylistPartNumbersFromPlayer()
+    {
+        _playingPlaylistPartNumbersSyncScratch.Clear();
+        if (_audioPlayer.HasClockPlaylistRange)
+        {
+            var clockId = _audioPlayer.GetClockPlaylistVoiceId();
+            if (clockId != 0)
+            {
+                _playingPlaylistPartNumbersSyncScratch.Add(clockId);
+            }
+        }
+
+        var overlayCount = _audioPlayer.CopyActiveOverlayPlaylistVoiceIds(_overlayVoiceIdScratch);
+        for (var i = 0; i < overlayCount; i++)
+        {
+            _playingPlaylistPartNumbersSyncScratch.Add(_overlayVoiceIdScratch[i]);
+        }
+
+        if (_playingPlaylistPartNumbers.SetEquals(_playingPlaylistPartNumbersSyncScratch))
+        {
+            return false;
+        }
+
+        _playingPlaylistPartNumbers.Clear();
+        foreach (var id in _playingPlaylistPartNumbersSyncScratch)
+        {
+            _playingPlaylistPartNumbers.Add(id);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 上乗せのためのクロック Playlist 範囲を確保する。
+    /// 既に Provider にクロックがあればそれを使い、
+    /// 無ければ Space 再生などから現在パートをクロックとして採用する。
+    /// </summary>
+    private bool TryEnsureOverlayClockContext(int groupId, out int clockPartNumber)
+    {
+        clockPartNumber = 0;
+        if (!_audioPlayer.HasSource || !_audioPlayer.IsPlaying)
+        {
+            return false;
+        }
+
+        // 1) Provider 側に既にクロック Playlist 範囲がある場合
+        if (_audioPlayer.HasClockPlaylistRange)
+        {
+            var existingVoiceId = _audioPlayer.GetClockPlaylistVoiceId();
+            WaveformOutputPart? existingPart = existingVoiceId != 0
+                ? TryGetOutputPart(existingVoiceId)
+                : null;
+            existingPart ??= _activeAutomaticPlaylistPartNumber is int active
+                ? TryGetOutputPart(active)
+                : null;
+            existingPart ??= ResolveClockPlaylistPart();
+
+            if (existingPart is { } clock
+                && _playlistPartGroupIds.TryGetValue(clock.Number, out var existingGroupId)
+                && existingGroupId == groupId)
+            {
+                if (existingVoiceId == 0)
+                {
+                    _audioPlayer.SetClockPlaylistVoiceId(clock.Number);
+                }
+
+                clockPartNumber = clock.Number;
+                _automaticPlaylistPlayback = true;
+                _activeAutomaticPlaylistPartNumber = clock.Number;
+                _manualPlaylistPartNumber = null;
+                _playingPlaylistPartNumbers.Add(clock.Number);
+                return true;
+            }
+        }
+
+        // 2) Space 再生など: 現在位置のパートをクロックとして採用する
+        if (ResolveClockPlaylistPart() is not { } sourcePart
+            || !_playlistPartGroupIds.TryGetValue(sourcePart.Number, out var clockGroupId)
+            || clockGroupId != groupId)
+        {
+            return false;
+        }
+
+        if (!_audioPlayer.TryAdoptClockPlaylistRange(
+                sourcePart.StartSampleOffset,
+                sourcePart.EndSampleOffset,
+                sourcePart.Number))
+        {
+            // ソフト採用: UI と実サンプルが僅かにずれていてもクロック範囲は載せる。
+            if (_activeAutomaticPlaylistPartNumber == sourcePart.Number
+                || _manualPlaylistPartNumber == sourcePart.Number)
+            {
+                _audioPlayer.SetClockPlaylistVoiceId(sourcePart.Number);
+                if (!_audioPlayer.TryAdoptClockPlaylistRange(
+                        sourcePart.StartSampleOffset,
+                        sourcePart.EndSampleOffset,
+                        sourcePart.Number))
+                {
+                    WritePlaybackDiagnostic(
+                        "playlist.overlay-adopt-rejected",
+                        new
+                        {
+                            part = sourcePart.Number,
+                            start = sourcePart.StartSampleOffset,
+                            end = sourcePart.EndSampleOffset,
+                        });
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        _automaticPlaylistPlayback = true;
+        _activeAutomaticPlaylistPartNumber = sourcePart.Number;
+        _manualPlaylistPartNumber = null;
+        _playingPlaylistPartNumbers.Add(sourcePart.Number);
+        clockPartNumber = sourcePart.Number;
+        return true;
+    }
+
+    /// <summary>
+    /// 通常遷移前に上乗せを Group Fade Out し、同一グループでは N→1 にする。
+    /// グループ外遷移時も上乗せを止めてから従来どおり遷移する。
+    /// </summary>
+    private void FadeOutPlayingGroupOverlays(double fadeOutSeconds)
+    {
+        var count = _audioPlayer.CopyActiveOverlayPlaylistVoiceIds(_overlayVoiceIdScratch);
+        if (count == 0)
+        {
+            return;
+        }
+
+        _audioPlayer.FadeOutAllOverlayPlaylistVoices(fadeOutSeconds);
+        if (SyncPlayingPlaylistPartNumbersFromPlayer())
+        {
+            ApplyPlaylistSelectorColors();
+        }
+
+        WritePlaybackDiagnostic(
+            "playlist.overlay-fade-out-all",
+            new { fadeOutSeconds, voiceCount = count });
+    }
+
+    /// <summary>上乗せシアン／白 FO／-E 赤シークを WaveformView へ反映する。</summary>
+    private void UpdateOverlayPlayheads(bool recordTrail)
+    {
+        if (SyncPlayingPlaylistPartNumbersFromPlayer())
+        {
+            ApplyPlaylistSelectorColors();
+        }
+
+        var voiceCount = _audioPlayer.CopyOverlayPlaylistVoiceProgresses(_overlayProgressScratch);
+        _overlayPlayheadProgresses.Clear();
+        for (var i = 0; i < voiceCount; i++)
+        {
+            _overlayPlayheadProgresses.Add(_overlayProgressScratch[i]);
+        }
+
+        waveformView.SetOverlayPlayheads(_overlayPlayheadProgresses, recordTrail);
+
+        var fadeOutCount = _audioPlayer.CopyOverlayFadeOutProgresses(_overlayFadeOutProgressScratch);
+        _overlayFadeOutPlayheadProgresses.Clear();
+        for (var i = 0; i < fadeOutCount; i++)
+        {
+            _overlayFadeOutPlayheadProgresses.Add(_overlayFadeOutProgressScratch[i]);
+        }
+
+        waveformView.SetOverlayFadeOutPlayheads(_overlayFadeOutPlayheadProgresses, recordTrail);
+
+        var exitCount = _audioPlayer.CopyOverlayExitProgresses(_overlayExitProgressScratch);
+        _overlayExitPlayheadProgresses.Clear();
+        for (var i = 0; i < exitCount; i++)
+        {
+            _overlayExitPlayheadProgresses.Add(_overlayExitProgressScratch[i]);
+        }
+
+        waveformView.SetOverlayExitPlayheads(_overlayExitPlayheadProgresses, recordTrail);
     }
 
     private void RequestPlaylistPlayback(WaveformOutputPart target)
@@ -4692,7 +5263,8 @@ public partial class Form1 : Form, IMessageFilter
         {
             ClearPendingPlaylistUiTransition();
             _audioPlayer.CancelPlaylistTransition();
-            if (!_audioPlayer.StartPlaylistRange(target.StartSampleOffset, target.EndSampleOffset))
+            _audioPlayer.ClearOverlayPlaylistVoices();
+            if (!_audioPlayer.StartPlaylistRange(target.StartSampleOffset, target.EndSampleOffset, target.Number))
             {
                 WritePlaybackDiagnostic(
                     "playlist.immediate-start-rejected",
@@ -4705,6 +5277,12 @@ public partial class Form1 : Form, IMessageFilter
             _activeAutomaticPlaylistPartNumber = target.Number;
             _requestedPlaylistPartNumber = null;
             _manualPlaylistPartNumber = null;
+            _playingPlaylistPartNumbers.Clear();
+            _playingPlaylistPartNumbers.Add(target.Number);
+            _overlayPlayheadProgresses.Clear();
+            _overlayExitPlayheadProgresses.Clear();
+            waveformView.SetOverlayPlayheads([]);
+            waveformView.SetOverlayExitPlayheads([]);
             var progress = target.StartSampleOffset / (double)frameCount;
             _lastPlaybackStartProgress = progress;
             AnchorPlayhead(progress);
@@ -4732,12 +5310,55 @@ public partial class Form1 : Form, IMessageFilter
         var outputParts = GetEffectiveOutputParts();
         var regions = GetEffectiveRegions();
         var markers = _previewSession?.EffectiveMarkers ?? preview.Markers;
-        var currentPart = outputParts
-            .Where(p => currentSample >= p.StartSampleOffset && currentSample < p.EndSampleOffset)
-            .Select(p => (WaveformOutputPart?)p)
-            .FirstOrDefault();
+        var currentPart = ResolveClockPlaylistPart()
+            ?? outputParts
+                .Where(p => currentSample >= p.StartSampleOffset && currentSample < p.EndSampleOffset)
+                .Select(p => (WaveformOutputPart?)p)
+                .FirstOrDefault();
         var currentPartStart = currentPart?.StartSampleOffset ?? 0L;
         var currentPartEnd = currentPart?.EndSampleOffset ?? frameCount;
+
+        var clockVoiceId = _audioPlayer.GetClockPlaylistVoiceId();
+        var targetIsCurrentClock = clockVoiceId != 0
+            ? clockVoiceId == target.Number
+            : currentPart?.Number == target.Number;
+
+        // 重ね再生中にクロック自身へ通常クリック: 上乗せだけ FO して N→1。自己遷移はしない。
+        if (targetIsCurrentClock)
+        {
+            var destinationSyncModeForCollapse =
+                ResolvePlaylistDestinationSyncMode(currentPart, target);
+            var hadOverlays = _audioPlayer.ActiveOverlayPlaylistVoiceCount > 0;
+            if (hadOverlays)
+            {
+                FadeOutPlayingGroupOverlays(
+                    ResolveTransitionFadeSeconds(target.Number, destinationSyncModeForCollapse)
+                        .FadeOutSeconds);
+                _automaticPlaylistPlayback = true;
+                _activeAutomaticPlaylistPartNumber = target.Number;
+                _manualPlaylistPartNumber = null;
+                _requestedPlaylistPartNumber = null;
+                SyncPlayingPlaylistPartNumbersFromPlayer();
+                ApplyPlaylistSelectorColors();
+                UpdateGroupFadeRadioEnabled();
+                WritePlaybackDiagnostic(
+                    "playlist.overlays-collapsed-to-clock",
+                    new { target = target.Number });
+                return;
+            }
+
+            _requestedPlaylistPartNumber = null;
+            ApplyPlaylistSelectorColors();
+            UpdateGroupFadeRadioEnabled();
+            WritePlaybackDiagnostic(
+                "playlist.request-ignored-already-clock",
+                new { target = target.Number });
+            return;
+        }
+
+        var destinationSyncMode = ResolvePlaylistDestinationSyncMode(currentPart, target);
+        FadeOutPlayingGroupOverlays(
+            ResolveTransitionFadeSeconds(target.Number, destinationSyncMode).FadeOutSeconds);
 
         var transitionLimit = currentPartEnd;
         var hasActiveLoop = _audioPlayer.TryGetActiveLoopProgress(
@@ -4752,7 +5373,6 @@ public partial class Form1 : Form, IMessageFilter
             }
         }
 
-        var destinationSyncMode = ResolvePlaylistDestinationSyncMode(currentPart, target);
         var anacrusisFrames =
             destinationSyncMode == PlaylistDestinationSyncMode.EntryCue
                 ? GetLeadingAnacrusisFrameCount(regions, target)
@@ -5202,6 +5822,20 @@ public partial class Form1 : Form, IMessageFilter
                 .FirstOrDefault();
         _automaticPlaylistPlayback = true;
         _manualPlaylistPartNumber = null;
+
+        // 遷移 UI 確定時は上乗せをクリアし、クロックを遷移先パートに合わせる。
+        _playingPlaylistPartNumbers.Clear();
+        if (_activeAutomaticPlaylistPartNumber is int committedPartNumber)
+        {
+            _playingPlaylistPartNumbers.Add(committedPartNumber);
+            _audioPlayer.SetClockPlaylistVoiceId(committedPartNumber);
+        }
+
+        _audioPlayer.ClearOverlayPlaylistVoices();
+        _overlayPlayheadProgresses.Clear();
+        _overlayExitPlayheadProgresses.Clear();
+        waveformView.SetOverlayPlayheads([]);
+        waveformView.SetOverlayExitPlayheads([]);
         ApplyPlaylistSelectorColors();
         WritePlaybackDiagnostic(
             "playlist.transition-ui-committed",
@@ -5337,11 +5971,12 @@ public partial class Form1 : Form, IMessageFilter
         return true;
     }
 
-    private void StartPlaylistTransitionGlow()
+    private void StartPlaylistTransitionGlow(int? partNumberOverride = null)
     {
-        var activePartNumber = _automaticPlaylistPlayback
-            ? _activeAutomaticPlaylistPartNumber
-            : _manualPlaylistPartNumber;
+        var activePartNumber = partNumberOverride
+            ?? (_automaticPlaylistPlayback
+                ? _activeAutomaticPlaylistPartNumber
+                : _manualPlaylistPartNumber);
         if (activePartNumber is not int partNumber)
         {
             ApplyPlaylistSelectorColors();
@@ -5360,7 +5995,8 @@ public partial class Form1 : Form, IMessageFilter
         }
         else
         {
-            _playlistTransitionGlowDurationMs = 500d;
+            // テンポ同期が取れない場合は 1 秒でフェードアウト。
+            _playlistTransitionGlowDurationMs = 1000d;
         }
 
         _playlistTransitionGlowLevel = 1d;
@@ -5419,7 +6055,6 @@ public partial class Form1 : Form, IMessageFilter
         }
         catch (Exception)
         {
-            // アイコン読み込み失敗は致命的でないため既定アイコンのまま続行する。
         }
     }
 
@@ -8497,6 +9132,7 @@ public partial class Form1 : Form, IMessageFilter
             new { requestedProgress = progress });
         _audioPlayer.CancelPlaylistTransition();
         ClearPendingPlaylistUiTransition();
+        ClearPlaylistOverlayState();
         var clamped = Math.Clamp(progress, 0d, 1d);
         SetManualPlaylistHighlight(clamped);
         _audioPlayer.Seek(clamped);
@@ -8631,14 +9267,32 @@ public partial class Form1 : Form, IMessageFilter
                 SetManualPlaylistHighlight(_smoothProgress);
             }
 
-            waveformView.SetPlayhead(_smoothProgress, recordTrail: true);
+            var clockFadeOutActive = _audioPlayer.TryGetClockFadeOutPlaybackProgress(
+                out var clockFadeProgress);
+            if (clockFadeOutActive)
+            {
+                // Alt で最終クロックを FO 中: 主シークは白（遷移元フェードと同系）。
+                waveformView.SetPlayhead(null);
+                waveformView.SetFadeOutPlayhead(
+                    clockFadeProgress,
+                    recordTrail: true,
+                    isExit: false);
+            }
+            else
+            {
+                waveformView.SetPlayhead(_smoothProgress, recordTrail: true);
+            }
+
+            UpdateOverlayPlayheads(recordTrail: true);
+            UpdatePlaylistHighlightFades();
             double? targetExitProgress = null;
             if (_audioPlayer.TryGetExitPlaybackProgress(out var exitProgress))
             {
                 targetExitProgress = exitProgress;
             }
 
-            if (_audioPlayer.TryGetPlaylistFadePlaybackProgress(
+            if (!clockFadeOutActive
+                && _audioPlayer.TryGetPlaylistFadePlaybackProgress(
                     out var fadeProgress,
                     out var fadeReachedExit))
             {
@@ -8647,7 +9301,7 @@ public partial class Form1 : Form, IMessageFilter
                     recordTrail: true,
                     isExit: fadeReachedExit);
             }
-            else
+            else if (!clockFadeOutActive)
             {
                 waveformView.SetFadeOutPlayhead(null);
             }
@@ -8659,6 +9313,7 @@ public partial class Form1 : Form, IMessageFilter
         else
         {
             waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
+            UpdateOverlayPlayheads(recordTrail: false);
             waveformView.SetExitPlayhead(null);
             waveformView.SetFadeOutPlayhead(null);
         }
@@ -8734,89 +9389,63 @@ public partial class Form1 : Form, IMessageFilter
         _smoothProgress = _anchorProgress;
     }
 
+#if DEBUG
+    /// <summary>
+    /// [LayerSeek] 重ね再生／遷移のアクションだけを出す（N→1 含む）。
+    /// シーク位置の毎フレーム更新は出さない（UpdatePlayhead 連打防止）。
+    /// audio.engine など低レベル診断は含めない。
+    /// </summary>
+    private static readonly string[] LayerSeekEventPrefixes =
+    [
+        "playlist.overlay-",
+        "playlist.transition-",
+    ];
+
+    /// <summary>接頭辞以外で LayerSeek に含めるイベント名。</summary>
+    private static readonly HashSet<string> LayerSeekExactEvents = new(StringComparer.Ordinal)
+    {
+        "playlist.immediate-started",
+        "playback.ended",
+        "diagnostic.enabled",
+    };
+
+    private static bool IsLayerSeekDiagnosticEvent(string eventName) =>
+        LayerSeekExactEvents.Contains(eventName)
+        || Array.Exists(
+            LayerSeekEventPrefixes,
+            prefix => eventName.StartsWith(prefix, StringComparison.Ordinal));
+#endif
+
     private void WritePlaybackDiagnostic(string eventName, object? data = null)
     {
 #if DEBUG
-        if (!detailedLogCheckBox.Checked || IsDisposed)
+        if (!detailedLogCheckBox.Checked || IsDisposed || !IsLayerSeekDiagnosticEvent(eventName))
         {
             return;
         }
 
-        var activePartNumber = _automaticPlaylistPlayback
-            ? _activeAutomaticPlaylistPartNumber
-            : _manualPlaylistPartNumber;
-        var activePart = _loadedPreview?.OutputParts
-            .Where(part => part.Number == activePartNumber)
-            .Select(part => (WaveformOutputPart?)part)
-            .FirstOrDefault();
-        var frameCount = _loadedPreview?.WavInfo.FrameCount ?? 0L;
-        var smoothSample = frameCount > 0
-            ? (long)Math.Clamp(
-                Math.Floor(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount),
-                0d,
-                Math.Max(0L, frameCount - 1))
-            : 0L;
-        var hasLoop = _audioPlayer.TryGetActiveLoopProgress(out var loopStart, out var loopEnd);
         var envelope = new
         {
-            schema = "mga.playback-debug.v1",
+            schema = "mga.layer-seek.v2",
             sequence = Interlocked.Increment(ref _diagnosticSequence),
             utc = DateTimeOffset.UtcNow.ToString("O"),
-            tickMs = Environment.TickCount64,
             @event = eventName,
-            state = new
+            seeks = new
             {
-                source = _loadedPreview?.SourcePath,
-                audioPlaying = _audioPlayer.IsPlaying,
-                audioHasSource = _audioPlayer.HasSource,
-                smoothProgress = Math.Round(_smoothProgress, 9),
-                smoothSample,
-                frameCount,
-                activePart = activePart?.Number,
-                activeFile = activePart?.FileName,
-                requestedPart = _requestedPlaylistPartNumber,
-                automaticPlaylist = _automaticPlaylistPlayback,
-                transitionFadeInSeconds = (_transitionSettingsEditPartNumber is int fadeInPart
-                        ? ResolveFadeInSeconds(fadeInPart)
-                        : _playlistFadeInSeconds),
-                transitionFadeIn = PlaylistUiNames.ToFadeUiName(
-                    _transitionSettingsEditPartNumber is int fadeInPart2
-                        ? ResolveFadeInSeconds(fadeInPart2)
-                        : _playlistFadeInSeconds,
-                    isFadeIn: true),
-                transitionFadeSeconds = (_transitionSettingsEditPartNumber is int fadeOutPart
-                        ? ResolveFadeOutSeconds(fadeOutPart)
-                        : _playlistFadeSeconds),
-                transitionFadeOut = PlaylistUiNames.ToFadeUiName(
-                    _transitionSettingsEditPartNumber is int fadeOutPart2
-                        ? ResolveFadeOutSeconds(fadeOutPart2)
-                        : _playlistFadeSeconds,
-                    isFadeIn: false),
-                exitSourceMode = (_transitionSettingsEditPartNumber is int editPart
-                        ? ResolveExitSourceMode(editPart)
-                        : _playlistExitSourceMode).ToUiName(),
-                exitSourceEditPart = _transitionSettingsEditPartNumber,
-                destinationSyncMode = "Automatic (same group: Same Time / otherwise: Entry Cue)",
-                markerGrid = _markerSettings.GridOverride.ToUiName(),
-                manualPart = _manualPlaylistPartNumber,
-                pendingGeneration = _pendingPlaylistTransitionGeneration,
-                pendingTriggerSample = _pendingPlaylistBoundarySample,
-                pendingSyncBoundarySample = _pendingPlaylistSyncBoundarySample,
-                pendingTargetSample = _pendingPlaylistTargetSample,
-                pendingTargetEntrySample = _pendingPlaylistTargetEntrySample,
-                pendingAudioStarted = _pendingPlaylistAudioStarted,
-                activeLoop = hasLoop
-                    ? new
-                    {
-                        startProgress = Math.Round(loopStart, 9),
-                        endProgress = Math.Round(loopEnd, 9),
-                    }
-                    : null,
+                cyanOverlays = _overlayPlayheadProgresses
+                    .Select(progress => Math.Round(progress, 6))
+                    .ToArray(),
+                redExitOverlays = _overlayExitPlayheadProgresses
+                    .Select(progress => Math.Round(progress, 6))
+                    .ToArray(),
+                clockVoiceId = _audioPlayer.GetClockPlaylistVoiceId(),
+                activeOverlayVoiceCount = _audioPlayer.ActiveOverlayPlaylistVoiceCount,
+                totalActiveVoiceCount = _audioPlayer.TotalActivePlaylistVoiceCount,
             },
             data,
         };
         AppendReport(
-            "[PlaybackDebug] "
+            "[LayerSeek] "
             + JsonSerializer.Serialize(envelope)
             + Environment.NewLine);
 #endif
@@ -9134,3 +9763,4 @@ public partial class Form1 : Form, IMessageFilter
         public short wBorders;
     }
 }
+

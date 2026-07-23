@@ -106,8 +106,8 @@ internal static class UiStrings
 
     // --- Action bar tooltips ---
     public static string TipDebugLog => Get(
-        "再生・操作の詳細な診断情報を画面ログへ出力します（開発用）。",
-        "Write detailed playback/diagnostics to the on-screen log (for development).");
+        "重ね再生／シークバーのアクションログ（AI 解析用 JSON）を出します。",
+        "Emit layered-playback / seekbar action logs (AI-oriented JSON).");
 
     public static string TipCompactFileNumbers => Get(
         "ON: 無効化した Playlist があっても、書き出す WAV の番号を 1 から詰めます。"

@@ -94,6 +94,12 @@ internal sealed class DarkToolTip : ToolTip
 
     private void OnPopup(object? sender, PopupEventArgs e)
     {
+        if (_respectsGlobalActive && !_globalActive)
+        {
+            e.Cancel = true;
+            return;
+        }
+
         ApplyOwnerDrawMode();
 
         var text = e.AssociatedControl is null
@@ -101,6 +107,7 @@ internal sealed class DarkToolTip : ToolTip
             : GetToolTip(e.AssociatedControl);
         if (string.IsNullOrEmpty(text))
         {
+            e.Cancel = true;
             return;
         }
 

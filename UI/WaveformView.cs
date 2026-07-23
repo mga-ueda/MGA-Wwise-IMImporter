@@ -178,6 +178,9 @@ internal sealed class WaveformView : Control
     private double? _playheadProgress;
     private readonly List<(double Progress, long TickMs)> _trailSamples = [];
     private bool _trailActive;
+    private readonly List<OverlayPlayheadState> _overlayPlayheads = [];
+    private readonly List<OverlayPlayheadState> _overlayExitPlayheads = [];
+    private readonly List<OverlayPlayheadState> _overlayFadeOutPlayheads = [];
     private double? _exitPlayheadProgress;
     private readonly List<(double Progress, long TickMs)> _exitTrailSamples = [];
     private bool _exitTrailActive;
@@ -534,6 +537,159 @@ internal sealed class WaveformView : Control
         if (ensureVisible)
         {
             EnsureAbsoluteVisible(clamped);
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// グループ重ね再生用の追加シアンシークバー。見た目は主シークバーと同一。
+    /// </summary>
+    public void SetOverlayPlayheads(
+        IReadOnlyList<double> progresses,
+        bool recordTrail = false)
+    {
+        if (progresses.Count == 0)
+        {
+            if (_overlayPlayheads.Count == 0)
+            {
+                return;
+            }
+
+            _overlayPlayheads.Clear();
+            Invalidate();
+            return;
+        }
+
+        while (_overlayPlayheads.Count < progresses.Count)
+        {
+            _overlayPlayheads.Add(new OverlayPlayheadState());
+        }
+
+        while (_overlayPlayheads.Count > progresses.Count)
+        {
+            _overlayPlayheads.RemoveAt(_overlayPlayheads.Count - 1);
+        }
+
+        for (var i = 0; i < progresses.Count; i++)
+        {
+            var clamped = Math.Clamp(progresses[i], 0d, 1d);
+            var state = _overlayPlayheads[i];
+            state.Progress = clamped;
+            state.TrailActive = recordTrail;
+            if (!recordTrail)
+            {
+                state.TrailSamples.Clear();
+                state.TrailActive = false;
+            }
+            else
+            {
+                var trailActive = state.TrailActive;
+                RecordTrailSample(clamped, state.TrailSamples, ref trailActive);
+                state.TrailActive = trailActive;
+            }
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// グループ重ね再生の Group Fade Out ヘッド（白）。見た目は遷移元フェードアウトと同じ。
+    /// </summary>
+    public void SetOverlayFadeOutPlayheads(
+        IReadOnlyList<double> progresses,
+        bool recordTrail = false)
+    {
+        if (progresses.Count == 0)
+        {
+            if (_overlayFadeOutPlayheads.Count == 0)
+            {
+                return;
+            }
+
+            _overlayFadeOutPlayheads.Clear();
+            Invalidate();
+            return;
+        }
+
+        while (_overlayFadeOutPlayheads.Count < progresses.Count)
+        {
+            _overlayFadeOutPlayheads.Add(new OverlayPlayheadState());
+        }
+
+        while (_overlayFadeOutPlayheads.Count > progresses.Count)
+        {
+            _overlayFadeOutPlayheads.RemoveAt(_overlayFadeOutPlayheads.Count - 1);
+        }
+
+        for (var i = 0; i < progresses.Count; i++)
+        {
+            var clamped = Math.Clamp(progresses[i], 0d, 1d);
+            var state = _overlayFadeOutPlayheads[i];
+            state.Progress = clamped;
+            state.TrailActive = recordTrail;
+            if (!recordTrail)
+            {
+                state.TrailSamples.Clear();
+                state.TrailActive = false;
+            }
+            else
+            {
+                var trailActive = state.TrailActive;
+                RecordTrailSample(clamped, state.TrailSamples, ref trailActive);
+                state.TrailActive = trailActive;
+            }
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// グループ重ね再生の -E 二重再生ヘッド（赤）。見た目は主 Exit シークバーと同一。
+    /// </summary>
+    public void SetOverlayExitPlayheads(
+        IReadOnlyList<double> progresses,
+        bool recordTrail = false)
+    {
+        if (progresses.Count == 0)
+        {
+            if (_overlayExitPlayheads.Count == 0)
+            {
+                return;
+            }
+
+            _overlayExitPlayheads.Clear();
+            Invalidate();
+            return;
+        }
+
+        while (_overlayExitPlayheads.Count < progresses.Count)
+        {
+            _overlayExitPlayheads.Add(new OverlayPlayheadState());
+        }
+
+        while (_overlayExitPlayheads.Count > progresses.Count)
+        {
+            _overlayExitPlayheads.RemoveAt(_overlayExitPlayheads.Count - 1);
+        }
+
+        for (var i = 0; i < progresses.Count; i++)
+        {
+            var clamped = Math.Clamp(progresses[i], 0d, 1d);
+            var state = _overlayExitPlayheads[i];
+            state.Progress = clamped;
+            state.TrailActive = recordTrail;
+            if (!recordTrail)
+            {
+                state.TrailSamples.Clear();
+                state.TrailActive = false;
+            }
+            else
+            {
+                var trailActive = state.TrailActive;
+                RecordTrailSample(clamped, state.TrailSamples, ref trailActive);
+                state.TrailActive = trailActive;
+            }
         }
 
         Invalidate();
@@ -1803,6 +1959,9 @@ internal sealed class WaveformView : Control
         _playheadProgress = null;
         _trailActive = false;
         ClearTrailSamples();
+        _overlayPlayheads.Clear();
+        _overlayExitPlayheads.Clear();
+        _overlayFadeOutPlayheads.Clear();
         ClearExitPlayhead();
         ClearAnacrusisPlayhead();
         ClearFadeOutPlayhead();
@@ -3412,6 +3571,16 @@ internal sealed class WaveformView : Control
         DrawPlaylistHoverOutline(g);
         DrawExportPartGlow(g, timeline);
         DrawPlayhead(g, timeline, _playheadProgress, _trailSamples, UiColors.SeekCyan);
+        foreach (var overlay in _overlayPlayheads)
+        {
+            DrawPlayhead(
+                g,
+                timeline,
+                overlay.Progress,
+                overlay.TrailSamples,
+                UiColors.SeekCyan);
+        }
+
         DrawPlayhead(
             g,
             timeline,
@@ -3420,7 +3589,27 @@ internal sealed class WaveformView : Control
             _fadeOutPlayheadIsExit
                 ? UiColors.SeekExit
                 : UiColors.SeekFadeOut);
+        foreach (var overlayFadeOut in _overlayFadeOutPlayheads)
+        {
+            DrawPlayhead(
+                g,
+                timeline,
+                overlayFadeOut.Progress,
+                overlayFadeOut.TrailSamples,
+                UiColors.SeekFadeOut);
+        }
+
         DrawPlayhead(g, timeline, _exitPlayheadProgress, _exitTrailSamples, UiColors.SeekExit);
+        foreach (var overlayExit in _overlayExitPlayheads)
+        {
+            DrawPlayhead(
+                g,
+                timeline,
+                overlayExit.Progress,
+                overlayExit.TrailSamples,
+                UiColors.SeekExit);
+        }
+
         DrawPlayhead(
             g,
             timeline,
@@ -6130,5 +6319,12 @@ internal sealed class WaveformView : Control
 
         using var pen = new Pen(UiColors.MouseGuide, 1f);
         g.DrawLine(pen, mx, content.Top, mx, content.Bottom);
+    }
+
+    private sealed class OverlayPlayheadState
+    {
+        public double Progress;
+        public bool TrailActive;
+        public readonly List<(double Progress, long TickMs)> TrailSamples = [];
     }
 }
