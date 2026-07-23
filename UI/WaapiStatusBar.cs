@@ -6,7 +6,11 @@ namespace MgaWwiseIMImporter.UI;
 internal sealed class WaapiStatusBar : Panel
 {
     private readonly Label _titleLabel;
-    private readonly Label _detailLabel;
+    private readonly Label _versionLabel;
+    private readonly Label _sepAfterVersion;
+    private readonly Label _projectNameLabel;
+    private readonly Label _sepAfterProject;
+    private readonly Label _pathLabel;
     private readonly TransportIconButton _keepLockButton;
     private readonly Label _keepStateLabel;
     private readonly DarkToolTip _toolTip = new();
@@ -23,6 +27,8 @@ internal sealed class WaapiStatusBar : Panel
     private bool _keepLockHovered;
     private bool _keepLockEnabled = true;
     private bool _showKeepLock;
+    private bool _projectNameClickable;
+    private bool _projectNameHovered;
 
     public WaapiStatusBar()
     {
@@ -41,15 +47,17 @@ internal sealed class WaapiStatusBar : Panel
             TabStop = false,
         };
 
-        _detailLabel = new Label
-        {
-            AutoSize = true,
-            AutoEllipsis = false,
-            Text = string.Empty,
-            Font = new Font("Yu Gothic UI", 9F),
-            Location = new Point(100, 7),
-            TabStop = false,
-        };
+        var detailFont = new Font("Yu Gothic UI", 9F);
+        _versionLabel = CreateDetailLabel(detailFont);
+        _sepAfterVersion = CreateDetailLabel(detailFont);
+        _sepAfterVersion.Text = " - ";
+        _projectNameLabel = CreateDetailLabel(detailFont);
+        _projectNameLabel.MouseEnter += ProjectNameLabel_MouseEnter;
+        _projectNameLabel.MouseLeave += ProjectNameLabel_MouseLeave;
+        _projectNameLabel.Click += ProjectNameLabel_Click;
+        _sepAfterProject = CreateDetailLabel(detailFont);
+        _sepAfterProject.Text = " - ";
+        _pathLabel = CreateDetailLabel(detailFont);
 
         _keepLockButton = new TransportIconButton(TransportIcon.Unlock)
         {
@@ -78,7 +86,11 @@ internal sealed class WaapiStatusBar : Panel
 
         Controls.Add(_keepStateLabel);
         Controls.Add(_keepLockButton);
-        Controls.Add(_detailLabel);
+        Controls.Add(_pathLabel);
+        Controls.Add(_sepAfterProject);
+        Controls.Add(_projectNameLabel);
+        Controls.Add(_sepAfterVersion);
+        Controls.Add(_versionLabel);
         Controls.Add(_titleLabel);
         Resize += (_, _) => LayoutLabels();
         Paint += OnPaint;
@@ -94,12 +106,16 @@ internal sealed class WaapiStatusBar : Panel
 
             UpdateKeepLockAppearance();
             _titleLabel.Text = UiStrings.WaapiTitle;
+            ApplyToolTips();
             LayoutLabels();
         };
     }
 
     /// <summary>Keep Target（鍵アイコン）の変更。</summary>
     public event EventHandler? KeepTargetChanged;
+
+    /// <summary>ロック中プロジェクト名のクリック（開く／前面化）。</summary>
+    public event EventHandler? ProjectNameClick;
 
     public bool KeepTargetChecked
     {
@@ -133,28 +149,52 @@ internal sealed class WaapiStatusBar : Panel
         BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
         _titleLabel.ForeColor = UiColors.StatusBarTitleFore;
         _titleLabel.BackColor = BackColor;
-        _detailLabel.BackColor = BackColor;
+        ApplyDetailLabelBackColors();
         _keepStateLabel.ForeColor = UiColors.StatusBarTitleFore;
         _keepStateLabel.BackColor = BackColor;
         ApplyKeepLockColors();
+        ApplyProjectNameColors();
 
         if (_badgeText == UiStrings.WaapiBadgeConnect)
         {
             SetBadgeConnected();
-            ApplyDetailForeColor(connected: true);
+            ApplyPathForeColor(connected: true);
         }
         else if (_badgeText == UiStrings.WaapiBadgeDisconnect)
         {
             SetBadgeDisconnected();
-            ApplyDetailForeColor(connected: false);
+            ApplyPathForeColor(connected: false);
         }
         else
         {
             SetBadgeNeutral();
-            _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
+            _pathLabel.ForeColor = UiColors.StatusBarTitleFore;
+            _versionLabel.ForeColor = UiColors.StatusBarTitleFore;
+            _sepAfterVersion.ForeColor = UiColors.StatusBarTitleFore;
+            _sepAfterProject.ForeColor = UiColors.StatusBarTitleFore;
         }
 
         Invalidate();
+    }
+
+    private static Label CreateDetailLabel(Font font) =>
+        new()
+        {
+            AutoSize = true,
+            AutoEllipsis = false,
+            Text = string.Empty,
+            Font = font,
+            TabStop = false,
+        };
+
+    private void ApplyDetailLabelBackColors()
+    {
+        var back = BackColor;
+        _versionLabel.BackColor = back;
+        _sepAfterVersion.BackColor = back;
+        _projectNameLabel.BackColor = back;
+        _sepAfterProject.BackColor = back;
+        _pathLabel.BackColor = back;
     }
 
     private void UpdateKeepLockAppearance()
@@ -199,6 +239,9 @@ internal sealed class WaapiStatusBar : Panel
         _toolTip.SetToolTip(
             _keepLockButton,
             _keepTargetChecked ? UiStrings.TipKeepTargetLock : UiStrings.TipKeepTargetUnlock);
+        _toolTip.SetToolTip(
+            _projectNameLabel,
+            _projectNameClickable ? UiStrings.TipWwiseProjectNameOpen : string.Empty);
     }
 
     private void KeepLockButton_Click(object? sender, EventArgs e)
@@ -210,6 +253,48 @@ internal sealed class WaapiStatusBar : Panel
 
         KeepTargetChecked = !KeepTargetChecked;
         KeepTargetChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ProjectNameLabel_Click(object? sender, EventArgs e)
+    {
+        if (!_projectNameClickable)
+        {
+            return;
+        }
+
+        ProjectNameClick?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ProjectNameLabel_MouseEnter(object? sender, EventArgs e)
+    {
+        if (!_projectNameClickable)
+        {
+            return;
+        }
+
+        _projectNameHovered = true;
+        ApplyProjectNameColors();
+    }
+
+    private void ProjectNameLabel_MouseLeave(object? sender, EventArgs e)
+    {
+        _projectNameHovered = false;
+        ApplyProjectNameColors();
+    }
+
+    private void ApplyProjectNameColors()
+    {
+        if (_projectNameClickable)
+        {
+            _projectNameLabel.ForeColor = _projectNameHovered
+                ? UiColors.ActionLinkHoverFore
+                : UiColors.ActionLinkFore;
+            _projectNameLabel.Cursor = Cursors.Hand;
+            return;
+        }
+
+        _projectNameLabel.ForeColor = UiColors.StatusBarDetailFore;
+        _projectNameLabel.Cursor = Cursors.Default;
     }
 
     private void SetBadgeConnected()
@@ -235,11 +320,33 @@ internal sealed class WaapiStatusBar : Panel
         _badgeFilled = false;
     }
 
-    private void ApplyDetailForeColor(bool connected)
+    private void ApplyPathForeColor(bool connected)
     {
-        _detailLabel.ForeColor = !connected || _selectionMissing
+        var error = !connected || _selectionMissing;
+        var fore = error
             ? UiColors.StatusBarErrorDetailFore
             : UiColors.StatusBarDetailFore;
+        _pathLabel.ForeColor = fore;
+        if (!_projectNameClickable)
+        {
+            // 接続詳細の区切り・版は通常色。パスだけエラー色にし得る。
+            var detailFore = connected ? UiColors.StatusBarDetailFore : UiColors.StatusBarErrorDetailFore;
+            _versionLabel.ForeColor = detailFore;
+            _sepAfterVersion.ForeColor = detailFore;
+            _sepAfterProject.ForeColor = detailFore;
+        }
+        else
+        {
+            _versionLabel.ForeColor = connected
+                ? UiColors.StatusBarDetailFore
+                : UiColors.StatusBarErrorDetailFore;
+            _sepAfterVersion.ForeColor = _versionLabel.ForeColor;
+            _sepAfterProject.ForeColor = connected
+                ? UiColors.StatusBarDetailFore
+                : UiColors.StatusBarErrorDetailFore;
+        }
+
+        ApplyProjectNameColors();
     }
 
     public void SetPending()
@@ -247,6 +354,7 @@ internal sealed class WaapiStatusBar : Panel
         _selectionMissing = false;
         _keepLockEnabled = false;
         _showKeepLock = false;
+        SetProjectNameClickable(false);
         _badgeText = "…";
         SetBadgeNeutral();
         SetPlainDetail(UiStrings.StatusChecking, UiColors.StatusBarTitleFore);
@@ -257,6 +365,7 @@ internal sealed class WaapiStatusBar : Panel
         _selectionMissing = false;
         _keepLockEnabled = false;
         _showKeepLock = false;
+        SetProjectNameClickable(false);
         _badgeText = "—";
         SetBadgeNeutral();
         SetPlainDetail(UiStrings.StatusStartupCheckOff, UiColors.StatusBarTitleFore);
@@ -269,18 +378,20 @@ internal sealed class WaapiStatusBar : Panel
         {
             _selectionMissing = !result.HasSelection;
             SetBadgeConnected();
-            ApplyDetailForeColor(connected: true);
-            SetConnectedDetail(
+            ApplyPathForeColor(connected: true);
+            SetStructuredDetail(
                 result.WwiseVersion,
                 result.ProjectName,
-                result.HasSelection ? result.SelectedPath : UiStrings.StatusNoneSelected);
+                result.HasSelection ? result.SelectedPath : UiStrings.StatusNoneSelected,
+                projectNameClickable: false);
         }
         else
         {
             _selectionMissing = false;
             _showKeepLock = false;
+            SetProjectNameClickable(false);
             SetBadgeDisconnected();
-            ApplyDetailForeColor(connected: false);
+            ApplyPathForeColor(connected: false);
             SetPlainDetail(
                 result.Message.Length > 0 ? result.Message : UiStrings.StatusDisconnected,
                 UiColors.StatusBarErrorDetailFore);
@@ -309,33 +420,97 @@ internal sealed class WaapiStatusBar : Panel
             ? selectedPath.Length == 0
             : string.IsNullOrEmpty(selectedPath);
         SetBadgeConnected();
-        ApplyDetailForeColor(connected: true);
-        SetConnectedDetail(
+        ApplyPathForeColor(connected: true);
+        SetStructuredDetail(
             wwiseVersion,
             projectName,
-            string.IsNullOrEmpty(selectedPath) ? UiStrings.StatusNoneSelected : selectedPath);
+            string.IsNullOrEmpty(selectedPath) ? UiStrings.StatusNoneSelected : selectedPath,
+            projectNameClickable: keepTarget && projectName.Length > 0);
+    }
+
+    /// <summary>
+    /// WAAPI 切断中でも Keep Target がオンなら、ロック中プロジェクト名と固定パスを維持表示する。
+    /// </summary>
+    public void UpdateDisconnectedKeepTarget(string projectName, string keptPath)
+    {
+        _keepLockEnabled = true;
+        if (!_keepTargetChecked)
+        {
+            _keepTargetChecked = true;
+            UpdateKeepLockAppearance();
+        }
+
+        _selectionMissing = keptPath.Length == 0;
+        _showKeepLock = true;
+        SetBadgeDisconnected();
+        // バッジで切断を示す。固定パス自体はエラー表示にしない。
+        _pathLabel.ForeColor = UiColors.StatusBarDetailFore;
+        _sepAfterVersion.ForeColor = UiColors.StatusBarDetailFore;
+        _sepAfterProject.ForeColor = UiColors.StatusBarDetailFore;
+        _versionLabel.ForeColor = UiColors.StatusBarDetailFore;
+        SetStructuredDetail(
+            wwiseVersion: string.Empty,
+            projectName,
+            string.IsNullOrEmpty(keptPath) ? UiStrings.StatusNoneSelected : keptPath,
+            projectNameClickable: projectName.Length > 0);
     }
 
     private void SetPlainDetail(string text, Color foreColor)
     {
         _showKeepLock = false;
-        _detailLabel.Text = text;
-        _detailLabel.ForeColor = foreColor;
+        _versionLabel.Text = string.Empty;
+        _versionLabel.Visible = false;
+        _sepAfterVersion.Visible = false;
+        _projectNameLabel.Text = string.Empty;
+        _projectNameLabel.Visible = false;
+        _sepAfterProject.Visible = false;
+        _pathLabel.Text = text;
+        _pathLabel.Visible = true;
+        _pathLabel.ForeColor = foreColor;
         LayoutLabels();
     }
 
-    private void SetConnectedDetail(string wwiseVersion, string projectName, string pathText)
+    private void SetStructuredDetail(
+        string wwiseVersion,
+        string projectName,
+        string pathText,
+        bool projectNameClickable)
     {
         _showKeepLock = true;
-        var parts = new List<string> { FormatDisplayVersion(wwiseVersion) };
-        if (projectName.Length > 0)
+        var hasVersion = !string.IsNullOrWhiteSpace(wwiseVersion);
+        if (hasVersion)
         {
-            parts.Add(projectName);
+            _versionLabel.Text = FormatDisplayVersion(wwiseVersion);
+            _versionLabel.Visible = true;
+        }
+        else
+        {
+            _versionLabel.Text = string.Empty;
+            _versionLabel.Visible = false;
         }
 
-        parts.Add(pathText);
-        _detailLabel.Text = string.Join(" - ", parts);
+        var hasProject = projectName.Length > 0;
+        _projectNameLabel.Text = projectName;
+        _projectNameLabel.Visible = hasProject;
+        // version の次は project または path。project の次は常に path。
+        _sepAfterVersion.Visible = hasVersion;
+        _sepAfterProject.Visible = hasProject;
+        _pathLabel.Text = pathText;
+        _pathLabel.Visible = true;
+        SetProjectNameClickable(projectNameClickable && hasProject);
         LayoutLabels();
+    }
+
+    private void SetProjectNameClickable(bool clickable)
+    {
+        _projectNameClickable = clickable;
+        if (!clickable)
+        {
+            _projectNameHovered = false;
+        }
+
+        ApplyProjectNameColors();
+        ApplyToolTips();
     }
 
     /// <summary>表示用に <c>Wwise v2024.1.6</c> 形式へ揃える。</summary>
@@ -445,14 +620,12 @@ internal sealed class WaapiStatusBar : Panel
         // 省略なし。全文＋末尾鍵＋状態ラベルをそのまま並べる。
         const int gapBeforeLock = 6;
         const int gapBeforeState = 2;
-        var detailX = _badgeFillBounds.Right + 12;
-        var detailSize = Measure(_detailLabel.Text, _detailLabel.Font);
-        _detailLabel.AutoSize = false;
-        _detailLabel.AutoEllipsis = false;
-        _detailLabel.Size = detailSize;
-        _detailLabel.Location = new Point(
-            detailX,
-            Math.Max(0, (ClientSize.Height - _detailLabel.Height) / 2));
+        var x = _badgeFillBounds.Right + 12;
+        x = PlaceDetailLabel(_versionLabel, x, Measure);
+        x = PlaceDetailLabel(_sepAfterVersion, x, Measure);
+        x = PlaceDetailLabel(_projectNameLabel, x, Measure);
+        x = PlaceDetailLabel(_sepAfterProject, x, Measure);
+        x = PlaceDetailLabel(_pathLabel, x, Measure);
 
         _keepLockButton.Visible = _showKeepLock;
         _keepLockButton.Enabled = _keepLockEnabled;
@@ -466,7 +639,7 @@ internal sealed class WaapiStatusBar : Panel
             _keepStateLabel.AutoSize = false;
             _keepStateLabel.Size = stateSize;
 
-            var lockLeft = detailX + detailSize.Width + gapBeforeLock;
+            var lockLeft = x + gapBeforeLock;
             var lockTop = Math.Max(0, (ClientSize.Height - _keepLockButton.Height) / 2);
             _keepLockButton.Location = new Point(lockLeft, lockTop);
 
@@ -477,6 +650,22 @@ internal sealed class WaapiStatusBar : Panel
         }
 
         Invalidate();
+    }
+
+    private int PlaceDetailLabel(Label label, int x, Func<string, Font, Size> measure)
+    {
+        if (!label.Visible || label.Text.Length == 0)
+        {
+            label.Visible = false;
+            return x;
+        }
+
+        var size = measure(label.Text, label.Font);
+        label.AutoSize = false;
+        label.Size = size;
+        label.Location = new Point(x, Math.Max(0, (ClientSize.Height - label.Height) / 2));
+        label.Visible = true;
+        return x + size.Width;
     }
 
     private void OnPaint(object? sender, PaintEventArgs e)

@@ -101,6 +101,7 @@ public partial class Form1 : Form, IMessageFilter
     private string _keptTargetProjectFilePath = string.Empty;
     private int _waapiPollFailCount;
     private bool _waapiPollBusy;
+    private bool _wwiseProjectActivateBusy;
     private const int WaapiPollFailThreshold = 3;
     private const int WaapiConnectedPollMs = 1500;
     private const int WaapiDisconnectedPollMs = 3000;
@@ -324,6 +325,7 @@ public partial class Form1 : Form, IMessageFilter
         ApplyPlaylistSelectorColors();
         waapiStatusBar.ApplyColors();
         waapiStatusBar.KeepTargetChanged += WaapiStatusBar_KeepTargetChanged;
+        waapiStatusBar.ProjectNameClick += async (_, _) => await OpenOrFocusKeptWwiseProjectAsync();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
@@ -681,13 +683,10 @@ public partial class Form1 : Form, IMessageFilter
         _waapiLastResult = result;
         if (result.Ok)
         {
-            RefreshWaapiStatusDisplay();
             _waapiPollFailCount = 0;
         }
-        else
-        {
-            waapiStatusBar.SetResult(result);
-        }
+
+        RefreshWaapiStatusDisplay();
 
         if (logReport)
         {
@@ -783,17 +782,99 @@ public partial class Form1 : Form, IMessageFilter
 
     private void RefreshWaapiStatusDisplay()
     {
-        if (_waapiLastResult is not { Ok: true } result)
+        if (_waapiLastResult is { Ok: true } result)
+        {
+            var path = _keepTarget ? _keptTargetPath : result.SelectedPath;
+            var projectName = _keepTarget
+                ? GetKeptWwiseProjectDisplayName(fallback: result.ProjectName)
+                : result.ProjectName;
+            waapiStatusBar.UpdateSelection(
+                result.WwiseVersion,
+                projectName,
+                path,
+                keepTarget: _keepTarget);
+            return;
+        }
+
+        // 切断中でも Keep Target ならロック中プロジェクト名を維持し、クリックで開けるようにする。
+        if (_keepTarget)
+        {
+            var projectName = GetKeptWwiseProjectDisplayName(fallback: string.Empty);
+            if (projectName.Length > 0 || _keptTargetPath.Length > 0)
+            {
+                waapiStatusBar.UpdateDisconnectedKeepTarget(projectName, _keptTargetPath);
+                return;
+            }
+        }
+
+        if (_waapiLastResult is { } failed)
+        {
+            waapiStatusBar.SetResult(failed);
+        }
+    }
+
+    private string GetKeptWwiseProjectDisplayName(string fallback)
+    {
+        var projectFile = _keptTargetProjectFilePath.Trim();
+        if (projectFile.Length > 0)
+        {
+            var name = Path.GetFileNameWithoutExtension(projectFile);
+            if (name.Length > 0)
+            {
+                return name;
+            }
+        }
+
+        return fallback.Trim();
+    }
+
+    private async Task OpenOrFocusKeptWwiseProjectAsync()
+    {
+        if (IsDisposed || _wwiseProjectActivateBusy || !_keepTarget)
         {
             return;
         }
 
-        var path = _keepTarget ? _keptTargetPath : result.SelectedPath;
-        waapiStatusBar.UpdateSelection(
-            result.WwiseVersion,
-            result.ProjectName,
-            path,
-            keepTarget: _keepTarget);
+        var projectFile = _keptTargetProjectFilePath.Trim();
+        if (projectFile.Length == 0
+            && _waapiLastResult is { Ok: true, ProjectFilePath: { Length: > 0 } } live)
+        {
+            projectFile = live.ProjectFilePath.Trim();
+        }
+
+        if (projectFile.Length == 0)
+        {
+            AppendReport(UiStrings.LogWwiseProjectPathMissing + Environment.NewLine);
+            return;
+        }
+
+        _wwiseProjectActivateBusy = true;
+        try
+        {
+            var (ok, message) = await WwiseProjectActivator.OpenOrFocusAsync(
+                    _waapiSettings,
+                    projectFile)
+                .ConfigureAwait(true);
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (message.Length > 0)
+            {
+                AppendReport(message + Environment.NewLine);
+            }
+
+            if (ok)
+            {
+                // 開いた直後の接続／選択反映を早めに取りにいく。
+                await PollWaapiAsync().ConfigureAwait(true);
+            }
+        }
+        finally
+        {
+            _wwiseProjectActivateBusy = false;
+        }
     }
 
     private string FormatWaapiLogReport(WaapiProbeResult result)
@@ -2290,11 +2371,11 @@ public partial class Form1 : Form, IMessageFilter
             UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
-        if (_waapiLastResult is { Ok: true })
+        if (_waapiLastResult is not null || _keepTarget)
         {
             RefreshWaapiStatusDisplay();
             _waapiLoggedSelectionPath = GetDisplayTargetPath();
-            if (_keepTarget)
+            if (_keepTarget && _waapiLastResult is { Ok: true })
             {
                 _ = TryRestoreKeptTargetAsync(logReport: true);
             }
@@ -5294,9 +5375,8 @@ public partial class Form1 : Form, IMessageFilter
             UpdatePlaylistDisplayNames(GetEffectiveOutputParts());
         }
 
-        if (_waapiLastResult is { } last)
+        if (_waapiLastResult is not null || _keepTarget)
         {
-            waapiStatusBar.SetResult(last);
             RefreshWaapiStatusDisplay();
         }
     }

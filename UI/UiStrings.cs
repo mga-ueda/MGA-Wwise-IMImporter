@@ -577,6 +577,10 @@ internal static class UiStrings
         "作成先の固定を解除します（このプロジェクト設定）。",
         "Unlock the destination path (this project setting).");
 
+    public static string TipWwiseProjectNameOpen => Get(
+        "クリックでこの Wwise プロジェクトを開きます（既に開いていれば前面に表示）。",
+        "Click to open this Wwise project (or bring it to the front if already open).");
+
     public static string KeepTargetOnLabel => Get("- Keep Target -", "- Keep Target -");
     public static string KeepTargetOffLabel => Get("- Not Keep Target -", "- Not Keep Target -");
 
@@ -998,6 +1002,35 @@ internal static class UiStrings
     public static string LogWaapiConnectFailed => Get(
         "接続できません。Wwise 起動と WAAPI 有効化を確認してください。",
         "Cannot connect. Ensure Wwise is running and WAAPI is enabled.");
+
+    public static string LogWwiseProjectPathMissing => Get(
+        "Keep Target : ロック中 Wwise プロジェクトのパスがありません。",
+        "Keep Target : locked Wwise project path is missing.");
+
+    public static string LogWwiseProjectFileMissing(string path) => Format(
+        "Keep Target : Wwise プロジェクトファイルが見つかりません → {0}",
+        "Keep Target : Wwise project file not found → {0}",
+        path);
+
+    public static string LogWwiseProjectBroughtToFront(string projectName) => Format(
+        "Keep Target : Wwise を前面に表示しました → {0}",
+        "Keep Target : brought Wwise to the front → {0}",
+        projectName);
+
+    public static string LogWwiseProjectOpened(string projectName) => Format(
+        "Keep Target : Wwise プロジェクトを開きました → {0}",
+        "Keep Target : opened Wwise project → {0}",
+        projectName);
+
+    public static string LogWwiseProjectShellOpen(string projectName) => Format(
+        "Keep Target : Wwise プロジェクトを起動しました → {0}",
+        "Keep Target : launched Wwise project → {0}",
+        projectName);
+
+    public static string LogWwiseProjectOpenFailed(string message) => Format(
+        "Keep Target : Wwise プロジェクトを開けませんでした → {0}",
+        "Keep Target : failed to open Wwise project → {0}",
+        message);
 
     public static string LogWaapiTimeout => Get(
         "タイムアウト。Wwise の起動と WAAPI（HTTP）有効化を確認してください。",
