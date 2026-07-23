@@ -955,7 +955,10 @@ internal sealed class WaveformView : Control
         return result;
     }
 
-    private List<long> CollectMarkerSamples()
+    /// <param name="includeSharedProjections">
+    /// true ならグループ同期先の半透明マーカーも含める（Ctrl+←/→ 用）。
+    /// </param>
+    private List<long> CollectMarkerSamples(bool includeSharedProjections = false)
     {
         var result = new List<long>();
         if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
@@ -967,7 +970,7 @@ internal sealed class WaveformView : Control
         var seen = new HashSet<long>();
         foreach (var marker in _markers)
         {
-            if (marker.IsSharedProjection)
+            if (marker.IsSharedProjection && !includeSharedProjections)
             {
                 continue;
             }
@@ -985,6 +988,7 @@ internal sealed class WaveformView : Control
     /// <summary>
     /// Ctrl+←/→ 用: 有効 Playlist の先頭・末尾と、表示マーカー位置をまとめた停止点。
     /// 隣接 Playlist 先頭だけだと区間内マーカー／末尾に止まらないため。
+    /// グループ同期先の半透明マーカーも含める。
     /// </summary>
     private List<long> CollectPlaylistNavigationSamples()
     {
@@ -1019,7 +1023,7 @@ internal sealed class WaveformView : Control
             Add(part.EndSampleOffset);
         }
 
-        foreach (var markerSample in CollectMarkerSamples())
+        foreach (var markerSample in CollectMarkerSamples(includeSharedProjections: true))
         {
             Add(markerSample);
         }
