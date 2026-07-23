@@ -3149,7 +3149,7 @@ internal sealed class WaveformView : Control
         if (_mouseGuideX is not null)
         {
             _mouseGuideX = null;
-            Invalidate();
+            RequestMouseGuideRepaint();
         }
     }
 
@@ -3389,7 +3389,7 @@ internal sealed class WaveformView : Control
             if (_mouseGuideX is not null)
             {
                 _mouseGuideX = null;
-                Invalidate();
+                RequestMouseGuideRepaint();
             }
 
             return;
@@ -3402,7 +3402,55 @@ internal sealed class WaveformView : Control
         }
 
         _mouseGuideX = x;
+        RequestMouseGuideRepaint();
+    }
+
+    /// <summary>
+    /// マウスガイド描画の更新要求。再生中は playhead タイマーが既に ~60fps で
+    /// Invalidate しているため、移動ごとに全再描画するとシークバー更新が遅れる。
+    /// </summary>
+    private void RequestMouseGuideRepaint()
+    {
+        if (IsPlayheadTrailAnimating())
+        {
+            return;
+        }
+
         Invalidate();
+    }
+
+    private bool IsPlayheadTrailAnimating()
+    {
+        if (_trailActive || _exitTrailActive || _anacrusisTrailActive || _fadeOutTrailActive)
+        {
+            return true;
+        }
+
+        foreach (var overlay in _overlayPlayheads)
+        {
+            if (overlay.TrailActive)
+            {
+                return true;
+            }
+        }
+
+        foreach (var overlay in _overlayExitPlayheads)
+        {
+            if (overlay.TrailActive)
+            {
+                return true;
+            }
+        }
+
+        foreach (var overlay in _overlayFadeOutPlayheads)
+        {
+            if (overlay.TrailActive)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void UpdateTimelineToolTip(Point? mouseLocation)

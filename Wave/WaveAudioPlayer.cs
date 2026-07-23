@@ -39,7 +39,8 @@ internal sealed class WaveAudioPlayer : IDisposable
     private bool _suppressPlaybackEnded;
     /// <summary>
     /// 次の Play 前に出力デバイスを作り直し、先読みバッファを破棄するか。
-    /// Pause／Stop／シーク後はデバイス側に旧位置が残り得る（ASIO で顕著）。
+    /// Pause／Stop／一時停止中のシーク後はデバイス側に旧位置が残り得る（ASIO で顕著）。
+    /// 再生中シークでは連続読み出しで自然に切り替わるため、ここでは立てない。
     /// </summary>
     private bool _discardOutputBufferBeforePlay;
     private LoopPlaybackPlan[] _loopPlans = [];
@@ -1056,18 +1057,10 @@ internal sealed class WaveAudioPlayer : IDisposable
 
         _reader.CurrentTime = TimeSpan.FromTicks(ticks);
 
-        if (_isPlaying)
-        {
-            // 再生中シークでも先読みが残るため、出力デバイスを作り直してから続行する。
-            RecreateOutputDevice();
-            if (_output is not null)
-            {
-                _discardOutputBufferBeforePlay = false;
-                _output.Play();
-                _isPlaying = true;
-            }
-        }
-        else
+        // 再生中は連続読み出しで自然に切り替わる。毎回デバイス再作成すると
+        // シークバードラッグのスクラブが極端に重くなる。
+        // 一時停止中は先読みバッファに旧位置が残るため、次の再生で破棄する。
+        if (!_isPlaying)
         {
             _discardOutputBufferBeforePlay = true;
         }

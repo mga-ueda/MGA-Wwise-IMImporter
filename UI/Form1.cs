@@ -185,6 +185,7 @@ public partial class Form1 : Form, IMessageFilter
     private readonly List<double> _overlayFadeOutPlayheadProgresses = [];
     private int? _hoveredPlaylistPartNumber;
     private int? _hoveredPlaylistListPartNumber;
+    private bool _playlistHoverColorRefreshQueued;
     private int? _lastAutoScrolledPlaylistPartNumber;
     private long _pendingPlaylistTransitionGeneration;
     private long _pendingPlaylistBoundarySample;
@@ -461,7 +462,7 @@ public partial class Form1 : Form, IMessageFilter
         waveformView.PlaylistHoverChanged += (_, partNumber) =>
         {
             _hoveredPlaylistPartNumber = partNumber;
-            ApplyPlaylistSelectorColors();
+            QueuePlaylistHoverColorRefresh();
         };
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
         playlistScrollPanel.HandleCreated += (_, _) => ApplyDarkScrollChrome(playlistScrollPanel);
@@ -3323,6 +3324,25 @@ public partial class Form1 : Form, IMessageFilter
     {
         choices.Height = MeasureChoicesHeight(choices);
         section.Height = header.Height + choices.Height;
+    }
+
+    // Coalesce hover recolors so fast mouse moves do not flood the UI thread.
+    private void QueuePlaylistHoverColorRefresh()
+    {
+        if (_playlistHoverColorRefreshQueued || IsDisposed)
+        {
+            return;
+        }
+
+        _playlistHoverColorRefreshQueued = true;
+        BeginInvoke(() =>
+        {
+            _playlistHoverColorRefreshQueued = false;
+            if (!IsDisposed)
+            {
+                ApplyPlaylistSelectorColors();
+            }
+        });
     }
 
     private void ApplyPlaylistSelectorColors()
