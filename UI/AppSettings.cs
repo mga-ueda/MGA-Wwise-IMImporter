@@ -30,6 +30,9 @@ internal sealed class AppSettings
     /// <summary>出力デバイス識別子（API 依存。空はシステム既定）。</summary>
     public string AudioDeviceId { get; set; } = string.Empty;
 
+    /// <summary>波形表示エリア高さの倍率（1 / 2 / 3。既定 1）。</summary>
+    public int WaveformHeightScale { get; set; } = 1;
+
     public AudioOutputSettings ToAudioOutputSettings() => new(AudioApi, AudioDeviceId ?? string.Empty);
 
     public static AppSettings Load()
@@ -77,6 +80,12 @@ internal sealed class AppSettings
         Save();
     }
 
+    public void SaveWaveformHeightScale(int scale)
+    {
+        WaveformHeightScale = NormalizeWaveformHeightScale(scale);
+        Save();
+    }
+
     private Dictionary<string, string> ToDictionary() => new(StringComparer.OrdinalIgnoreCase)
     {
         ["AlwaysOnTop"] = AlwaysOnTop ? "1" : "0",
@@ -85,6 +94,7 @@ internal sealed class AppSettings
         ["ShowToolTips"] = ShowToolTips ? "1" : "0",
         ["AudioApi"] = AudioOutputSettings.ToIniValue(AudioApi),
         ["AudioDeviceId"] = AudioDeviceId ?? string.Empty,
+        ["WaveformHeightScale"] = WaveformHeightScale.ToString(CultureInfo.InvariantCulture),
     };
 
     private static void WriteValues(Dictionary<string, string> values)
@@ -99,6 +109,9 @@ internal sealed class AppSettings
             ["ShowToolTips"] = values.TryGetValue("ShowToolTips", out var showToolTips) ? showToolTips : "1",
             ["AudioApi"] = values.TryGetValue("AudioApi", out var audioApi) ? audioApi : "WaveOut",
             ["AudioDeviceId"] = values.TryGetValue("AudioDeviceId", out var deviceId) ? deviceId : string.Empty,
+            ["WaveformHeightScale"] = values.TryGetValue("WaveformHeightScale", out var scale)
+                ? NormalizeWaveformHeightScale(scale).ToString(CultureInfo.InvariantCulture)
+                : "1",
         });
     }
 
@@ -118,6 +131,9 @@ internal sealed class AppSettings
         AudioDeviceId = values.TryGetValue("AudioDeviceId", out var deviceId)
             ? deviceId
             : string.Empty,
+        WaveformHeightScale = values.TryGetValue("WaveformHeightScale", out var scaleText)
+            ? NormalizeWaveformHeightScale(scaleText)
+            : 1,
     };
 
     private static bool HasKnownKeys(Dictionary<string, string> values) =>
@@ -126,7 +142,22 @@ internal sealed class AppSettings
         || values.ContainsKey("SkippedUpdateVersion")
         || values.ContainsKey("ShowToolTips")
         || values.ContainsKey("AudioApi")
-        || values.ContainsKey("AudioDeviceId");
+        || values.ContainsKey("AudioDeviceId")
+        || values.ContainsKey("WaveformHeightScale");
+
+    /// <summary>波形高さ倍率を 1〜3 に正規化する。</summary>
+    public static int NormalizeWaveformHeightScale(int scale) =>
+        scale is >= 1 and <= 3 ? scale : 1;
+
+    private static int NormalizeWaveformHeightScale(string? text)
+    {
+        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var scale))
+        {
+            return NormalizeWaveformHeightScale(scale);
+        }
+
+        return 1;
+    }
 
     private static bool ReadBool(Dictionary<string, string> values, string key, bool defaultValue)
     {

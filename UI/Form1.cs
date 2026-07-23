@@ -81,6 +81,8 @@ public partial class Form1 : Form, IMessageFilter
     private WaapiSettings _waapiSettings = new();
     private ProjectSettingsStore _projectStore = ProjectSettingsStore.Load();
     private AppSettings _appSettings = AppSettings.Load();
+    /// <summary>波形ホストの 1 倍時の高さ（DPI／フォント自動スケール後）。</summary>
+    private int _waveformHostBaseHeight;
     private string _loadedProjectName = ProjectSettingsStore.DefaultName;
     private bool _creatingNewProject;
     private bool _suppressProjectUiEvents;
@@ -234,6 +236,7 @@ public partial class Form1 : Form, IMessageFilter
         UiColors.LoadFromIni();
         AppFonts.EnsureRegistered();
         InitializeComponent();
+        _waveformHostBaseHeight = Math.Max(1, waveformHostPanel.Height);
         WireRightSideContentHost();
         transportBar.CommandHoldEnded += TransportBar_CommandHoldEnded;
         UiStrings.SetLanguage(_appSettings.UiLanguage);
@@ -247,6 +250,11 @@ public partial class Form1 : Form, IMessageFilter
         };
         DpiChanged += (_, _) =>
         {
+            // DPI 変更でパネル高がスケールされたあと、現在倍率から 1 倍基準を再計算する。
+            var scale = Math.Max(1, _appSettings.WaveformHeightScale);
+            _waveformHostBaseHeight = Math.Max(
+                1,
+                (int)Math.Round((double)waveformHostPanel.Height / scale));
             AdjustTransitionSectionHeights();
             ApplyMarkerOptionsPanelFixedHeight();
             SyncRightSideContentHostHeight();
@@ -1419,6 +1427,11 @@ public partial class Form1 : Form, IMessageFilter
             return true;
         }
 
+        if (keyData == Keys.Z && TryCycleWaveformHeightScale())
+        {
+            return true;
+        }
+
         // 修飾キー付きを先に判定
         if (keyData == (Keys.Control | Keys.Shift | Keys.Up))
         {
@@ -1613,6 +1626,7 @@ public partial class Form1 : Form, IMessageFilter
             Keys.Shift | Keys.Down => TransportCommand.AmpZoomOut,
             Keys.Control | Keys.Shift | Keys.Up => TransportCommand.AmpZoomMax,
             Keys.Control | Keys.Shift | Keys.Down => TransportCommand.AmpZoomReset,
+            Keys.Z => TransportCommand.CycleWaveformHeight,
             _ => (TransportCommand?)null,
         };
 
@@ -1658,6 +1672,7 @@ public partial class Form1 : Form, IMessageFilter
             TransportCommand.AmpZoomOut => Keys.Shift | Keys.Down,
             TransportCommand.AmpZoomMax => Keys.Control | Keys.Shift | Keys.Up,
             TransportCommand.AmpZoomReset => Keys.Control | Keys.Shift | Keys.Down,
+            TransportCommand.CycleWaveformHeight => Keys.Z,
             _ => Keys.None,
         };
 
@@ -2295,11 +2310,83 @@ public partial class Form1 : Form, IMessageFilter
             DarkToolTip.GlobalActive = _appSettings.ShowToolTips;
             toolTipToggleButton.Checked = _appSettings.ShowToolTips;
             _audioPlayer.ApplyOutputSettings(_appSettings.ToAudioOutputSettings());
+            ApplyWaveformHeightScale(adjustFormHeight: false);
         }
         finally
         {
             _suppressProjectUiEvents = false;
         }
+    }
+
+    /// <summary>
+    /// 波形ホスト高さをアプリ設定の倍率（1 / 2 / 3）で適用する。
+    /// インタラクティブ切替時のみウィンドウ高さを差分だけ伸ばす／縮める。
+    /// </summary>
+    private void ApplyWaveformHeightScale(bool adjustFormHeight)
+    {
+        var scale = AppSettings.NormalizeWaveformHeightScale(_appSettings.WaveformHeightScale);
+        _appSettings.WaveformHeightScale = scale;
+        var previousHeight = waveformHostPanel.Height;
+        var desiredHeight = Math.Max(1, _waveformHostBaseHeight * scale);
+        transportBar.SetWaveformHeightScale(scale);
+        if (desiredHeight == previousHeight)
+        {
+            if (!adjustFormHeight)
+            {
+                UpdateMinimumWindowSize();
+            }
+
+            return;
+        }
+
+        waveformHostPanel.Height = desiredHeight;
+        var delta = desiredHeight - previousHeight;
+
+        if (adjustFormHeight && delta != 0 && WindowState == FormWindowState.Normal)
+        {
+            if (delta < 0)
+            {
+                UpdateMinimumWindowSize();
+            }
+
+            var targetFormHeight = Height + delta;
+            if (delta > 0)
+            {
+                Height = targetFormHeight;
+                UpdateMinimumWindowSize();
+            }
+            else
+            {
+                Height = Math.Max(MinimumSize.Height, targetFormHeight);
+            }
+        }
+        else
+        {
+            UpdateMinimumWindowSize();
+            if (Height < MinimumSize.Height)
+            {
+                Height = MinimumSize.Height;
+            }
+        }
+    }
+
+    /// <summary>Z キー: 波形高さ倍率を 1 → 2 → 3 → 1 と循環。</summary>
+    private bool TryCycleWaveformHeightScale()
+    {
+        if (IsTextEntryFocusActive())
+        {
+            return false;
+        }
+
+        var nextScale = AppSettings.NormalizeWaveformHeightScale(_appSettings.WaveformHeightScale) switch
+        {
+            1 => 2,
+            2 => 3,
+            _ => 1,
+        };
+        _appSettings.SaveWaveformHeightScale(nextScale);
+        ApplyWaveformHeightScale(adjustFormHeight: true);
+        return true;
     }
 
     private void ApplyProjectProfile(

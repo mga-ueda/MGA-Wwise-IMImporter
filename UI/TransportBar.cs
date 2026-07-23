@@ -22,6 +22,7 @@ internal enum TransportCommand
     AmpZoomOut,
     AmpZoomMax,
     AmpZoomReset,
+    CycleWaveformHeight,
 }
 
 internal readonly record struct TransportPositionInfo(
@@ -111,6 +112,11 @@ internal sealed class TransportBar : UserControl
             (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax),
             (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset));
 
+        AddGroup(
+            () => UiStrings.LabelWaveformHeightGroup,
+            repeatOnHold: false,
+            (TransportCommand.CycleWaveformHeight, TransportIcon.WaveformHeight));
+
         _commandRepeatTimer.Tick += (_, _) => RepeatHeldCommand();
         ApplyColors();
         UiStrings.LanguageChanged += (_, _) => ApplyLocalizedToolTips();
@@ -170,6 +176,17 @@ internal sealed class TransportBar : UserControl
         _waveOnlyViewStepTips = waveOnlyViewStepTips;
         _waveOnlyMarkerTips = waveOnlyMarkerTips;
         ApplyLocalizedToolTips();
+    }
+
+    /// <summary>波形高さ倍率（1〜3）をアイコン表示へ反映する。</summary>
+    public void SetWaveformHeightScale(int scale)
+    {
+        if (!_commandButtons.TryGetValue(TransportCommand.CycleWaveformHeight, out var button))
+        {
+            return;
+        }
+
+        button.WaveformHeightScale = scale is >= 1 and <= 3 ? scale : 1;
     }
 
     private void SetCommandEnabled(TransportCommand command, bool enabled)
@@ -677,6 +694,7 @@ internal enum TransportIcon
     AmpZoomOut,
     AmpZoomMax,
     AmpZoomReset,
+    WaveformHeight,
     Clear,
     Copy,
     Download,
@@ -694,6 +712,7 @@ internal sealed class TransportIconButton : Button
     private bool _hovered;
     private bool _pressed;
     private bool _isPlaying;
+    private int _waveformHeightScale = 1;
     private double _shortcutFeedbackLevel;
     private long _shortcutFadeStartTickMs;
 
@@ -759,6 +778,23 @@ internal sealed class TransportIconButton : Button
             }
 
             _isPlaying = value;
+            Invalidate();
+        }
+    }
+
+    /// <summary>波形高さアイコン用の現在倍率（1〜3）。</summary>
+    public int WaveformHeightScale
+    {
+        get => _waveformHeightScale;
+        set
+        {
+            var next = value is >= 1 and <= 3 ? value : 1;
+            if (_waveformHeightScale == next)
+            {
+                return;
+            }
+
+            _waveformHeightScale = next;
             Invalidate();
         }
     }
@@ -889,6 +925,13 @@ internal sealed class TransportIconButton : Button
                 : Icon == TransportIcon.PlayPause && IsPlaying
                     ? ActiveForeColor
                     : ForeColor);
+
+        if (Icon == TransportIcon.WaveformHeight)
+        {
+            DrawWaveformHeightLabel(e.Graphics, brush.Color, WaveformHeightScale);
+            return;
+        }
+
         var iconState = g.Save();
         g.ScaleTransform(Width / 34f, Height / 36f);
         DrawIcon(g, pen, brush);
@@ -937,10 +980,7 @@ internal sealed class TransportIconButton : Button
                 }
                 break;
             case TransportIcon.JumpToBar:
-                DrawHash(g, pen, 9, 10, 19, 16);
-                g.DrawLine(pen, 20, 18, 26, 12);
-                g.DrawLine(pen, 26, 12, 26, 17);
-                g.DrawLine(pen, 26, 12, 21, 12);
+                DrawHash(g, pen, 10, 10, 19, 16);
                 break;
             case TransportIcon.GoToStart:
             case TransportIcon.GoToEnd:
@@ -1095,6 +1135,32 @@ internal sealed class TransportIconButton : Button
         g.DrawLine(pen, 17, 8, 17, 28);
         g.DrawLines(pen, [new PointF(13, 12), new PointF(17, 8), new PointF(21, 12)]);
         g.DrawLines(pen, [new PointF(13, 24), new PointF(17, 28), new PointF(21, 24)]);
+    }
+
+    /// <summary>
+    /// 波形エリア高さの循環ラベル。JP／EN と同じ測って中央配置。
+    /// </summary>
+    private void DrawWaveformHeightLabel(Graphics g, Color color, int scale)
+    {
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        scale = scale is >= 1 and <= 3 ? scale : 1;
+        var label = "x" + scale.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        using var font = new Font("Yu Gothic UI", 7.5F, FontStyle.Bold);
+        var textSize = TextRenderer.MeasureText(
+            g,
+            label,
+            font,
+            Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+        var textX = (Width - textSize.Width) / 2;
+        var textY = (Height - textSize.Height) / 2;
+        TextRenderer.DrawText(
+            g,
+            label,
+            font,
+            new Point(textX, textY),
+            color,
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
     }
 
     private static void DrawZoomModifier(

@@ -335,10 +335,14 @@ internal static class UiStrings
     public static string TipWaveformCommonKeys => Get(
         "数字キー／テンキー 0〜9: 表示中画面内の 0%〜90% へジャンプ"
         + Environment.NewLine
-        + "C / .: シーク位置を変えずに表示を中央寄せ",
+        + "C / .: シーク位置を変えずに表示を中央寄せ"
+        + Environment.NewLine
+        + "Z: 波形表示エリアの高さを 1倍 → 2倍 → 3倍 → 1倍",
         "Number keys 0–9: jump to 0%–90% within the current view"
         + Environment.NewLine
-        + "C / .: center the view on the seek position (seek unchanged)");
+        + "C / .: center the view on the seek position (seek unchanged)"
+        + Environment.NewLine
+        + "Z: cycle waveform height 1× → 2× → 3× → 1×");
 
     public static string TipWaveformZoomFitAll => Get(
         "ダブルクリックでタイムライン全体を表示",
@@ -686,6 +690,10 @@ internal static class UiStrings
         "振幅を既定に戻す  [Ctrl+Shift+↓]",
         "Reset amplitude zoom  [Ctrl+Shift+↓]");
 
+    public static string TipTransportCycleWaveformHeight => Get(
+        "波形表示エリアの高さを切替（1倍→2倍→3倍）  [Z]",
+        "Cycle waveform height (1×→2×→3×)  [Z]");
+
     public static string TipForTransportCommand(
         TransportCommand command,
         bool waveOnlyViewStep = false,
@@ -717,6 +725,7 @@ internal static class UiStrings
         TransportCommand.AmpZoomOut => TipTransportAmpZoomOut,
         TransportCommand.AmpZoomMax => TipTransportAmpZoomMax,
         TransportCommand.AmpZoomReset => TipTransportAmpZoomReset,
+        TransportCommand.CycleWaveformHeight => TipTransportCycleWaveformHeight,
         _ => string.Empty,
     };
 
@@ -1775,10 +1784,11 @@ internal static class UiStrings
         string.Format(System.Globalization.CultureInfo.InvariantCulture, "e.g. {0}", example);
 
     // TransportBar
-    public static string LabelTransportGroup => Get("TRANSPORT", "TRANSPORT");
-    public static string LabelNavigationGroup => Get("NAVIGATION", "NAVIGATION");
-    public static string LabelTimeZoomGroup => Get("TIME ZOOM", "TIME ZOOM");
-    public static string LabelAmpZoomGroup => Get("AMP ZOOM", "AMP ZOOM");
+    public static string LabelTransportGroup => Get("TRANS", "TRANS");
+    public static string LabelNavigationGroup => Get("NAV", "NAV");
+    public static string LabelTimeZoomGroup => Get("TIME", "TIME");
+    public static string LabelAmpZoomGroup => Get("AMP", "AMP");
+    public static string LabelWaveformHeightGroup => Get("SIZE", "SIZE");
 
     public static string AccessibleTransportPositionDisplay => Get(
         "Tempo, time signature, musical position and elapsed time",
