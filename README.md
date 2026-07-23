@@ -1,4 +1,4 @@
-# MGA Wwise IMImporter
+﻿# MGA Wwise IMImporter
 
 Nuendo／Cubase の tracklist XML と Wave を読み、波形プレビュー、分割 WAV の書き出し、WAAPI 経由の Wwise Music 構造インポートを行う Windows 向けツール（開発中）です。
 

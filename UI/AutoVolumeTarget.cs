@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.UI;
+﻿namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// Loudness Normalize の Auto Volume で Music Playlist のどのプロパティへ補償するか。

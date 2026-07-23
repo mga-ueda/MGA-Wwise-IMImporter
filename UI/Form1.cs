@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -6820,7 +6820,7 @@ public partial class Form1 : Form, IMessageFilter
 
         try
         {
-            File.WriteAllText(dialog.FileName, editorTextBox.Text, new UTF8Encoding(false));
+            TextFileUtf8.WriteAllText(dialog.FileName, editorTextBox.Text, emitBom: false);
             WritePlaybackDiagnostic(
                 "log.downloaded",
                 new { path = dialog.FileName, characters = editorTextBox.TextLength });

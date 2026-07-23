@@ -1,0 +1,20 @@
+﻿# テキストは CRLF / UTF-8 として扱う（日本語 Windows での誤判定・差分ノイズを抑える）
+* text=auto eol=crlf
+
+*.cs text
+*.md text
+*.resx text
+*.csproj text
+*.props text
+*.targets text
+*.json text
+*.editorconfig text
+*.gitattributes text
+*.gitignore text
+*.sln text
+
+# バイナリ
+*.png binary
+*.ico binary
+*.ttf binary
+*.wav binary

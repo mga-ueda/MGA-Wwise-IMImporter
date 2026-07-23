@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wwise;
+﻿namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// Wwise オブジェクト名の固定・整形。

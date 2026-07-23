@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.Asio;

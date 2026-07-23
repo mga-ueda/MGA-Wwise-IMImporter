@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter;
+﻿namespace MgaWwiseIMImporter;
 
 static class Program
 {

@@ -1,5 +1,15 @@
-root = true
+﻿root = true
+
+[*]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
 
 [*.cs]
 # Namespaces follow folder structure (e.g. UI -> MgaWwiseIMImporter.UI).
 dotnet_style_namespace_match_folder = true
+# 日本語コメント／文字列を含むため BOM 付き UTF-8 で統一し、エディタの誤判定を防ぐ。
+charset = utf-8-bom
+
+[*.{md,xml,resx,csproj,props,targets,json,yml,yaml,editorconfig,gitignore,gitattributes}]
+charset = utf-8-bom

@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wave;
+﻿namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>再生出力の API 種別。</summary>
 internal enum AudioOutputApi

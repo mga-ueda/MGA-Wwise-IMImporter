@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Nuendo;
+﻿namespace MgaWwiseIMImporter.Nuendo;
 
 internal static class BarGrid
 {

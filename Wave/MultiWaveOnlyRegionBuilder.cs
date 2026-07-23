@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wave;
+﻿namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// 複数波形モード向けに、仮想タイムライン上のマーカーからリージョン／出力パートを再構築する。

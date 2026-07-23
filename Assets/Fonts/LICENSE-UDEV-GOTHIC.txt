@@ -1,4 +1,4 @@
-# Licensing
+﻿# Licensing
 
 - Source fonts are licensed under SIL OPEN FONT LICENSE Version 1.1.
   For more information, see "LICENSE_<FontName>" file contained in the "source" directory.

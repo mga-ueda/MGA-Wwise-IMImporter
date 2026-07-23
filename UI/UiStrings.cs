@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.UI;
+﻿namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// ユーザーに見えるすべての表示テキスト（ツールチップ・ダイアログ・ログ・ラベル・ボタン・

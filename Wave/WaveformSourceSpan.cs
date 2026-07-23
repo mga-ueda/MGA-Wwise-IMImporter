@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wave;
+﻿namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// 複数波形モードの仮想タイムライン上で、1 本のソース WAV が占める区間。

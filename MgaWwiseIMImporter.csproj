@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -16,6 +16,8 @@
     <AssemblyVersion>1.0.5.0</AssemblyVersion>
     <FileVersion>1.0.5.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
+    <!-- コンパイラ診断メッセージを UTF-8 で出力し、日本語環境での文字化けを防ぐ。 -->
+    <Utf8Output>true</Utf8Output>
     <!-- 配布は単一 exe（自己完結）。dotnet publish 時のみ効く。 -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -39,6 +41,8 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- INI 等が ANSI(CP932) で保存されていても読めるようにする。 -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

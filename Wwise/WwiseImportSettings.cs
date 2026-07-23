@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wwise;
+﻿namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
 /// Wwise へのインポート設定（アプリ内固定。INI には書かない）。

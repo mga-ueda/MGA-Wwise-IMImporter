@@ -1,0 +1,16 @@
+﻿{
+  "files.encoding": "utf8bom",
+  "files.autoGuessEncoding": false,
+  "[csharp]": {
+    "files.encoding": "utf8bom"
+  },
+  "[markdown]": {
+    "files.encoding": "utf8bom"
+  },
+  "[json]": {
+    "files.encoding": "utf8bom"
+  },
+  "[xml]": {
+    "files.encoding": "utf8bom"
+  }
+}

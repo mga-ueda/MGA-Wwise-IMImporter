@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wave;
+﻿namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// Wave 単体モードのマーカー操作履歴（Undo / Redo）。

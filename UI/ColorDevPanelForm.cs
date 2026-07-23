@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.UI;
+﻿namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// 開発者向け色調整パネル。開いたままメイン画面を見ながら変更できる。

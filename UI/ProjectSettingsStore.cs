@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 
 namespace MgaWwiseIMImporter.UI;
@@ -301,7 +301,7 @@ internal sealed class ProjectSettingsStore
         try
         {
             var path = LastWaveSessionState.SidecarPath(trimmed);
-            File.WriteAllText(path, state.ToJson());
+            TextFileUtf8.WriteAllText(path, state.ToJson(), emitBom: true);
         }
         catch
         {
@@ -326,7 +326,7 @@ internal sealed class ProjectSettingsStore
 
         try
         {
-            var json = File.ReadAllText(path);
+            var json = TextFileUtf8.ReadAllText(path);
             return LastWaveSessionState.TryParse(json, out state);
         }
         catch

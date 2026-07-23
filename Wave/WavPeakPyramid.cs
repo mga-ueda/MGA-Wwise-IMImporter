@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;

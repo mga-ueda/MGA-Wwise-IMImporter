@@ -1,4 +1,4 @@
-using MgaWwiseIMImporter.UI;
+﻿using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Nuendo;
 

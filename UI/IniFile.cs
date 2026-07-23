@@ -1,9 +1,8 @@
-using System.Text;
-
-namespace MgaWwiseIMImporter.UI;
+﻿namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// 簡易 INI（セクション単位のキー=値）。コメント行と未知セクションは保持する。
+/// 読み書きは UTF-8（BOM 付きで保存）。日本語パス等の文字化けを防ぐ。
 /// </summary>
 internal static class IniFile
 {
@@ -20,7 +19,7 @@ internal static class IniFile
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var inSection = false;
 
-        foreach (var rawLine in File.ReadLines(path))
+        foreach (var rawLine in TextFileUtf8.ReadLines(path))
         {
             var line = rawLine.Trim();
             if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#'))
@@ -55,7 +54,7 @@ internal static class IniFile
     {
         var path = Path;
         var lines = File.Exists(path)
-            ? File.ReadAllLines(path).ToList()
+            ? TextFileUtf8.ReadAllLines(path).ToList()
             : [];
 
         var sectionHeader = $"[{section}]";
@@ -108,7 +107,7 @@ internal static class IniFile
             }
         }
 
-        File.WriteAllLines(path, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        TextFileUtf8.WriteAllLines(path, lines, emitBom: true);
     }
 
     /// <summary>指定セクションを丸ごと削除する（存在しなければ何もしない）。</summary>
@@ -120,7 +119,7 @@ internal static class IniFile
             return;
         }
 
-        var lines = File.ReadAllLines(path).ToList();
+        var lines = TextFileUtf8.ReadAllLines(path).ToList();
         var sectionHeader = $"[{section}]";
         var start = -1;
         var end = lines.Count;
@@ -160,6 +159,6 @@ internal static class IniFile
             // 直前の空行は残してよい
         }
 
-        File.WriteAllLines(path, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        TextFileUtf8.WriteAllLines(path, lines, emitBom: true);
     }
 }

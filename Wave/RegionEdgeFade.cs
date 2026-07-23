@@ -1,4 +1,4 @@
-namespace MgaWwiseIMImporter.Wave;
+﻿namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>リージョン端フェードのカーブ形状（Wwise MusicClip FadeIn/OutShape 相当）。</summary>
 internal enum RegionFadeCurveKind
