@@ -71,6 +71,14 @@ internal static class UiStrings
         "音声出力設定",
         "Audio output settings");
 
+    public static string TipToolTipToggle => Get(
+        "ツールチップの表示をオン／オフします。",
+        "Turn tooltips on or off.");
+
+    public static string AccessibleToolTipToggleButton => Get(
+        "ツールチップ表示切替",
+        "Toggle tooltips");
+
     // --- Audio settings dialog ---
     public static string DialogAudioSettingsTitle => Get(
         "Audio Output Settings",

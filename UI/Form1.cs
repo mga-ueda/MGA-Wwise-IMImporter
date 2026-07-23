@@ -1986,6 +1986,7 @@ public partial class Form1 : Form, IMessageFilter
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
         languageFlagButton.ApplyColors();
+        toolTipToggleButton.ApplyColors();
         settingsGearButton.ApplyColors();
         projectSpectrumView.BackColor = barBack;
         projectSpectrumView.Invalidate();
@@ -2059,6 +2060,7 @@ public partial class Form1 : Form, IMessageFilter
         CenterProjectBarControl(projectFolderButton, contentHeight);
         CenterProjectBarControl(projectDeleteButton, contentHeight);
         CenterProjectBarControl(languageFlagButton, contentHeight);
+        CenterProjectBarControl(toolTipToggleButton, contentHeight);
         CenterProjectBarControl(settingsGearButton, contentHeight);
         CenterProjectBarControl(projectSpectrumView, contentHeight);
     }
@@ -2203,6 +2205,8 @@ public partial class Form1 : Form, IMessageFilter
             topMostCheckBox.Checked = _appSettings.AlwaysOnTop;
             topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
             TopMost = _appSettings.AlwaysOnTop;
+            DarkToolTip.GlobalActive = _appSettings.ShowToolTips;
+            toolTipToggleButton.Checked = _appSettings.ShowToolTips;
             _audioPlayer.ApplyOutputSettings(_appSettings.ToAudioOutputSettings());
         }
         finally
@@ -5269,6 +5273,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         Text = UiStrings.FormTitle;
         languageFlagButton.RefreshAppearance();
+        toolTipToggleButton.RefreshAppearance();
         settingsGearButton.RefreshAppearance();
         ApplyLocalizedControlLabels();
         if (playlistToolTip is DarkToolTip darkTip)
@@ -5407,6 +5412,15 @@ public partial class Form1 : Form, IMessageFilter
         var next = UiStrings.IsJapanese ? UiLanguage.English : UiLanguage.Japanese;
         _appSettings.SaveUiLanguage(next);
         UiStrings.SetLanguage(next);
+        ReleaseFocusToWaveform();
+    }
+
+    private void ToolTipToggleButton_Click(object? sender, EventArgs e)
+    {
+        var enabled = !_appSettings.ShowToolTips;
+        _appSettings.SaveShowToolTips(enabled);
+        DarkToolTip.GlobalActive = enabled;
+        toolTipToggleButton.Checked = enabled;
         ReleaseFocusToWaveform();
     }
 

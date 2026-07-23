@@ -13,6 +13,53 @@ internal sealed class DarkToolTip : ToolTip
     private const int PadX = 8;
     private const int PadY = 6;
 
+    private static readonly List<WeakReference<DarkToolTip>> Instances = [];
+    private static bool _globalActive = true;
+    private bool _respectsGlobalActive = true;
+
+    /// <summary>
+    /// アプリ全体のツールチップ表示。false で <see cref="RespectsGlobalActive"/> が true の
+    /// DarkToolTip を無効化する（既定 true）。
+    /// </summary>
+    public static bool GlobalActive
+    {
+        get => _globalActive;
+        set
+        {
+            _globalActive = value;
+            lock (Instances)
+            {
+                for (var i = Instances.Count - 1; i >= 0; i--)
+                {
+                    if (Instances[i].TryGetTarget(out var tip))
+                    {
+                        if (tip._respectsGlobalActive)
+                        {
+                            tip.Active = value;
+                        }
+                    }
+                    else
+                    {
+                        Instances.RemoveAt(i);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// false なら全体オフでも常に表示する（ツールチップ切替ボタン用）。既定 true。
+    /// </summary>
+    public bool RespectsGlobalActive
+    {
+        get => _respectsGlobalActive;
+        set
+        {
+            _respectsGlobalActive = value;
+            Active = value ? _globalActive : true;
+        }
+    }
+
     public DarkToolTip() => Initialize();
 
     public DarkToolTip(IContainer container)
@@ -23,6 +70,11 @@ internal sealed class DarkToolTip : ToolTip
         ApplyOwnerDrawMode();
         Popup += OnPopup;
         Draw += OnDraw;
+        Active = _globalActive;
+        lock (Instances)
+        {
+            Instances.Add(new WeakReference<DarkToolTip>(this));
+        }
     }
 
     /// <summary>テーマ色や OwnerDraw フラグを再適用する（言語切替・色変更後など）。</summary>

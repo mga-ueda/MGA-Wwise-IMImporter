@@ -70,6 +70,7 @@ partial class Form1
     private FlatOptionCheckBox detailedLogCheckBox;
     private LanguageFlagButton languageFlagButton;
     private SettingsGearButton settingsGearButton;
+    private ToolTipToggleButton toolTipToggleButton;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
     private FlatOptionCheckBox keepLastSessionCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
@@ -172,6 +173,7 @@ partial class Form1
         detailedLogCheckBox = new FlatOptionCheckBox();
         languageFlagButton = new LanguageFlagButton();
         settingsGearButton = new SettingsGearButton();
+        toolTipToggleButton = new ToolTipToggleButton();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
         keepLastSessionCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
@@ -255,6 +257,7 @@ partial class Form1
         projectActionPanel.Controls.Add(keepLastSessionCheckBox);
         projectActionPanel.Controls.Add(topMostCheckBox);
         projectActionPanel.Controls.Add(languageFlagButton);
+        projectActionPanel.Controls.Add(toolTipToggleButton);
         projectActionPanel.Controls.Add(settingsGearButton);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
@@ -307,11 +310,18 @@ partial class Form1
         languageFlagButton.TabIndex = 4;
         languageFlagButton.Click += LanguageFlagButton_Click;
         //
+        // toolTipToggleButton
+        //
+        toolTipToggleButton.Margin = new Padding(0, 0, 4, 0);
+        toolTipToggleButton.Name = "toolTipToggleButton";
+        toolTipToggleButton.TabIndex = 5;
+        toolTipToggleButton.Click += ToolTipToggleButton_Click;
+        //
         // settingsGearButton
         //
         settingsGearButton.Margin = new Padding(0, 0, 4, 0);
         settingsGearButton.Name = "settingsGearButton";
-        settingsGearButton.TabIndex = 5;
+        settingsGearButton.TabIndex = 6;
         settingsGearButton.Click += SettingsGearButton_Click;
         //
         // projectSpectrumView
@@ -320,7 +330,7 @@ partial class Form1
         projectSpectrumView.Margin = new Padding(0);
         projectSpectrumView.Name = "projectSpectrumView";
         projectSpectrumView.Size = new Size(126, 24);
-        projectSpectrumView.TabIndex = 6;
+        projectSpectrumView.TabIndex = 7;
         projectSpectrumView.TabStop = false;
         //
         // waveformHostPanel
